@@ -22,6 +22,7 @@ import { RESTRAINT } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { storageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
+import { writeFixedBox } from "./nonbonded.js";
 import { rectangularBox } from "../reference/forces/nonbonded.js";
 import type { Pass, PipelineCache } from "./pipeline.js";
 import type { PositionRestraintForce, Vec3 } from "../engine/system.js";
@@ -69,15 +70,7 @@ export function prepareRestraint(
   // binding smaller than the struct, not as the overlap it actually was.
   const params = new Uint32Array(28);
   params[0] = force.count;
-  for (let axis = 0; axis < 3; axis++) {
-    const extent = box[axis] as number;
-    const whole = fixedWords(extent);
-    params[4 + axis * 4] = whole.lo;
-    params[4 + axis * 4 + 1] = whole.hi;
-    const half = fixedWords(extent / 2);
-    params[16 + axis * 4] = half.lo;
-    params[16 + axis * 4 + 1] = half.hi;
-  }
+  writeFixedBox(params, 4, box);
 
   const put = (name: string, data: Uint32Array, usage: number): GPUBuffer => {
     const buffer = pool.buffer({

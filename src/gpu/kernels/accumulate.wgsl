@@ -69,8 +69,23 @@ fn delta(a: u32, b: u32) -> vec3<f32> {
   );
 }
 
-/// The same, wrapped to the nearest periodic image of a rectangular box.
-fn delta_periodic(a: u32, b: u32, box: vec3<f32>) -> vec3<f32> {
-  let d = delta(a, b);
-  return d - box * round(d / box);
+/// One component of the vector from `a` to `b`, nearest image, exactly.
+///
+/// The difference is taken in fixed point and wrapped there too, so nothing is
+/// rounded while it is still box-sized -- see `minimum_image64`, which has the
+/// measurement. The box is passed per axis because this include cannot know the
+/// shape of the caller's uniform, and a caller needs three of these to build a
+/// vector.
+fn delta_image_axis(
+  a: u32,
+  b: u32,
+  axis: u32,
+  box: vec2<u32>,
+  half: vec2<u32>,
+) -> f32 {
+  return minimum_image64(
+    sub64(positions[b * 3u + axis], positions[a * 3u + axis]),
+    box,
+    half,
+  );
 }

@@ -110,3 +110,38 @@ fn less64(a: vec2<u32>, b: vec2<u32>) -> bool {
   if (a.y != b.y) { return a.y < b.y; }
   return a.x < b.x;
 }
+
+/// Shift a fixed-point difference into the nearest periodic image, exactly.
+///
+/// 🔴 The order matters, and it is the whole reason this function exists. The
+/// obvious way round -- convert the difference to f32, then wrap it -- rounds
+/// the value while it can still be as large as the box diagonal, at the ulp of
+/// a 6.5 nm number: 4.8e-7 nm. The wrap that follows cannot recover what the
+/// conversion dropped. Wrapping first in integers and converting only the small
+/// result keeps it. Measured on sampled pairs (test/pair-vector.test.ts):
+///
+///   1L2Y, 3.08 nm box   convert then wrap  rms 2.98e-8 nm   wrap then convert  5.9e-8 worst
+///   3HTB, 6.58 nm box   convert then wrap  rms 8.76e-8 nm   wrap then convert  1.2e-7 worst
+///
+/// The loop runs zero times for a pair inside the cutoff and once for a pair
+/// across a boundary, and is bounded so that a wild coordinate cannot hang a
+/// dispatch. `half` is passed in rather than derived because a 64-bit shift is
+/// more code than a second uniform field.
+///
+/// It terminates on `|d| <= half` rather than `<`, so a separation of exactly
+/// half a box settles on one image instead of alternating between two equally
+/// distant ones. Both give the same distance; they differ in the sign of the
+/// force, and that configuration has measure zero.
+fn minimum_image64(difference: vec2<u32>, box: vec2<u32>, half: vec2<u32>) -> f32 {
+  var d = difference;
+  for (var guard = 0u; guard < 64u; guard++) {
+    if (negative64(d)) {
+      if (!less64(half, neg64(d))) { break; }
+      d = add64(d, box);
+    } else {
+      if (!less64(half, d)) { break; }
+      d = sub64(d, box);
+    }
+  }
+  return from_fixed(d);
+}

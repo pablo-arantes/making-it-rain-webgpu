@@ -60,19 +60,17 @@ const TOLERANCE = 1e-6;
  * and fits a least-squares slope:
  *
  *   OpenMM CPU   1L2Y 0.374   3HTB 0.385   kJ/mol per atom per ns
- *   this engine  1L2Y 0.043   3HTB 0.960
+ *   this engine  1L2Y 0.282   3HTB 0.540
  *
- * 1L2Y is an order of magnitude better than OpenMM's own number. 3HTB is 2.5
- * times worse, and the reason is open: its direct-space force relative RMS is
- * 1.13e-5 against 1L2Y's 7.65e-7, which cancellation in the per-atom sum does
- * *not* explain (making that sum exact left it unchanged) and the ordering of
- * the minimum-image wrap explains about a third of. See docs/NONBONDED.md.
+ * Both from a least-squares slope over ten reports, on both sides. 1L2Y is
+ * better than OpenMM's own number and 3HTB is within 40% of it; the gap between
+ * the two fixtures closed when the minimum image moved into fixed point, which
+ * took 3HTB's direct force error from 1.13e-5 to 5.37e-7 (docs/NONBONDED.md).
  *
- * So the gate is 1.5: above the worse of the two measurements, which makes it a
- * regression test rather than a statement that both fixtures are where they
- * should be. It tightens when 3HTB is understood, and the real target is
- * OpenMM's *mixed-precision GPU* platform, which has to be measured on Colab --
- * this machine has no working OpenCL.
+ * So the gate is 1.5, a little under three times the worse measurement: a
+ * regression test rather than a claim that either fixture is at its floor. The
+ * real target is OpenMM's *mixed-precision GPU* platform, which has to be
+ * measured on Colab -- this machine has no working OpenCL.
  */
 export const LOOP_THRESHOLDS = {
   onePosition: 4e-7,
@@ -90,9 +88,22 @@ export interface LoopComparison {
   /** Steps the conservation run covered, and its span in ps. */
   readonly conservationSteps: number;
   readonly conservationPicoseconds: number;
-  /** kJ/mol, over the whole run. */
+  /** kJ/mol, between the first and last report. */
   readonly totalEnergyChange: number;
+  /**
+   * kJ/mol per atom per ns, from a least-squares slope over every report.
+   *
+   * 🔴 Not the endpoint difference, which is what this used to be and which is
+   * not a drift at all: over a picosecond the total energy fluctuates by about
+   * as much as it trends, so two endpoints cannot tell one from the other.
+   * Measured, the endpoint figure for 1L2Y moved from 0.043 to 0.426 when the
+   * forces got *more* accurate -- which is the signature of reading noise, not
+   * of a regression. `tools/measure_drift.py` fits a slope for exactly this
+   * reason and this had not been brought into line with it.
+   */
   readonly driftPerAtomPerNs: number;
+  /** The reports the slope was fitted to. */
+  readonly reports: readonly Report[];
   readonly firstReport: Report;
   readonly lastReport: Report;
   /** ns/day at this timestep, measured over the conservation run. */
@@ -202,33 +213,54 @@ export async function validateLoop(
 
   // 3 and 4. Conservation and throughput, on one run.
   const conserve = await StepLoop.fromParsed(device, system, state, verlet);
-  let firstReport: Report;
-  let lastReport: Report;
+  const reports: Report[] = [];
   let nsPerDay = 0;
   let peakPoolBytes = 0;
   let passesPerStep = 0;
+  // Ten intervals, so a slope has something to be fitted to. Each report
+  // re-evaluates the forces at the current coordinates, which is why it is ten
+  // and not a hundred.
+  const interval = Math.max(1, Math.floor(conservationSteps / 10));
   try {
     passesPerStep = conserve.passesPerStep;
-    // A report before the first step needs a potential energy belonging to
-    // these coordinates, which means evaluating the forces without stepping.
-    await conserve.evaluateForces();
-    firstReport = await conserve.report();
+    reports.push(await conserve.report());
     const began = performance.now();
-    await conserve.run(conservationSteps);
+    let done = 0;
+    while (done < conservationSteps) {
+      const chunk = Math.min(interval, conservationSteps - done);
+      await conserve.run(chunk);
+      done += chunk;
+      reports.push(await conserve.report());
+    }
     const elapsed = (performance.now() - began) / 1000;
-    lastReport = await conserve.report();
     const nanoseconds = (conservationSteps * TIME_STEP) / 1000;
+    // The reports are inside the timing, so this is a run that reports ten
+    // times -- which is a realistic production cadence, not a bare loop.
     nsPerDay = elapsed === 0 ? 0 : (nanoseconds / elapsed) * 86400;
     peakPoolBytes = conserve.report_pool().peakBytes;
   } finally {
     conserve.destroy();
   }
 
+  const firstReport = reports[0] as Report;
+  const lastReport = reports[reports.length - 1] as Report;
   const totalEnergyChange = lastReport.totalEnergy - firstReport.totalEnergy;
-  const nanoseconds = (conservationSteps * TIME_STEP) / 1000;
-  const driftPerAtomPerNs = Math.abs(
-    totalEnergyChange / system.particleCount / nanoseconds,
-  );
+  // Least squares over (time in ns, total energy).
+  let sumT = 0;
+  let sumE = 0;
+  let sumTT = 0;
+  let sumTE = 0;
+  for (const report of reports) {
+    const t = report.time / 1000;
+    sumT += t;
+    sumE += report.totalEnergy;
+    sumTT += t * t;
+    sumTE += t * report.totalEnergy;
+  }
+  const n = reports.length;
+  const denominator = n * sumTT - sumT * sumT;
+  const slope = denominator === 0 ? 0 : (n * sumTE - sumT * sumE) / denominator;
+  const driftPerAtomPerNs = Math.abs(slope / system.particleCount);
 
   return {
     particleCount: system.particleCount,
@@ -240,6 +272,7 @@ export async function validateLoop(
     conservationPicoseconds: conservationSteps * TIME_STEP,
     totalEnergyChange,
     driftPerAtomPerNs,
+    reports,
     firstReport,
     lastReport,
     nsPerDay,

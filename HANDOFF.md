@@ -118,14 +118,21 @@ step:
 
 | | passes/step | two runs differ by | one step vs reference | drift | ns/day | peak pool |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1L2Y, 2,373 atoms | 28 | **0** | 8.08e-8 nm | 0.043 | 52.6 | 1.0 MB |
-| 3HTB, 26,749 atoms | 40 | **0** | 9.30e-8 nm | 0.960 | 16.5 | 9.9 MB |
+| 1L2Y, 2,373 atoms | 28 | **0** | 8.08e-8 nm | 0.282 | 39.1 | 1.0 MB |
+| 3HTB, 26,749 atoms | 40 | **0** | 9.30e-8 nm | 0.540 | 10.4 | 9.9 MB |
 
-Drift is kJ/mol per atom per ns, from a least-squares slope. The number to read
-it against is OpenMM's own, from the same configuration and integrator on its
-CPU platform: **0.374** and **0.385** (`tools/measure_drift.py`). 1L2Y is an
-order of magnitude better than that; 3HTB is 2.5 times worse, and why is open --
-see below. After those, Phase 1's
+Drift is kJ/mol per atom per ns from a least-squares slope over ten reports, and
+the reports are inside the timed run, so ns/day is a reporting cadence rather
+than a bare loop. The number to read the drift against is OpenMM's own, fitted
+the same way from the same configuration and integrator on its CPU platform:
+**0.374** and **0.385** (`tools/measure_drift.py`). 1L2Y is better than that and
+3HTB is within 40%.
+
+🔴 An endpoint difference is not a drift. This used to subtract the first report
+from the last, and when the forces got *more* accurate that number went from
+0.043 to 0.426 -- over a picosecond the total energy fluctuates by about as much
+as it trends, so two points cannot tell one from the other. The Python tool had
+fitted a slope from the start and this had not been brought into line with it. After those, Phase 1's
 gates: NVE drift at 2 fs, and a measured ns/day.
 
 A whole step now runs on the GPU -- forces, constraints, both integrators, the
@@ -178,19 +185,24 @@ docs/MINIMISER.md has that and two other behaviours worth knowing -- including
 that OpenMM *discards the minimisation and returns the starting coordinates* if
 stiffening the springs stops helping.
 
-### 🟡 3HTB's direct-space force error is 13x 1L2Y's, and that is still open
-1.13e-5 relative RMS against 7.65e-7, for the same kernel. One explanation has
-been offered and **disproved**: cancellation in the per-atom f32 sum, which was
-made exact in fixed point and left the number unchanged (it did improve 1L2Y's
-drift ninefold, by removing the same error from the reported *energy*). One
-partial cause is measured: `delta_periodic` converts a pair difference to f32
-before the minimum-image wrap, which costs 2 to 3 times the accuracy on a
-6.58 nm box and accounts for about 3 of the 13 (`test/pair-vector.test.ts`).
-The remainder is not explained. Fixing the ordering needs the box in fixed point
-in four kernels' uniforms; there is no cheap version, which is why it is bundled
-with the barostat, where the box has to become dynamic state anyway. It also
-shows up in the minimiser: 3HTB's search diverges from OpenMM's about nine times
-faster than 1L2Y's. docs/NONBONDED.md has both measurements.
+### ✅ 3HTB's direct-space force error: closed, and how the estimate misled
+It was 1.13e-5 relative RMS against 1L2Y's 7.65e-7, for the same kernel. The
+cause was the order of the minimum-image wrap: the pair difference was converted
+to f32 while it could still be box-sized, rounding it at 4.8e-7 nm, and the wrap
+that followed could not recover what the conversion dropped. Wrapping in fixed
+point first took 3HTB to **5.37e-7** -- a factor of 21, and now better than
+1L2Y. The drift gate followed, from 0.96 to 0.540 against OpenMM's 0.385.
+
+Two wrong turns are recorded in docs/NONBONDED.md because both were settled by
+measurement rather than argument. Cancellation in the per-atom f32 sum was
+offered first and **disproved** by making that sum exact and watching the number
+not move (it did improve 1L2Y's drift, by removing the same error from the
+reported *energy*, which is a different thing). And the bound derived from the
+pair-vector measurement -- "about 3 of the 13" -- was wrong by an order of
+magnitude, because it assumed a vector error passes through to a force at unit
+gain; the gain is `dF/dr`, about 1e5 kJ/mol/nm^2 at short range.
+
+It costs about 25% of the throughput, which is recorded rather than hidden.
 
 ### 🟡 One unexplained run, and the instrument that would name it next time
 A single `test:browser` run had 3HTB's LFMiddle step 0.0167 nm from OpenMM --

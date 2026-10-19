@@ -28,6 +28,43 @@ struct Params {
   cutoff: f32,
   box: vec3<f32>,
   alpha: f32,
+  /// The box and half the box per axis, in fixed point, for the exact minimum
+  /// image. `vec4` because WGSL gives a uniform array element a 16-byte
+  /// stride; only `.xy` is used, low word then high.
+  box_fixed: array<vec4<u32>, 3>,
+  half_box_fixed: array<vec4<u32>, 3>,
+}
+
+/// The box and half the box, in fixed point, held in registers.
+///
+/// 🔴 Hoisted out of the pair loop deliberately. Reading them from the uniform
+/// inside `pair_vector` meant six `vec4` loads per candidate pair, and a bulk
+/// water atom has a few thousand candidates: it cost 23% of the throughput on
+/// 1L2Y and 34% on 3HTB. The wrap itself is nearly free -- for a pair inside
+/// the cutoff the loop does not run at all.
+struct FixedBox {
+  box: array<vec2<u32>, 3>,
+  half: array<vec2<u32>, 3>,
+}
+
+fn load_fixed_box() -> FixedBox {
+  var loaded: FixedBox;
+  loaded.box[0] = params.box_fixed[0].xy;
+  loaded.box[1] = params.box_fixed[1].xy;
+  loaded.box[2] = params.box_fixed[2].xy;
+  loaded.half[0] = params.half_box_fixed[0].xy;
+  loaded.half[1] = params.half_box_fixed[1].xy;
+  loaded.half[2] = params.half_box_fixed[2].xy;
+  return loaded;
+}
+
+/// The pair vector, nearest image, wrapped in fixed point before conversion.
+fn pair_vector(a: u32, b: u32, geometry: ptr<function, FixedBox>) -> vec3<f32> {
+  return vec3<f32>(
+    delta_image_axis(a, b, 0u, (*geometry).box[0], (*geometry).half[0]),
+    delta_image_axis(a, b, 1u, (*geometry).box[1], (*geometry).half[1]),
+    delta_image_axis(a, b, 2u, (*geometry).box[2], (*geometry).half[2]),
+  );
 }
 
 /// Decompose a flat cell index back into its three axis indices.
@@ -61,6 +98,7 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   let me = particle[i];
   let cutoff_squared = params.cutoff * params.cutoff;
   let cells = params.cells;
+  var geometry = load_fixed_box();
 
   // Which cell this atom is in, read from the list rather than recomputed.
   //
@@ -91,12 +129,13 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   //
   // What it did not buy, equally measured: 3HTB's direct force relative RMS
   // stayed at 1.13e-5, thirteen times 1L2Y's. So cancellation in the per-atom
-  // sum is not what makes that fixture worse, and an earlier version of this
-  // comment said it was. Part of the difference is the pair vector itself --
-  // `delta_periodic` converts a raw difference to f32 *before* the
-  // minimum-image wrap, which on a 6.58 nm box costs 2 to 3 times the accuracy
-  // of wrapping first (test/pair-vector.test.ts) -- and that accounts for about
-  // 3 of the 13. The rest is not yet explained. See docs/NONBONDED.md.
+  // sum is not what made that fixture worse, and an earlier version of this
+  // comment said it was. The cause was the pair vector, now fixed:
+  // `pair_vector` wraps in fixed point before converting, where the old
+  // `delta_periodic` converted first and lost 4.8e-7 nm at the edge of a 6.5 nm
+  // box. That took 3HTB to 5.37e-7 -- a factor of 21, and better than 1L2Y.
+  // docs/NONBONDED.md has the whole episode, including why the bound estimated
+  // from the pair-vector error was an order of magnitude too small.
   var force_x = vec2<u32>(0u, 0u);
   var force_y = vec2<u32>(0u, 0u);
   var force_z = vec2<u32>(0u, 0u);
@@ -115,7 +154,7 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
           let j = lists[params.sorted_offset + slot];
           if (j == i) { continue; }
 
-          let d = delta_periodic(i, j, params.box);
+          let d = pair_vector(i, j, &geometry);
           let r_squared = dot(d, d);
           if (r_squared >= cutoff_squared) { continue; }
           if (is_excluded(i, j)) { continue; }

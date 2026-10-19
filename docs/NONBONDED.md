@@ -254,7 +254,7 @@ the same code path. Cancellation in the per-atom sum is therefore *not* what
 makes that fixture worse, and the first version of this section said it was. Its
 drift improved only from 1.175 to 0.960, against OpenMM's 0.385.
 
-### Part of the 3HTB gap: the order of the minimum-image wrap
+### 🔴 The 3HTB gap *was* the order of the minimum-image wrap
 
 `delta_periodic` differences two positions exactly in fixed point -- the reason
 positions are integers at all -- and then converts the result to f32 and wraps
@@ -270,13 +270,48 @@ Measured on the host in f64, over sampled pairs from each fixture
 | 1L2Y | 3.08 nm | worst 1.29e-7 nm, rms 2.98e-8 | worst 5.94e-8 nm |
 | 3HTB | 6.58 nm | worst 3.45e-7 nm, rms 8.76e-8 | worst 1.19e-7 nm |
 
-So the ordering costs a factor of 2 to 3, and 3HTB's pair vectors are about 3
-times worse than 1L2Y's. That accounts for roughly 3 of the 13, and no more.
-**The rest is not explained**, and the honest version of this section says so
-rather than offering a second story. What is ruled out: the per-atom
-accumulation, which was made exact and changed nothing.
+The ordering costs a factor of 2 to 3 on the *vectors*, and on that basis this
+section used to conclude that it "accounts for roughly 3 of the 13, and no
+more", with the rest unexplained.
 
-Fixing the ordering means wrapping in fixed point before converting, which needs
-the box in fixed point in four kernels' uniform blocks -- converting the box to
-f32 first would reintroduce the same 4.8e-7 nm it is meant to remove, so there
-is no cheap version of this change.
+That was wrong, and the way it was wrong is worth keeping. A pair vector's error
+does not pass through to the force at unit gain: it is amplified by `dF/dr`,
+which for Lennard-Jones at 0.25 nm is around 1e5 kJ/mol/nm². A three-times
+better vector therefore buys far more than three times the force accuracy, and
+estimating the force gap from the vector gap underestimated it by an order of
+magnitude.
+
+Measured, after moving the wrap into fixed point -- `minimum_image64` in
+fixed64.wgsl, used by `nonbonded-pairs`, `nonbonded-exceptions` and the
+restraint:
+
+| direct space | force rel RMS | energy vs OpenMM |
+| --- | --- | --- |
+| 1L2Y, convert then wrap | 7.65e-7 | 1.02e-7 |
+| 1L2Y, wrap then convert | **6.89e-7** | **9.67e-8** |
+| 3HTB, convert then wrap | 1.13e-5 | 3.93e-7 |
+| 3HTB, wrap then convert | **5.37e-7** | **4.05e-8** |
+
+A factor of **21** on 3HTB's forces and 10 on its energy. The gap between the
+two fixtures is gone: 3HTB is now slightly *better* than 1L2Y, which is what one
+would expect from a larger system with more cancellation and nothing else wrong.
+
+The energy-drift gate moved with it. Against OpenMM's own least-squares slope
+from the same configurations -- 0.374 and 0.385 kJ/mol per atom per ns -- this
+engine now sits at **0.282** and **0.540**, where 3HTB was 0.96 before.
+
+**It costs about 25% of the throughput**: 1L2Y went from 52.6 to 39.1 ns/day and
+3HTB from 16.5 to 10.4, with part of that being ten energy reports now inside
+the timed run rather than outside it. Hoisting the fixed-point box into
+registers made no measurable difference, so the cost is the wrap arithmetic
+itself and not the uniform loads. Twenty-one times the force accuracy for a
+quarter of the speed is not a close call, and the alternative was an engine whose
+larger fixture was its less accurate one for no reason anybody could state.
+
+The honest summary of the whole episode: three explanations were offered for
+3HTB's force error, two were wrong, and each was wrong in a way that a
+measurement settled. Cancellation in the per-atom sum was ruled out by making
+that sum exact and watching the number not move. The wrap ordering was confirmed
+by fixing it. And the quantitative bound derived from the intermediate
+measurement -- "3 of the 13" -- was wrong because it assumed unit gain from a
+vector error to a force error.

@@ -32,7 +32,7 @@ import {
 } from "./cell-list.js";
 import { NONBONDED_EXCEPTIONS, NONBONDED_PAIRS } from "./kernels.js";
 import { unpackFixed } from "./forces.js";
-import { fromFixed, fromWords } from "../reference/fixed-point.js";
+import { fixedWords, fromFixed, fromWords } from "../reference/fixed-point.js";
 import {
   dispersionCorrection,
   rectangularBox,
@@ -194,6 +194,29 @@ export function listSections(
   };
 }
 
+/**
+ * Write the box and half the box, per axis, in fixed point.
+ *
+ * Six `vec4<u32>` at `words[offset]`, of which only the first two words of each
+ * are used: the box at `offset`, half the box 12 words later. WGSL gives a
+ * uniform array element a 16-byte stride, so the padding is part of the layout
+ * rather than slack.
+ *
+ * Half is passed to the kernel rather than derived there because a 64-bit shift
+ * is more WGSL than a second uniform field.
+ */
+export function writeFixedBox(words: Uint32Array, offset: number, box: Vec3): void {
+  for (let axis = 0; axis < 3; axis++) {
+    const extent = box[axis] as number;
+    const whole = fixedWords(extent);
+    words[offset + axis * 4] = whole.lo;
+    words[offset + axis * 4 + 1] = whole.hi;
+    const half = fixedWords(extent / 2);
+    words[offset + 12 + axis * 4] = half.lo;
+    words[offset + 12 + axis * 4 + 1] = half.hi;
+  }
+}
+
 /** Everything the direct-space kernels need that the coordinates do not change. */
 export interface ResidentDirect {
   readonly force: NonbondedForce;
@@ -271,9 +294,11 @@ export function prepareDirect(
   });
   device.queue.writeBuffer(particle, 0, particleData as unknown as BufferSource);
 
-  // 64 bytes: five u32 word offsets, then `cells` on its 16-byte boundary, the
-  // cutoff, the box on the next one, and alpha.
-  const pairBytes = new ArrayBuffer(64);
+  // 160 bytes. Five u32 word offsets fill 0..19; `cells` takes its 16-byte
+  // boundary at 32 and the cutoff follows it at 44; the f32 box takes the next
+  // one at 48 with alpha at 60; then the fixed-point box at 64 and half the box
+  // at 112, three `vec4<u32>` each at WGSL's 16-byte array stride.
+  const pairBytes = new ArrayBuffer(160);
   const pairU32 = new Uint32Array(pairBytes);
   const pairF32 = new Float32Array(pairBytes);
   pairU32[0] = n;
@@ -289,9 +314,10 @@ export function prepareDirect(
   pairF32[13] = box[1] as number;
   pairF32[14] = box[2] as number;
   pairF32[15] = alpha;
+  writeFixedBox(pairU32, 16, box);
   const pairParams = pool.buffer({
     label: "nonbonded/pairParams",
-    byteLength: 64,
+    byteLength: pairBytes.byteLength,
     usage: uniformUsage(),
   });
   device.queue.writeBuffer(pairParams, 0, new Uint8Array(pairBytes));
@@ -319,8 +345,9 @@ export function prepareDirect(
     exceptionData as unknown as BufferSource,
   );
 
-  // struct Params { u32 count; f32 alpha; vec3<f32> box; u32 offset } -> 32 bytes
-  const exceptionBytes = new ArrayBuffer(32);
+  // struct Params { u32 count; f32 alpha; vec3<f32> box; u32 offset } fills 32,
+  // then the fixed-point box and half box take it to 128.
+  const exceptionBytes = new ArrayBuffer(128);
   const exceptionU32 = new Uint32Array(exceptionBytes);
   const exceptionF32 = new Float32Array(exceptionBytes);
   exceptionU32[0] = force.exceptionCount;
@@ -329,9 +356,10 @@ export function prepareDirect(
   exceptionF32[5] = box[1] as number;
   exceptionF32[6] = box[2] as number;
   exceptionU32[7] = force.exceptionCount;
+  writeFixedBox(exceptionU32, 8, box);
   const exceptionParams = pool.buffer({
     label: "nonbonded/exceptionParams",
-    byteLength: 32,
+    byteLength: exceptionBytes.byteLength,
     usage: uniformUsage(),
   });
   device.queue.writeBuffer(exceptionParams, 0, new Uint8Array(exceptionBytes));

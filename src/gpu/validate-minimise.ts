@@ -50,15 +50,15 @@ export const PATH_SHARED_ITERATIONS = 5;
  *   1L2Y   9.1e-5   3.5e-5   4.8e-5     (against OpenMM's Reference platform)
  *   3HTB   8.5e-6   2.7e-5   4.3e-4     (against its CPU platform)
  *
- * 3HTB diverges about nine times faster, and that is not a surprise: its
- * direct-space force relative RMS is 1.13e-5 against 1L2Y's 7.65e-7, which is
- * the open item in docs/NONBONDED.md. A line search amplifies a force
- * difference into a different backtracking decision and then a different path.
- * So 1e-3 is about twice the worst measurement, and it is provisional in the
- * specific sense that it should tighten once 3HTB's force error is understood.
- * It would still catch a wrong objective, which is out by orders of magnitude
- * rather than parts in a thousand -- a missing constraint-spring term alone is
- * thousands of kJ/mol.
+ * 3HTB diverged about nine times faster when these were measured, which tracked
+ * its direct-space force relative RMS being 1.13e-5 against 1L2Y's 7.65e-7 --
+ * the open item in docs/NONBONDED.md at the time. That has since been fixed (the
+ * minimum image is now wrapped in fixed point, taking 3HTB to 5.37e-7), so these
+ * numbers predate the fix and the comparison should be re-measured; they are
+ * kept because the threshold was set from them and is therefore conservative
+ * rather than tight. 1e-3 would still catch a wrong objective, which is out by
+ * orders of magnitude rather than parts in a thousand -- a missing
+ * constraint-spring term alone is thousands of kJ/mol.
  *
  * Later frames are held to what can honestly be claimed of them: the energy
  * went down a long way, and the constraints hold to what was asked.

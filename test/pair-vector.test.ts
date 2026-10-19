@@ -13,10 +13,17 @@
  * 1L2Y's 7.65e-7 -- thirteen times, for the same kernel -- and the first
  * explanation offered for it (cancellation in the per-atom sum) turned out to
  * be wrong: making that sum exact did not move the number at all. This measures
- * a cause that is real, on the host, in f64, with no GPU involved, and bounds
- * how much of the gap it can account for: about 3 of the 13. The rest is still
- * open, and keeping the measurement means the next attempt starts from a number
- * rather than from a story.
+ * a cause that is real, on the host, in f64, with no GPU involved.
+ *
+ * 🔴 It is kept after the fix because of how its number was once misused. The
+ * ratio below is 2 to 3 for the *vectors*, and that was taken to bound the
+ * force gap at "about 3 of the 13" -- which assumed a pair-vector error passes
+ * through to a force at unit gain. It does not: the gain is `dF/dr`, around
+ * 1e5 kJ/mol/nm^2 for Lennard-Jones at 0.25 nm. Moving the wrap into fixed
+ * point improved 3HTB's direct force relative RMS by a factor of **21**, from
+ * 1.13e-5 to 5.37e-7, closing the gap entirely. The lesson this test now
+ * carries is that an intermediate quantity bounds a final one only if you know
+ * the gain between them.
  */
 
 import { describe, expect, it } from "vitest";

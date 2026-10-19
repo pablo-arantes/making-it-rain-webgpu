@@ -23,6 +23,10 @@ struct Params {
   box: vec3<f32>,
   /// sigma and epsilon per exception live in the second half of `exceptions`.
   parameter_offset: u32,
+  /// The box and half the box per axis in fixed point, for the exact minimum
+  /// image; only `.xy` of each is used.
+  box_fixed: array<vec4<u32>, 3>,
+  half_box_fixed: array<vec4<u32>, 3>,
 }
 
 @compute @workgroup_size(64)
@@ -38,7 +42,14 @@ fn direct_exceptions(@builtin(global_invocation_id) gid: vec3<u32>) {
   let sigma = extra.x;
   let epsilon = extra.y;
 
-  let d = delta_periodic(i, j, params.box);
+  // Wrapped in fixed point before conversion, like the pair kernel: an
+  // exception can span a periodic boundary, and converting a box-sized
+  // difference to f32 first rounds away what the wrap would have used.
+  let d = vec3<f32>(
+    delta_image_axis(i, j, 0u, params.box_fixed[0].xy, params.half_box_fixed[0].xy),
+    delta_image_axis(i, j, 1u, params.box_fixed[1].xy, params.half_box_fixed[1].xy),
+    delta_image_axis(i, j, 2u, params.box_fixed[2].xy, params.half_box_fixed[2].xy),
+  );
   let r_squared = dot(d, d);
   let r = sqrt(r_squared);
   let alpha_r = params.alpha * r;
