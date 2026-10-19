@@ -35,12 +35,14 @@ import { parseSystem, type OpenMMSystem, type NonbondedForce } from "../engine/s
 import { ewaldAlpha } from "../engine/units.js";
 import { rectangularBox } from "../reference/forces/nonbonded.js";
 import { BufferPool } from "./allocator.js";
+import { buildCellListOnDevice, readCellList } from "./cell-list.js";
 import {
-  buildCellListOnDevice,
-  prepareCellList,
-  readCellList,
-} from "./cell-list.js";
-import { buildCellList, evaluateDirectSpace, type CellList } from "./nonbonded.js";
+  buildCellList,
+  evaluateDirectSpace,
+  prepareDirect,
+  type CellList,
+} from "./nonbonded.js";
+import { storageUsage } from "./usage.js";
 import { packPositions } from "./forces.js";
 
 export interface CellListComparison {
@@ -82,19 +84,22 @@ export async function validateCellList(
 
   const pool = new BufferPool(device);
   try {
-    const buffers = prepareCellList(pool, particleCount, box, force.cutoff);
+    // Built through the same `prepareDirect` the forces use, so the layout under
+    // test is the layout a run uses rather than a parallel one.
+    const alpha = ewaldAlpha(force.cutoff, force.ewaldTolerance);
+    const resident = prepareDirect(pool, force, state.boxVectors, alpha);
     const positions = pool.buffer({
       label: "cell/positions",
       byteLength: positionWords.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: storageUsage(),
     });
     device.queue.writeBuffer(
       positions,
       0,
       positionWords as unknown as BufferSource,
     );
-    await buildCellListOnDevice(pool, buffers, positions, particleCount);
-    const built = await readCellList(pool, buffers, particleCount);
+    await buildCellListOnDevice(pool, resident.cellList, positions);
+    const built = await readCellList(pool, resident.cellList);
     const host = buildCellList(state.positions, box, force.cutoff);
 
     let assignmentDifferences = 0;
@@ -138,10 +143,9 @@ export async function validateCellList(
       }
     }
 
-    const alpha = ewaldAlpha(force.cutoff, force.ewaldTolerance);
     const deviceList: CellList = {
-      cells: buffers.geometry.divisions,
-      cellCount: buffers.geometry.cellCount,
+      cells: resident.cellList.geometry.divisions,
+      cellCount: resident.cellList.geometry.cellCount,
       starts: built.starts,
       order: built.order,
     };
@@ -173,8 +177,8 @@ export async function validateCellList(
 
     return {
       particleCount,
-      divisions: buffers.geometry.divisions,
-      cellCount: buffers.geometry.cellCount,
+      divisions: resident.cellList.geometry.divisions,
+      cellCount: resident.cellList.geometry.cellCount,
       assignmentDifferences,
       populationDifferences,
       permutationValid,

@@ -14,7 +14,8 @@
  * of a 6.5 nm box, where an f32 coordinate has a 4.8e-7 nm ulp.
  */
 
-import { dispatch, readBuffer } from "./compute.js";
+import { pipelineCacheFor, readBuffer } from "./compute.js";
+import { submitPasses, type Pass, type PipelineCache } from "./pipeline.js";
 import { CELL_LIST } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { readableStorageUsage, uniformUsage } from "./usage.js";
@@ -52,17 +53,38 @@ export function cellGeometry(box: Vec3, cutoff: number): CellGeometry {
   };
 }
 
+/**
+ * Where the list's three arrays live inside a caller's buffer.
+ *
+ * The pair kernel reads the cell starts, the sorted order, each atom's cell and
+ * the exclusion lists through a *single* storage binding, because splitting
+ * them would put it over the eight storage buffers WebGPU guarantees per stage.
+ * So the cell-list kernel writes into sub-ranges of that same buffer rather
+ * than into buffers of its own, and nothing is copied between them.
+ *
+ * Offsets are in bytes and must be multiples of 256, which is WebGPU's default
+ * `minStorageBufferOffsetAlignment`; `alignedBytes` is what the caller lays its
+ * sections out with.
+ */
+export interface ListTarget {
+  readonly buffer: GPUBuffer;
+  readonly startsByteOffset: number;
+  readonly orderByteOffset: number;
+  readonly cellOfByteOffset: number;
+}
+
+/** Round a byte count up to a bindable offset. */
+export const alignedBytes = (bytes: number): number => Math.ceil(bytes / 256) * 256;
+
 /** The device buffers the list lives in. */
 export interface CellListBuffers {
-  readonly cellOf: GPUBuffer;
   readonly counts: GPUBuffer;
-  readonly starts: GPUBuffer;
   /** Whatever the atomic scatter produced. Scratch; nothing downstream reads it. */
   readonly scattered: GPUBuffer;
-  /** The same atoms in ascending index order within each cell. This is the list. */
-  readonly order: GPUBuffer;
   readonly params: GPUBuffer;
   readonly geometry: CellGeometry;
+  readonly target: ListTarget;
+  readonly particleCount: number;
 }
 
 /**
@@ -98,6 +120,7 @@ export function prepareCellList(
   particleCount: number,
   box: Vec3,
   cutoff: number,
+  target: ListTarget,
 ): CellListBuffers {
   const geometry = cellGeometry(box, cutoff);
   const named = (label: string, byteLength: number, usage = readableStorageUsage()): GPUBuffer =>
@@ -109,13 +132,12 @@ export function prepareCellList(
     packParams(particleCount, geometry, box) as unknown as BufferSource,
   );
   return {
-    cellOf: named("cell/cellOf", particleCount * 4),
     counts: named("cell/counts", geometry.cellCount * 4),
-    starts: named("cell/starts", (geometry.cellCount + 1) * 4),
     scattered: named("cell/scattered", particleCount * 4),
-    order: named("cell/order", particleCount * 4),
     params,
     geometry,
+    target,
+    particleCount,
   };
 }
 
@@ -129,73 +151,100 @@ export function prepareCellList(
  * within a cell changes the answer -- measured at 1.89e-3 kJ/mol/nm, which is
  * small and is still run-to-run noise in a trajectory.
  */
+export async function planCellList(
+  cache: PipelineCache,
+  buffers: CellListBuffers,
+  positions: GPUBuffer,
+): Promise<Pass[]> {
+  const { geometry, target, particleCount } = buffers;
+  const cells = Math.ceil(geometry.cellCount / 64);
+  const atoms = Math.ceil(particleCount / 64);
+
+  // Sub-ranges of the caller's buffer, bound as if they were whole arrays, so
+  // each entry point keeps indexing from zero.
+  const range = (offset: number, byteLength: number): GPUBindingResource => ({
+    buffer: target.buffer,
+    offset,
+    size: byteLength,
+  });
+  const paramsBinding = { binding: 5, resource: { buffer: buffers.params } };
+  const positionsBinding = { binding: 0, resource: { buffer: positions } };
+  const cellOfBinding = {
+    binding: 1,
+    resource: range(target.cellOfByteOffset, particleCount * 4),
+  };
+  const countsBinding = { binding: 2, resource: { buffer: buffers.counts } };
+  const startsBinding = {
+    binding: 3,
+    resource: range(target.startsByteOffset, (geometry.cellCount + 1) * 4),
+  };
+  const scatteredBinding = { binding: 4, resource: { buffer: buffers.scattered } };
+  const sortedBinding = {
+    binding: 6,
+    resource: range(target.orderByteOffset, particleCount * 4),
+  };
+
+  const plan = (
+    entryPoint: string,
+    workgroups: number,
+    entries: readonly { binding: number; resource: GPUBindingResource }[],
+  ): Promise<Pass> =>
+    cache.pass(
+      { label: `cell/${entryPoint}`, code: CELL_LIST, entryPoint },
+      entries,
+      [workgroups],
+    );
+
+  return Promise.all([
+    plan("clear", cells, [countsBinding, paramsBinding]),
+    plan("assign", atoms, [
+      positionsBinding,
+      cellOfBinding,
+      countsBinding,
+      paramsBinding,
+    ]),
+    plan("scan", 1, [countsBinding, startsBinding, paramsBinding]),
+    plan("scatter", atoms, [
+      cellOfBinding,
+      countsBinding,
+      startsBinding,
+      scatteredBinding,
+      paramsBinding,
+    ]),
+    plan("sort_cells", atoms, [
+      cellOfBinding,
+      startsBinding,
+      scatteredBinding,
+      paramsBinding,
+      sortedBinding,
+    ]),
+  ]);
+}
+
+/** Build the list once, for a single-configuration evaluation. */
 export async function buildCellListOnDevice(
   pool: BufferPool,
   buffers: CellListBuffers,
   positions: GPUBuffer,
-  particleCount: number,
 ): Promise<void> {
-  const cells = Math.ceil(buffers.geometry.cellCount / 64);
-  const atoms = Math.ceil(particleCount / 64);
-  const run = async (
-    entryPoint: string,
-    workgroups: number,
-    entries: readonly { binding: number; resource: GPUBindingResource }[],
-  ): Promise<void> =>
-    dispatch(pool.device, {
-      label: `cell/${entryPoint}`,
-      code: CELL_LIST,
-      entryPoint,
-      bindings: entries,
-      workgroups: [workgroups],
-    });
-
-  const paramsBinding = { binding: 5, resource: { buffer: buffers.params } };
-  const positionsBinding = { binding: 0, resource: { buffer: positions } };
-  const cellOfBinding = { binding: 1, resource: { buffer: buffers.cellOf } };
-  const countsBinding = { binding: 2, resource: { buffer: buffers.counts } };
-  const startsBinding = { binding: 3, resource: { buffer: buffers.starts } };
-  const scatteredBinding = { binding: 4, resource: { buffer: buffers.scattered } };
-  const sortedBinding = { binding: 6, resource: { buffer: buffers.order } };
-
-  await run("clear", cells, [countsBinding, paramsBinding]);
-  await run("assign", atoms, [
-    positionsBinding,
-    cellOfBinding,
-    countsBinding,
-    paramsBinding,
-  ]);
-  await run("scan", 1, [countsBinding, startsBinding, paramsBinding]);
-  await run("scatter", atoms, [
-    cellOfBinding,
-    countsBinding,
-    startsBinding,
-    scatteredBinding,
-    paramsBinding,
-  ]);
-  await run("sort_cells", atoms, [
-    cellOfBinding,
-    startsBinding,
-    scatteredBinding,
-    paramsBinding,
-    sortedBinding,
-  ]);
+  const passes = await planCellList(pipelineCacheFor(pool.device), buffers, positions);
+  await submitPasses(pool.device, "cell list", passes);
 }
 
 /** Read the built list back, for validation and for the host force path. */
 export async function readCellList(
   pool: BufferPool,
   buffers: CellListBuffers,
-  particleCount: number,
 ): Promise<{ starts: Uint32Array; order: Uint32Array; cellOf: Uint32Array }> {
-  const [starts, order, cellOf] = await Promise.all([
-    readBuffer(pool.device, buffers.starts, (buffers.geometry.cellCount + 1) * 4),
-    readBuffer(pool.device, buffers.order, particleCount * 4),
-    readBuffer(pool.device, buffers.cellOf, particleCount * 4),
-  ]);
+  const { target, geometry, particleCount } = buffers;
+  const words = new Uint32Array(
+    await readBuffer(pool.device, target.buffer, target.buffer.size),
+  );
+  const slice = (byteOffset: number, count: number): Uint32Array =>
+    words.slice(byteOffset / 4, byteOffset / 4 + count);
   return {
-    starts: new Uint32Array(starts),
-    order: new Uint32Array(order),
-    cellOf: new Uint32Array(cellOf),
+    starts: slice(target.startsByteOffset, geometry.cellCount + 1),
+    order: slice(target.orderByteOffset, particleCount),
+    cellOf: slice(target.cellOfByteOffset, particleCount),
   };
 }

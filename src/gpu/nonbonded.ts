@@ -6,13 +6,30 @@
  * analytic dispersion correction, which depends on the volume but on no
  * coordinate and so is a host-side constant.
  *
- * The cell list is built on the host here. That is a Phase 1 decision, not a
- * final one: a running simulation needs it rebuilt on the device every few
- * steps, which is a counting sort in WGSL. Correctness of the force kernels
- * comes first, and they do not care who sorted the atoms.
+ * The cell list is built on the device (src/gpu/cell-list.ts) and written into
+ * sub-ranges of the same `lists` buffer the exclusion lists live in. They share
+ * a buffer because the pair kernel reads all four arrays through one storage
+ * binding, and splitting them would put it over the eight storage buffers
+ * WebGPU guarantees per stage. `listSections` is the single description of that
+ * layout; both the cell-list passes and the kernel's offsets come from it.
+ *
+ * Like the bonded path, this is split into `prepareDirect` (everything that
+ * depends on the `System` and not the coordinates), `planDirect` (the passes)
+ * and `evaluateDirectSpace` (one configuration, for the differential tests), so
+ * a step loop and the tests cannot drift apart.
  */
 
-import { dispatch, readBuffer, storageBuffer, uploadBuffer } from "./compute.js";
+import { pipelineCacheFor, readBuffer } from "./compute.js";
+import { submitPasses, type Pass, type PipelineCache } from "./pipeline.js";
+import { BufferPool } from "./allocator.js";
+import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
+import {
+  alignedBytes,
+  planCellList,
+  prepareCellList,
+  type CellListBuffers,
+  type ListTarget,
+} from "./cell-list.js";
 import { NONBONDED_EXCEPTIONS, NONBONDED_PAIRS } from "./kernels.js";
 import { unpackFixed } from "./forces.js";
 import { fromFixed, fromWords } from "../reference/fixed-point.js";
@@ -138,71 +155,150 @@ export interface DirectSpaceResult {
   readonly forces: Float64Array;
 }
 
-/** Zero a two-word fixed-point accumulator of `slots` slots. */
-function zeroAccumulator(device: GPUDevice, buffer: GPUBuffer, slots: number): void {
-  device.queue.writeBuffer(buffer, 0, new Uint32Array(slots * 2));
+/**
+ * Where each array sits inside the shared `lists` buffer.
+ *
+ * Byte offsets, each a multiple of 256 so that the cell-list kernel can bind
+ * its three arrays as sub-ranges -- 256 is WebGPU's default
+ * `minStorageBufferOffsetAlignment`. The pair kernel instead binds the whole
+ * buffer and indexes it with the word offsets below, which is why the padding
+ * costs nothing: it is a handful of KB and it means neither side has to know
+ * the other's packing.
+ */
+export interface ListSections {
+  readonly cellStarts: number;
+  readonly order: number;
+  readonly exclusionStarts: number;
+  readonly exclusionList: number;
+  readonly cellOf: number;
+  readonly totalBytes: number;
 }
 
-/**
- * Evaluate real-space Ewald, Lennard-Jones, the exclusion corrections and the
- * exceptions on the device, in one shared accumulator.
- */
-export async function evaluateDirectSpace(
-  device: GPUDevice,
+export function listSections(
+  cellCount: number,
+  particleCount: number,
+  exclusionListLength: number,
+): ListSections {
+  const cellStarts = 0;
+  const order = cellStarts + alignedBytes((cellCount + 1) * 4);
+  const exclusionStarts = order + alignedBytes(particleCount * 4);
+  const exclusionList = exclusionStarts + alignedBytes((particleCount + 1) * 4);
+  const cellOf = exclusionList + alignedBytes(Math.max(1, exclusionListLength) * 4);
+  return {
+    cellStarts,
+    order,
+    exclusionStarts,
+    exclusionList,
+    cellOf,
+    totalBytes: cellOf + alignedBytes(particleCount * 4),
+  };
+}
+
+/** Everything the direct-space kernels need that the coordinates do not change. */
+export interface ResidentDirect {
+  readonly force: NonbondedForce;
+  readonly particleCount: number;
+  readonly box: Vec3;
+  readonly alpha: number;
+  readonly sections: ListSections;
+  readonly lists: GPUBuffer;
+  readonly particle: GPUBuffer;
+  readonly pairParams: GPUBuffer;
+  readonly exceptions: GPUBuffer;
+  readonly exceptionParams: GPUBuffer;
+  readonly cellList: CellListBuffers;
+  /** kJ/mol, analytic, a function of the volume and no coordinate. */
+  readonly dispersion: number;
+}
+
+export function prepareDirect(
+  pool: BufferPool,
   force: NonbondedForce,
-  positionWords: Uint32Array,
-  positions: Float64Array,
   boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
-  /**
-   * A cell list to use instead of building one here.
-   *
-   * The step loop builds its list on the device and never brings the positions
-   * back; this is also what lets the device-built list be compared against the
-   * host's by the only measure that matters -- whether the forces come out the
-   * same. See src/gpu/validate-cell-list.ts.
-   */
-  suppliedCellList?: CellList,
-): Promise<DirectSpaceResult> {
+): ResidentDirect {
+  const device = pool.device;
   const box = rectangularBox(boxVectors);
   const n = force.particleCount;
-  const cellList = suppliedCellList ?? buildCellList(positions, box, force.cutoff);
   const exclusions = buildExclusionLists(force);
 
-  // One `lists` buffer so the kernel stays inside the eight storage bindings
-  // WebGPU guarantees: cell starts, then the sorted order, then the exclusion
-  // starts, then the flat exclusion list.
-  const sortedOffset = cellList.cellCount + 1;
-  const exclusionStartOffset = sortedOffset + n;
-  const exclusionListOffset = exclusionStartOffset + n + 1;
-  const cellOfOffset = exclusionListOffset + exclusions.list.length;
-  const lists = new Uint32Array(cellOfOffset + n);
-  lists.set(cellList.starts, 0);
-  lists.set(cellList.order, sortedOffset);
-  lists.set(exclusions.starts, exclusionStartOffset);
-  lists.set(exclusions.list, exclusionListOffset);
-  // Each atom's cell, so the kernel reads its home cell instead of recomputing
-  // it in f32 and possibly disagreeing with the list it is indexing into.
-  for (let cell = 0; cell < cellList.cellCount; cell++) {
-    for (
-      let slot = cellList.starts[cell] as number;
-      slot < (cellList.starts[cell + 1] as number);
-      slot++
-    ) {
-      lists[cellOfOffset + (cellList.order[slot] as number)] = cell;
-    }
+  // The grid has to be known before the sections can be laid out.
+  const probe = prepareCellList(pool, n, box, force.cutoff, {
+    buffer: pool.buffer({ label: "nonbonded/listsProbe", byteLength: 4, usage: storageUsage() }),
+    startsByteOffset: 0,
+    orderByteOffset: 0,
+    cellOfByteOffset: 0,
+  });
+  const sections = listSections(probe.geometry.cellCount, n, exclusions.list.length);
+  const lists = pool.buffer({
+    label: "nonbonded/lists",
+    byteLength: sections.totalBytes,
+    usage: readableStorageUsage(),
+  });
+  const target: ListTarget = {
+    buffer: lists,
+    startsByteOffset: sections.cellStarts,
+    orderByteOffset: sections.order,
+    cellOfByteOffset: sections.cellOf,
+  };
+  const cellList = prepareCellList(pool, n, box, force.cutoff, target);
+
+  // Only the exclusion sections are static; the cell list's are written by its
+  // own kernel every rebuild.
+  device.queue.writeBuffer(
+    lists,
+    sections.exclusionStarts,
+    exclusions.starts as unknown as BufferSource,
+  );
+  if (exclusions.list.length > 0) {
+    device.queue.writeBuffer(
+      lists,
+      sections.exclusionList,
+      exclusions.list as unknown as BufferSource,
+    );
   }
 
-  const particle = new Float32Array(n * 4);
+  const particleData = new Float32Array(n * 4);
   for (let i = 0; i < n; i++) {
-    particle[i * 4] = force.charge[i] as number;
-    particle[i * 4 + 1] = force.sigma[i] as number;
-    particle[i * 4 + 2] = force.epsilon[i] as number;
+    particleData[i * 4] = force.charge[i] as number;
+    particleData[i * 4 + 1] = force.sigma[i] as number;
+    particleData[i * 4 + 2] = force.epsilon[i] as number;
   }
+  const particle = pool.buffer({
+    label: "nonbonded/particle",
+    byteLength: particleData.byteLength,
+    usage: storageUsage(),
+  });
+  device.queue.writeBuffer(particle, 0, particleData as unknown as BufferSource);
+
+  // 64 bytes: five u32 word offsets, then `cells` on its 16-byte boundary, the
+  // cutoff, the box on the next one, and alpha.
+  const pairBytes = new ArrayBuffer(64);
+  const pairU32 = new Uint32Array(pairBytes);
+  const pairF32 = new Float32Array(pairBytes);
+  pairU32[0] = n;
+  pairU32[1] = sections.order / 4;
+  pairU32[2] = sections.exclusionStarts / 4;
+  pairU32[3] = sections.exclusionList / 4;
+  pairU32[4] = sections.cellOf / 4;
+  pairU32[8] = probe.geometry.divisions[0] as number;
+  pairU32[9] = probe.geometry.divisions[1] as number;
+  pairU32[10] = probe.geometry.divisions[2] as number;
+  pairF32[11] = force.cutoff;
+  pairF32[12] = box[0] as number;
+  pairF32[13] = box[1] as number;
+  pairF32[14] = box[2] as number;
+  pairF32[15] = alpha;
+  const pairParams = pool.buffer({
+    label: "nonbonded/pairParams",
+    byteLength: 64,
+    usage: uniformUsage(),
+  });
+  device.queue.writeBuffer(pairParams, 0, new Uint8Array(pairBytes));
 
   // Exceptions: a header vec4 per exception holding the two atom indices as raw
   // bits plus chargeProd, then a parameter vec4 per exception.
-  const exceptionData = new Float32Array(force.exceptionCount * 8);
+  const exceptionData = new Float32Array(Math.max(4, force.exceptionCount * 8));
   const exceptionBits = new Uint32Array(exceptionData.buffer);
   for (let e = 0; e < force.exceptionCount; e++) {
     exceptionBits[e * 4] = force.exceptionP1[e] as number;
@@ -212,138 +308,227 @@ export async function evaluateDirectSpace(
     exceptionData[parameters] = force.exceptionSigma[e] as number;
     exceptionData[parameters + 1] = force.exceptionEpsilon[e] as number;
   }
+  const exceptionsBuffer = pool.buffer({
+    label: "nonbonded/exceptions",
+    byteLength: exceptionData.byteLength,
+    usage: storageUsage(),
+  });
+  device.queue.writeBuffer(
+    exceptionsBuffer,
+    0,
+    exceptionData as unknown as BufferSource,
+  );
 
-  const positionBuffer = uploadBuffer(device, {
-    label: "positions",
-    data: positionWords,
-    usage: GPUBufferUsage.STORAGE,
-  });
-  const forceBuffer = storageBuffer(device, "forces", n * 3 * 2 * 4);
-  zeroAccumulator(device, forceBuffer, n * 3);
-  const energyBuffer = storageBuffer(device, "energy", 8);
-  zeroAccumulator(device, energyBuffer, 1);
-  const particleBuffer = uploadBuffer(device, {
-    label: "particle parameters",
-    data: particle,
-    usage: GPUBufferUsage.STORAGE,
-  });
-  const listBuffer = uploadBuffer(device, {
-    label: "cell and exclusion lists",
-    data: lists,
-    usage: GPUBufferUsage.STORAGE,
-  });
-
-  // struct Params { u32 x4; vec3<u32> cells; f32 cutoff; vec3<f32> box; f32 alpha }
-  // vec3 has 16-byte alignment, so cells lands at 16 and box at 32; 48 bytes.
-  // 64 bytes: five u32 offsets, then `cells` on its 16-byte boundary, the
-  // cutoff, the box on the next one, and alpha.
-  const pairParams = new ArrayBuffer(64);
-  const pairU32 = new Uint32Array(pairParams);
-  const pairF32 = new Float32Array(pairParams);
-  pairU32[0] = n;
-  pairU32[1] = sortedOffset;
-  pairU32[2] = exclusionStartOffset;
-  pairU32[3] = exclusionListOffset;
-  pairU32[4] = cellOfOffset;
-  pairU32[8] = cellList.cells[0] as number;
-  pairU32[9] = cellList.cells[1] as number;
-  pairU32[10] = cellList.cells[2] as number;
-  pairF32[11] = force.cutoff;
-  pairF32[12] = box[0] as number;
-  pairF32[13] = box[1] as number;
-  pairF32[14] = box[2] as number;
-  pairF32[15] = alpha;
-  const pairParamBuffer = uploadBuffer(device, {
-    label: "pair params",
-    data: new Uint8Array(pairParams),
-    usage: GPUBufferUsage.UNIFORM,
-  });
-
-  const exceptionBuffer = uploadBuffer(device, {
-    label: "exception data",
-    // An empty buffer is invalid, so a system with no exceptions still gets one
-    // vec4 that no invocation reads.
-    data: force.exceptionCount === 0 ? new Float32Array(4) : exceptionData,
-    usage: GPUBufferUsage.STORAGE,
-  });
   // struct Params { u32 count; f32 alpha; vec3<f32> box; u32 offset } -> 32 bytes
-  const exceptionParams = new ArrayBuffer(32);
-  const exceptionU32 = new Uint32Array(exceptionParams);
-  const exceptionF32 = new Float32Array(exceptionParams);
+  const exceptionBytes = new ArrayBuffer(32);
+  const exceptionU32 = new Uint32Array(exceptionBytes);
+  const exceptionF32 = new Float32Array(exceptionBytes);
   exceptionU32[0] = force.exceptionCount;
   exceptionF32[1] = alpha;
   exceptionF32[4] = box[0] as number;
   exceptionF32[5] = box[1] as number;
   exceptionF32[6] = box[2] as number;
   exceptionU32[7] = force.exceptionCount;
-  const exceptionParamBuffer = uploadBuffer(device, {
-    label: "exception params",
-    data: new Uint8Array(exceptionParams),
-    usage: GPUBufferUsage.UNIFORM,
+  const exceptionParams = pool.buffer({
+    label: "nonbonded/exceptionParams",
+    byteLength: 32,
+    usage: uniformUsage(),
   });
+  device.queue.writeBuffer(exceptionParams, 0, new Uint8Array(exceptionBytes));
 
-  const buffers = [
-    positionBuffer, forceBuffer, energyBuffer, particleBuffer, listBuffer,
-    pairParamBuffer, exceptionBuffer, exceptionParamBuffer,
-  ];
-  try {
-    await dispatch(device, {
-      label: "direct space pairs",
-      code: NONBONDED_PAIRS,
-      entryPoint: "direct_pairs",
-      bindings: [
-        { binding: 0, resource: { buffer: positionBuffer } },
-        { binding: 1, resource: { buffer: forceBuffer } },
-        { binding: 2, resource: { buffer: energyBuffer } },
-        { binding: 3, resource: { buffer: particleBuffer } },
-        { binding: 4, resource: { buffer: listBuffer } },
-        { binding: 5, resource: { buffer: pairParamBuffer } },
-      ],
-      workgroups: [Math.ceil(n / 64)],
-    });
-    const afterPairs = new Uint32Array(await readBuffer(device, energyBuffer, 8));
-    const pairEnergy = fromFixed(
-      fromWords(afterPairs[0] as number, (afterPairs[1] as number) | 0),
-    );
-
-    if (force.exceptionCount > 0) {
-      await dispatch(device, {
-        label: "direct space exceptions",
-        code: NONBONDED_EXCEPTIONS,
-        entryPoint: "direct_exceptions",
-        bindings: [
-          { binding: 0, resource: { buffer: positionBuffer } },
-          { binding: 1, resource: { buffer: forceBuffer } },
-          { binding: 2, resource: { buffer: energyBuffer } },
-          { binding: 3, resource: { buffer: particleBuffer } },
-          { binding: 4, resource: { buffer: exceptionBuffer } },
-          { binding: 5, resource: { buffer: exceptionParamBuffer } },
-        ],
-        workgroups: [Math.ceil(force.exceptionCount / 64)],
-      });
-    }
-
-    const energyWords = new Uint32Array(await readBuffer(device, energyBuffer, 8));
-    const forceWords = new Uint32Array(
-      await readBuffer(device, forceBuffer, n * 3 * 2 * 4),
-    );
-    const total = fromFixed(
-      fromWords(energyWords[0] as number, (energyWords[1] as number) | 0),
-    );
-    const dispersion = force.useDispersionCorrection
+  return {
+    force,
+    particleCount: n,
+    box,
+    alpha,
+    sections,
+    lists,
+    particle,
+    pairParams,
+    exceptions: exceptionsBuffer,
+    exceptionParams,
+    cellList,
+    dispersion: force.useDispersionCorrection
       ? dispersionCorrection(
           force,
           (box[0] as number) * (box[1] as number) * (box[2] as number),
         )
-      : 0;
+      : 0,
+  };
+}
+
+export interface Accumulators {
+  readonly positions: GPUBuffer;
+  readonly forces: GPUBuffer;
+  readonly energy: GPUBuffer;
+}
+
+/** The pair pass, and the exception pass when there are any. */
+export async function planDirect(
+  cache: PipelineCache,
+  resident: ResidentDirect,
+  accumulators: Accumulators,
+): Promise<{ pairs: Pass; exceptions: Pass | null }> {
+  const pairs = await cache.pass(
+    {
+      label: "direct space pairs",
+      code: NONBONDED_PAIRS,
+      entryPoint: "direct_pairs",
+    },
+    [
+      { binding: 0, resource: { buffer: accumulators.positions } },
+      { binding: 1, resource: { buffer: accumulators.forces } },
+      { binding: 2, resource: { buffer: accumulators.energy } },
+      { binding: 3, resource: { buffer: resident.particle } },
+      { binding: 4, resource: { buffer: resident.lists } },
+      { binding: 5, resource: { buffer: resident.pairParams } },
+    ],
+    [Math.ceil(resident.particleCount / 64)],
+  );
+  if (resident.force.exceptionCount === 0) return { pairs, exceptions: null };
+  const exceptions = await cache.pass(
+    {
+      label: "direct space exceptions",
+      code: NONBONDED_EXCEPTIONS,
+      entryPoint: "direct_exceptions",
+    },
+    [
+      { binding: 0, resource: { buffer: accumulators.positions } },
+      { binding: 1, resource: { buffer: accumulators.forces } },
+      { binding: 2, resource: { buffer: accumulators.energy } },
+      { binding: 3, resource: { buffer: resident.particle } },
+      { binding: 4, resource: { buffer: resident.exceptions } },
+      { binding: 5, resource: { buffer: resident.exceptionParams } },
+    ],
+    [Math.ceil(resident.force.exceptionCount / 64)],
+  );
+  return { pairs, exceptions };
+}
+
+/**
+ * Write a host-built cell list into the shared buffer.
+ *
+ * Only for the comparison in src/gpu/validate-cell-list.ts, which needs the two
+ * builders' output put through the identical kernel. A run always uses the
+ * device's own passes.
+ */
+export function uploadCellList(
+  device: GPUDevice,
+  resident: ResidentDirect,
+  cellList: CellList,
+): void {
+  const { sections, lists } = resident;
+  device.queue.writeBuffer(
+    lists,
+    sections.cellStarts,
+    cellList.starts as unknown as BufferSource,
+  );
+  device.queue.writeBuffer(
+    lists,
+    sections.order,
+    cellList.order as unknown as BufferSource,
+  );
+  const cellOf = new Uint32Array(resident.particleCount);
+  for (let cell = 0; cell < cellList.cellCount; cell++) {
+    for (
+      let slot = cellList.starts[cell] as number;
+      slot < (cellList.starts[cell + 1] as number);
+      slot++
+    ) {
+      cellOf[cellList.order[slot] as number] = cell;
+    }
+  }
+  device.queue.writeBuffer(lists, sections.cellOf, cellOf as unknown as BufferSource);
+}
+
+/**
+ * Evaluate real-space Ewald, Lennard-Jones, the exclusion corrections and the
+ * exceptions at one configuration.
+ *
+ * The pair and exception energies are reported separately, which costs a
+ * readback between the two passes. A loop does not do that -- it only needs the
+ * total -- but the split is what makes a disagreement in the browser lane
+ * readable, so the single-configuration path keeps it.
+ */
+export async function evaluateDirectSpace(
+  device: GPUDevice,
+  force: NonbondedForce,
+  positionWords: Uint32Array,
+  positions: Float64Array,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+  alpha: number,
+  /**
+   * A host-built cell list to use instead of the device's own passes, for the
+   * comparison that checks the two agree.
+   */
+  suppliedCellList?: CellList,
+): Promise<DirectSpaceResult> {
+  void positions;
+  const pool = new BufferPool(device);
+  try {
+    const n = force.particleCount;
+    const components = n * 3;
+    const accumulators: Accumulators = {
+      positions: pool.buffer({
+        label: "positions",
+        byteLength: positionWords.byteLength,
+        usage: storageUsage(),
+      }),
+      forces: pool.buffer({
+        label: "forces",
+        byteLength: components * 2 * 4,
+        usage: readableStorageUsage(),
+      }),
+      energy: pool.buffer({
+        label: "energy",
+        byteLength: 8,
+        usage: readableStorageUsage(),
+      }),
+    };
+    device.queue.writeBuffer(
+      accumulators.positions,
+      0,
+      positionWords as unknown as BufferSource,
+    );
+    device.queue.writeBuffer(accumulators.forces, 0, new Uint32Array(components * 2));
+    device.queue.writeBuffer(accumulators.energy, 0, new Uint32Array(2));
+
+    const cache = pipelineCacheFor(device);
+    const resident = prepareDirect(pool, force, boxVectors, alpha);
+    if (suppliedCellList === undefined) {
+      const passes = await planCellList(cache, resident.cellList, accumulators.positions);
+      await submitPasses(device, "cell list", passes);
+    } else {
+      uploadCellList(device, resident, suppliedCellList);
+    }
+
+    const { pairs, exceptions } = await planDirect(cache, resident, accumulators);
+    await submitPasses(device, "direct space pairs", [pairs]);
+    const afterPairs = new Uint32Array(await readBuffer(device, accumulators.energy, 8));
+    const pairEnergy = fromFixed(
+      fromWords(afterPairs[0] as number, (afterPairs[1] as number) | 0),
+    );
+    if (exceptions !== null) {
+      await submitPasses(device, "direct space exceptions", [exceptions]);
+    }
+
+    const energyWords = new Uint32Array(
+      await readBuffer(device, accumulators.energy, 8),
+    );
+    const forceWords = new Uint32Array(
+      await readBuffer(device, accumulators.forces, components * 2 * 4),
+    );
+    const total = fromFixed(
+      fromWords(energyWords[0] as number, (energyWords[1] as number) | 0),
+    );
     return {
       pairEnergy,
       exceptionEnergy: total - pairEnergy,
-      dispersion,
-      energy: total + dispersion,
-      forces: unpackFixed(forceWords, n * 3),
+      dispersion: resident.dispersion,
+      energy: total + resident.dispersion,
+      forces: unpackFixed(forceWords, components),
     };
   } finally {
-    for (const b of buffers) b.destroy();
+    pool.destroy();
   }
 }
