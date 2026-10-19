@@ -12,7 +12,7 @@ for (const name of ["1L2Y", "3HTB"]) {
   const present = existsSync(`fixtures/${name}/system.xml`);
   test.skip(!present, `fixtures/${name} not generated — see tools/README.md`);
 
-  test(`bonded forces match OpenMM for ${name}`, async ({ page }) => {
+  test(`forces match OpenMM for ${name}`, async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on("console", (m) => {
       if (m.type() === "error") consoleErrors.push(m.text());
@@ -27,10 +27,11 @@ for (const name of ["1L2Y", "3HTB"]) {
     if (report !== undefined && "error" in report) throw new Error(report.error);
     const checked = report!;
 
-    // Every bonded force the system carries must be present and must pass.
+    // Every force the system carries must be present and must pass.
     expect(checked.comparisons.map((c) => c.forceType).sort()).toEqual([
       "HarmonicAngleForce",
       "HarmonicBondForce",
+      "NonbondedForce[direct]",
       "PeriodicTorsionForce",
     ]);
     const failures = checked.comparisons.filter((c) => !c.ok);

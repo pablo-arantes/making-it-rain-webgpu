@@ -15,64 +15,15 @@
 // contended slot).  Gather remains worth measuring for the nonbonded kernel,
 // where the work saved is different, but it buys no determinism anywhere.
 //
-// Positions arrive in fixed point, two words per component, 24 bytes an atom.
-// Differences are taken in fixed point -- where they are exact -- and only then
-// converted to f32, which is what AGENTS.md requires: a bond vector is at most
-// a few tenths of a nanometre, where f32 has plenty of room, while an absolute
-// coordinate converted to f32 would throw away the reason positions are stored
-// this way.
+// Positions, forces and energy come from accumulate.wgsl, which every force
+// kernel shares; this file adds only its own term data at bindings 3 and 4.
 
-@group(0) @binding(0) var<storage, read>       positions: array<vec2<u32>>;
-@group(0) @binding(1) var<storage, read>       term_atoms: array<u32>;
-@group(0) @binding(2) var<storage, read>       term_params: array<f32>;
-@group(0) @binding(3) var<storage, read_write> force: array<atomic<u32>>;
-@group(0) @binding(4) var<storage, read_write> energy: array<atomic<u32>>;
-@group(0) @binding(5) var<uniform>             params: Params;
+@group(0) @binding(3) var<storage, read> term_atoms: array<u32>;
+@group(0) @binding(4) var<storage, read> term_params: array<f32>;
+@group(0) @binding(5) var<uniform>       params: Params;
 
 struct Params {
   term_count: u32,
-}
-
-/// Add a 64-bit fixed-point value into one accumulator slot.
-///
-/// The force buffer holds two words per slot, low then high, so that both live
-/// in one binding. `atomicAdd` returns the value the slot held before the add,
-/// which is how the carry out of the low word is detected without a 64-bit
-/// atomic: unsigned addition wrapped exactly when the sum is smaller than what
-/// was there. Other invocations adding in between do not matter, because the
-/// total carry is the sum of the per-operation carries.
-fn accumulate(buffer_index: u32, words: vec2<u32>) {
-  let slot = buffer_index * 2u;
-  let previous = atomicAdd(&force[slot], words.x);
-  if (previous + words.x < previous) {
-    atomicAdd(&force[slot + 1u], 1u);
-  }
-  atomicAdd(&force[slot + 1u], words.y);
-}
-
-fn accumulate_energy(value: f32) {
-  let words = to_fixed(value);
-  let previous = atomicAdd(&energy[0], words.x);
-  if (previous + words.x < previous) {
-    atomicAdd(&energy[1], 1u);
-  }
-  atomicAdd(&energy[1], words.y);
-}
-
-/// Add a force vector to one atom.
-fn add_force(atom: u32, f: vec3<f32>) {
-  accumulate(atom * 3u + 0u, to_fixed(f.x));
-  accumulate(atom * 3u + 1u, to_fixed(f.y));
-  accumulate(atom * 3u + 2u, to_fixed(f.z));
-}
-
-/// The vector from atom `a` to atom `b`, differenced in fixed point.
-fn delta(a: u32, b: u32) -> vec3<f32> {
-  return vec3<f32>(
-    from_fixed(sub64(positions[b * 3u + 0u], positions[a * 3u + 0u])),
-    from_fixed(sub64(positions[b * 3u + 1u], positions[a * 3u + 1u])),
-    from_fixed(sub64(positions[b * 3u + 2u], positions[a * 3u + 2u])),
-  );
 }
 
 // E = (1/2) k (r - r0)^2

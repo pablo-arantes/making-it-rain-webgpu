@@ -20,6 +20,7 @@ server, and your structure is never uploaded.
 | [docs/NOTEBOOK_PARITY.md](docs/NOTEBOOK_PARITY.md) | every field of `reference/Uni_Dock+MD.ipynb`, what it does, and where it lands |
 | [docs/PRIOR_ART.md](docs/PRIOR_ART.md) | what already exists for this in a browser, its state, and its license |
 | [docs/PRECISION.md](docs/PRECISION.md) | how forces and positions are represented without f64, and the two schemes that measurement eliminated |
+| [docs/NONBONDED.md](docs/NONBONDED.md) | what OpenMM puts in which force group, and the three Ewald terms a first reading gets wrong |
 | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) | every place the app will differ from the notebook, and why |
 | [AGENTS.md](AGENTS.md) · [CLAUDE.md](CLAUDE.md) | engineering invariants, and how to build and test this checkout |
 | [docs/measurements/](docs/measurements/) | the numbers the documents quote, and the commands that produced them |

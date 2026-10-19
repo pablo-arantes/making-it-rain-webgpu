@@ -28,6 +28,14 @@ export interface OpenMMState {
   readonly velocities?: Float64Array;
   /** kJ/mol/nm, xyz interleaved; undefined when the state carries none. */
   readonly forces?: Float64Array;
+  /**
+   * kJ/mol, when the state was serialised with energies.
+   *
+   * A convenience that makes a fixture self-describing: the potential energy
+   * OpenMM reported for these exact coordinates travels with them.
+   */
+  readonly potentialEnergy?: number;
+  readonly kineticEnergy?: number;
 }
 
 function readVectorList(
@@ -58,6 +66,8 @@ export function parseState(xml: string): OpenMMState {
   let positions: Float64Array | undefined;
   let velocities: Float64Array | undefined;
   let forces: Float64Array | undefined;
+  let potentialEnergy: number | undefined;
+  let kineticEnergy: number | undefined;
   let sawState = false;
 
   while (scanner.next()) {
@@ -98,6 +108,10 @@ export function parseState(xml: string): OpenMMState {
       case "Forces":
         forces = readVectorList(scanner, "Forces", "Force");
         break;
+      case "Energies":
+        potentialEnergy = scanner.numOr("PotentialEnergy", Number.NaN);
+        kineticEnergy = scanner.numOr("KineticEnergy", Number.NaN);
+        break;
       default:
         break;
     }
@@ -128,5 +142,11 @@ export function parseState(xml: string): OpenMMState {
     // `exactOptionalPropertyTypes` means an absent array is an absent key.
     ...(velocities === undefined ? {} : { velocities }),
     ...(forces === undefined ? {} : { forces }),
+    ...(potentialEnergy === undefined || Number.isNaN(potentialEnergy)
+      ? {}
+      : { potentialEnergy }),
+    ...(kineticEnergy === undefined || Number.isNaN(kineticEnergy)
+      ? {}
+      : { kineticEnergy }),
   };
 }

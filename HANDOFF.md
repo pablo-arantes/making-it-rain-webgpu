@@ -17,24 +17,39 @@ Done in Phase 1 so far:
 - **`System` and `State` parsers** (`src/engine/system.ts`, `state.ts`, over a
   purpose-built scanner in `xml.ts`): 7.5 MB of `system.xml` in 39 ms, every
   force type this workflow produces, with an explicit named error for anything
-  else — including a `CustomExternalForce` whose expression is not the one
-  restraint the engine implements, and a `NonbondedForce` carrying parameter
-  offsets.
-- **Bonded forces**, double-precision reference and WGSL kernels: harmonic
-  bond, harmonic angle, periodic torsion. Energies match OpenMM's Reference
-  platform to between 1.7e-8 and 1.6e-6 relative on both fixtures; forces match
-  the reference to between 5.6e-7 and 7.1e-6 relative RMS. Numbers in
-  `docs/PRECISION.md`.
-- **A plan correction**: an atomic scatter is bit-reproducible, because the
-  accumulation is integer. `docs/PLAN.md` had argued for a gather kernel at 2×
-  the pair work to keep determinism; it buys no determinism at all. Phase 1's
-  remaining kernels are cheaper than planned.
+  else.
+- **Bonded forces**, reference and WGSL: energies match OpenMM to between
+  1.7e-8 and 1.6e-6 relative on both fixtures, forces to between 5.6e-7 and
+  7.1e-6 relative RMS.
+- **Direct-space Ewald and Lennard-Jones**, reference and WGSL, including the
+  exclusion corrections, the exceptions, and the analytic dispersion
+  correction. On the GPU: 1.05e-7 energy agreement with OpenMM on 1L2Y and
+  **3.93e-7 on 3HTB's 26,749 atoms**, where +1.67e6 kJ/mol of exclusion
+  corrections nearly cancel against a +1.56e6 total.
+- **Reciprocal-space PME, reference only**: order-5 B-splines, a 3D DFT,
+  the convolution and interpolated forces. Reproduces OpenMM's reciprocal force
+  group to < 1e-9 relative on 1L2Y.
+- **erf and erfc**, f64 for the reference and a rational approximation for the
+  kernel, the latter measured at < 1.2e-7 relative over the whole Ewald range.
+- **The nonbonded decomposition, measured and written down** in
+  `docs/NONBONDED.md`. Three terms are not what a first reading suggests, and
+  each is larger than the total energy or would have silently biased it.
 
-Phase 1 steps still to do, in the plan's order: direct space with exceptions,
-PME reciprocal space, constraints, the LFMiddle integrator, the barostat, the
-minimiser.
+Phase 1 steps still to do, in the plan's order: **PME reciprocal space in
+WGSL**, constraints, the LFMiddle integrator, the barostat, the minimiser.
 
 ## Open, in the order they are worth doing
+
+### Reciprocal space needs a transform on the GPU
+The reference uses a direct O(n²)-per-line DFT, which is the right choice there
+-- 25 to 64 points an axis is a second in JavaScript, and a direct transform has
+no twiddle tables, no radix cases and no bit reversal to get wrong. The kernel
+cannot use that shape unchanged: at a 54³ grid it is about 4e8 flops a step,
+which would be perhaps 0.2 ms and so the dominant per-step cost. A mixed-radix
+transform over 2/3/5/7 factors is roughly ten times cheaper. **Write the direct
+version first and measure it**, since it is correct by construction and
+establishes the gate the fast one has to pass; `docs/PRIOR_ART.md` §5 notes that
+no TypeScript/WGSL 3D FFT exists to borrow.
 
 ### The acceptance thresholds are provisional
 `AGENTS.md` quotes OpenCL **single** precision on an Apple M3 Pro, because this
