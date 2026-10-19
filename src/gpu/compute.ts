@@ -2,11 +2,20 @@
  * The smallest useful compute helper: make a pipeline, bind buffers, dispatch,
  * read back.
  *
- * Phase 1 replaces the allocation here with a pooled allocator, because
- * `AGENTS.md` requires every GPU allocation to go through one place so peak
- * memory stays measurable.  Until there is something to pool, this is the
- * honest version: explicit buffers with explicit lifetimes.
+ * This is the single-evaluation path -- a force at one set of coordinates, a
+ * probe, a validation run -- where the compile is a one-off and the wait for
+ * the queue *is* the result. A step loop needs the opposite shape and uses
+ * src/gpu/pipeline.ts: pipelines kept, passes recorded, one submission for many
+ * steps. `dispatch` shares that module's pipeline cache, so a kernel invoked
+ * once per fixture here is compiled once per device rather than once per call.
+ *
+ * Buffers here still have explicit lifetimes rather than coming from the pool.
+ * That is deliberate for a one-shot evaluation: nothing outlives the call, so
+ * there is nothing for a pool to amortise, and `AGENTS.md`'s requirement is
+ * about the memory a *run* holds.
  */
+
+import { PipelineCache, submitPasses } from "./pipeline.js";
 
 export interface BufferSpec {
   readonly label: string;
@@ -68,6 +77,17 @@ export async function readBuffer(
  * a console warning and a silently wrong result, which is the one failure mode
  * a differential test cannot distinguish from a bad kernel.
  */
+const caches = new WeakMap<GPUDevice, PipelineCache>();
+
+/** One pipeline cache per device, shared with the loop. */
+export function pipelineCacheFor(device: GPUDevice): PipelineCache {
+  const existing = caches.get(device);
+  if (existing !== undefined) return existing;
+  const created = new PipelineCache(device);
+  caches.set(device, created);
+  return created;
+}
+
 export async function dispatch(
   device: GPUDevice,
   options: {
@@ -96,44 +116,17 @@ export async function dispatch(
     readonly bindGroupLayout?: GPUBindGroupLayout;
   },
 ): Promise<void> {
-  device.pushErrorScope("validation");
-  const module = device.createShaderModule({ label: options.label, code: options.code });
-  const info = await module.getCompilationInfo();
-  const errors = info.messages.filter((m) => m.type === "error");
-  if (errors.length > 0) {
-    throw new Error(
-      `${options.label} failed to compile:\n` +
-        errors.map((m) => `  ${m.lineNum}:${m.linePos} ${m.message}`).join("\n"),
-    );
-  }
-  const pipeline = device.createComputePipeline({
-    label: options.label,
-    layout:
-      options.bindGroupLayout === undefined
-        ? "auto"
-        : device.createPipelineLayout({
-            label: options.label,
-            bindGroupLayouts: [options.bindGroupLayout],
-          }),
-    compute: { module, entryPoint: options.entryPoint ?? "main" },
-  });
-  const group = device.createBindGroup({
-    label: options.label,
-    layout: options.bindGroupLayout ?? pipeline.getBindGroupLayout(0),
-    entries: options.bindings.map(({ binding, resource }) => ({ binding, resource })),
-  });
-  const encoder = device.createCommandEncoder({ label: options.label });
-  const pass = encoder.beginComputePass({ label: options.label });
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, group);
-  pass.dispatchWorkgroups(
-    options.workgroups[0],
-    options.workgroups[1] ?? 1,
-    options.workgroups[2] ?? 1,
+  const pass = await pipelineCacheFor(device).pass(
+    {
+      label: options.label,
+      code: options.code,
+      entryPoint: options.entryPoint ?? "main",
+      ...(options.bindGroupLayout === undefined
+        ? {}
+        : { bindGroupLayout: options.bindGroupLayout }),
+    },
+    options.bindings,
+    options.workgroups,
   );
-  pass.end();
-  device.queue.submit([encoder.finish()]);
-  await device.queue.onSubmittedWorkDone();
-  const error = await device.popErrorScope();
-  if (error !== null) throw new Error(`${options.label}: ${error.message}`);
+  await submitPasses(device, options.label, [pass]);
 }
