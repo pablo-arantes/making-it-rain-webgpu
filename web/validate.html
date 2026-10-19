@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Validation — Making it Rain on WebGPU</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Validation</h1>
+      <p class="lede">
+        The WGSL kernels against OpenMM, on this machine's GPU.
+      </p>
+      <p class="status" role="status">
+        A development page. It fetches a reference system built by
+        <code>tools/build_reference_system.py</code>, which the dev server
+        serves from <code>fixtures/</code> and a production build does not have.
+        Add <code>?fixture=3HTB</code> for the protein–ligand case.
+      </p>
+    </header>
+    <main>
+      <section>
+        <h2>Bonded forces</h2>
+        <div id="body" class="panel">Loading the fixture…</div>
+      </section>
+    </main>
+    <script type="module" src="./validate.ts"></script>
+  </body>
+</html>

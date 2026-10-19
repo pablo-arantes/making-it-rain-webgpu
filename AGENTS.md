@@ -21,7 +21,8 @@ measurements these rest on.
 
 ## Numerics
 
-- **Forces accumulate in 64-bit fixed point**, two 32-bit words, scale 2³²,
+- **Forces accumulate in 64-bit fixed point**, scattered through
+  carry-propagating atomics, two 32-bit words, scale 2³²,
   as `src/gpu/kernels/fixed64.wgsl` defines it. Integer addition is exact and
   order-independent. This is not an optimisation: for the 3HTB fixture PME's
   direct space is +1.56e6 kJ/mol and its reciprocal space is −1.73e6, cancelling
@@ -56,9 +57,12 @@ measurements these rest on.
 - **Establish correctness before performance.** A faster kernel passes the same
   differential test or it does not ship.
 - **Route GPU allocations through one place** so peak memory stays measurable.
-- **Determinism**: for one device, one seed and one workgroup configuration, a
-  run is reproducible bit for bit. Across devices it is not, and the reason is
-  recorded.
+- **Determinism**: for one device and one seed, a run is reproducible bit for
+  bit, and it does not depend on the workgroup configuration. That holds because
+  every accumulation is exact integer addition, whose result is independent of
+  the order the adds landed in, so an atomic scatter is as deterministic as a
+  gather. Introducing a floating-point reduction anywhere would break this.
+  Across devices bitwise agreement is not promised, and the reason is recorded.
 - **Validate shapes, dtypes and byte sizes at public boundaries**, and use a
   WebGPU error scope around every dispatch: a validation error otherwise appears
   as a console warning and a silently wrong result, which is the one failure a

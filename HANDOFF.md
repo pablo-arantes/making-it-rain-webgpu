@@ -5,22 +5,34 @@ has only what is **unfinished**.
 
 ## State
 
-**Phase 0 is done.** `npm run check` passes; `npm run test:browser` passes all
-five device checks on an Apple M3 Pro through Chrome 155; `npm run bench` and
-`npm run report:adapter` work and their output is committed under
-`docs/measurements/`. The Python oracle regenerates both committed fixtures.
+**Phase 0 is done. Phase 1 is underway**, through the first of its six steps.
 
-Phase 0 was meant to be a skeleton plus five working test lanes. It also
-settled the engine's numerics, because three candidate schemes went in and one
-came out:
+`npm run check` passes: typecheck, 45 unit and reference tests, web build.
+`npm run test:browser` passes all five device checks plus the bonded-force
+comparison on both fixtures. `npm run bench` and `npm run report:adapter` work
+and their output is committed under `docs/measurements/`.
 
-- **Forces in 64-bit fixed point** — kept, and exact under contention on the
-  device.
-- **Positions in double-single** — **abandoned.** Chrome/Metal folds Dekker's
-  error term to exactly zero. `docs/PRECISION.md`.
-- **Positions in fixed point with residual feedback** — kept. 1.8e-11 nm error
-  over 400 ps where plain accumulation drifts 2.3e-5 nm and f32 does not move at
-  all.
+Done in Phase 1 so far:
+
+- **`System` and `State` parsers** (`src/engine/system.ts`, `state.ts`, over a
+  purpose-built scanner in `xml.ts`): 7.5 MB of `system.xml` in 39 ms, every
+  force type this workflow produces, with an explicit named error for anything
+  else — including a `CustomExternalForce` whose expression is not the one
+  restraint the engine implements, and a `NonbondedForce` carrying parameter
+  offsets.
+- **Bonded forces**, double-precision reference and WGSL kernels: harmonic
+  bond, harmonic angle, periodic torsion. Energies match OpenMM's Reference
+  platform to between 1.7e-8 and 1.6e-6 relative on both fixtures; forces match
+  the reference to between 5.6e-7 and 7.1e-6 relative RMS. Numbers in
+  `docs/PRECISION.md`.
+- **A plan correction**: an atomic scatter is bit-reproducible, because the
+  accumulation is integer. `docs/PLAN.md` had argued for a gather kernel at 2×
+  the pair work to keep determinism; it buys no determinism at all. Phase 1's
+  remaining kernels are cheaper than planned.
+
+Phase 1 steps still to do, in the plan's order: direct space with exceptions,
+PME reciprocal space, constraints, the LFMiddle integrator, the barostat, the
+minimiser.
 
 ## Open, in the order they are worth doing
 
@@ -31,14 +43,13 @@ real thing: `tools/calibrate_thresholds.py` on the **Colab T4**, for 1L2Y, 3HTB
 and DHFR. Pablo has agreed to run it. Until then every Phase 1 threshold is a
 placeholder with a plausible value, which is the worst kind.
 
-### Atomics may be cheaper than the plan assumed
-Measured on Apple: 1 accumulator slot runs at 374 M adds/s, 65,536 slots at
-291 M/s — contention is *not* the cost, scattered memory is. `docs/PLAN.md`
-budgets a gather-based force kernel with a full neighbour list at 2× the pair
-work, partly to avoid contention. That reasoning does not hold on this adapter.
-**Do not change the plan on one GPU**: measure NVIDIA and an integrated adapter
-first, and note that determinism is a separate argument for gather that this
-measurement says nothing about.
+### Whether the nonbonded kernel gathers or scatters
+Settled for determinism, open for speed. An atomic scatter is bit-reproducible
+because the accumulation is integer, so gather is now a pure performance
+question — and on Apple the atomics are cheap (374 M adds/s into one contended
+slot, *faster* than 65536 uncontended ones, so scattered memory costs more than
+contention). Measure both on NVIDIA and on an integrated adapter before
+committing the nonbonded kernel either way.
 
 ### The oracle lane has no oracle
 `npm run test:oracle` reports `vendor/openmm-wasm/openmm.wasm` missing and skips.

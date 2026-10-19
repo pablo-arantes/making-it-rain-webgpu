@@ -19,7 +19,7 @@ build, in what order, and how each piece is held to the notebook.
 | Which forces? | `HarmonicBondForce`, `HarmonicAngleForce`, `PeriodicTorsionForce`, `NonbondedForce` (PME, exceptions, dispersion correction), `CMMotionRemover`, `MonteCarloBarostat`, the restraint `CustomExternalForce`, and PDBFixer's one soft-core `CustomNonbondedForce` | **Measured**: both the GAFF and the OpenFF/SMIRNOFF route produce exactly these five force types for 3HTB+JZ4 — no virtual sites, no switching function, no other custom force |
 | Ligand parameters | **`openff-2.3.0` (Sage 2.3.0) by default**, typed with RDKit WASM SMIRKS matching; GAFF kept as an option but **upload-only** | Verified: `GAFFTemplateGenerator` shells out to `antechamber` for **atom typing**, not just charging, and no GAFF SMIRNOFF port exists — see [§Ligand force field](#ligand-force-field-and-charges) |
 | Ligand charges | **OpenFF NAGL exported to ONNX**, run on ONNX Runtime Web; Gasteiger only as a labelled fallback | AM1-BCC needs `sqm`. NAGL is 0.016 e from OpenEye AM1-BCC where AmberTools itself is 0.034 e |
-| Force accumulation | **Fixed point**, with gather instead of atomics wherever a gather exists; emulated 64-bit (carry-propagating) atomics only where it does not | Fixed-point accumulation is *exact* and order-independent, which is what makes a 1.5-million-kJ/mol cancellation survivable and a run bit-reproducible |
+| Force accumulation | **Fixed point**, scattered through emulated 64-bit (carry-propagating) atomics | Fixed-point accumulation is *exact* and order-independent, which is what makes a 1.5-million-kJ/mol cancellation survivable **and** what makes a scattered atomic accumulation bit-reproducible — so gather buys no determinism, only possibly speed. Built and verified in Phase 0 and 1 |
 | Positions | **64-bit fixed point with residual feedback** | A 1e-6 constraint tolerance on a 0.1 nm bond is 1e-7 nm; f32 at a 6.5 nm coordinate has a 4.77e-7 nm ulp, so an f32 coordinate does not drift, it stops moving. Double-single was the first answer and is **abandoned**: Chrome/Metal folds Dekker's error term to zero. Measured in [PRECISION.md](PRECISION.md) |
 | Integrator | **LFMiddle** | `LangevinIntegrator` *is* `LangevinMiddleIntegrator` in OpenMM ≥ 8.2, so that is what the notebook runs |
 | Reproducibility | Every run seeds every RNG and records the seed; a build with the same seed is bit-identical | The notebook's own preparation is not reproducible (measured: 2.3 Å of hydrogen movement between identical runs) |
@@ -179,29 +179,40 @@ times the answer. A summation scheme that rounds while accumulating loses the
 answer in the cancellation, and the loss depends on the order the GPU happened
 to run the threads in.
 
-### Force accumulation — fixed point, gather first
+### Force accumulation — fixed point, scattered
 
 Forces accumulate as integers, scaled by 2³² as OpenMM's own GPU platforms do.
 Integer addition is exact and commutative, so the sum does not depend on
 thread order and nothing is lost while accumulating.
 
-1. **Gather wherever a gather exists.** One invocation owns one atom and sums
-   every term that touches it: bonded terms from a per-atom term list,
-   direct-space pairs from a *full* (not half) neighbour list, exceptions,
-   restraints. This costs 2× the pair work and buys no atomics at all, which on
-   a bandwidth-bound kernel is close to free and makes the result bit-identical
-   run to run.
-2. **PME charge spreading** is the one genuine scatter: each atom spreads to
-   5³ = 125 grid points. Two implementations, decided by measurement in Phase 1:
-   (a) gather per grid point over a cell-binned atom list — deterministic, no
-   atomics; (b) carry-propagating 64-bit emulation — `atomicAdd` the low word,
-   detect the wrap from the returned old value, `atomicAdd` 1 into the high
-   word. (b) is **built and verified** as of Phase 0, including under heavy
-   contention. (a) is still preferred because it keeps the determinism invariant
-   whole, but Phase 0's benchmark weakens the performance argument for it: on an
-   Apple M3 Pro one accumulator slot runs *faster* than 65536, so contention is
-   not the cost — scattered memory is. Measure NVIDIA and an integrated adapter
-   before deciding.
+**Corrected during Phase 1.** This section originally said to gather wherever a
+gather exists, at 2× the pair work, in order to avoid atomics and so keep the
+determinism invariant. That reasoning was wrong, and in a way worth spelling
+out: *because* the accumulation is integer, an atomic scatter is already
+bit-reproducible. Atomic integer addition is exact and commutative, so the
+total does not depend on the order the adds landed in, and the f32 value each
+term contributes depends only on that term's own inputs. There is no
+floating-point reduction anywhere for an order to matter to. Phase 0 also
+measured the atomics as cheap on an Apple M3 Pro — 374 million adds a second
+into a *single* contended slot, faster than 65536 uncontended ones, because
+scattered memory costs more than contention does.
+
+So:
+
+1. **Scatter through the fixed-point atomics.** One invocation owns one term and
+   adds its contribution to the two to four atoms it touches. Built and verified
+   for the bonded forces: `src/gpu/kernels/bonded.wgsl`, matching OpenMM to
+   between 1.7e-8 and 1.6e-6 relative on energy and our double-precision
+   reference to between 5.6e-7 and 7.1e-6 relative RMS on forces, on both
+   committed fixtures. Gather stays on the table for the **nonbonded** kernel,
+   where it saves a different kind of work, and is a pure performance question
+   there.
+2. **PME charge spreading** is the densest scatter: each atom spreads to
+   5³ = 125 grid points. The carry-propagating atomic path — `atomicAdd` the low
+   word, detect the wrap from the returned old value, `atomicAdd` 1 into the
+   high word — is **built and verified**, including under heavy contention, and
+   is the default. A gather per grid point over a cell-binned atom list remains
+   worth measuring purely for speed.
 3. **Overflow is checked, not assumed.** The scale is chosen from a measured
    force bound with a recorded headroom factor, and a debug build traps on
    saturation. Pre-minimisation structures are the dangerous case: the
@@ -242,13 +253,15 @@ measured at 1.8e-11 nm over the same 400 ps.
 
 ### Determinism
 
-**Invariant: for a fixed seed, workgroup configuration and neighbour-list
-rebuild schedule, two runs on the same device produce bit-identical
-trajectories.** Achievable because nothing accumulates in floating point and
-nothing uses an atomic whose order can vary. Counter-based RNG (Philox 4×32-10)
-keyed by (step, atom, purpose) means the random forces do not depend on
-scheduling either. Across devices, bitwise agreement is not promised, and the
-reason is recorded.
+**Invariant: for a fixed seed and neighbour-list rebuild schedule, two runs on
+the same device produce bit-identical trajectories.** Nothing accumulates in
+floating point; every accumulation is exact integer addition, whose result does
+not depend on the order the adds landed in, so atomics are free to race.
+Counter-based RNG (Philox 4×32-10) keyed by (step, atom, purpose) means the
+random forces do not depend on scheduling either. Note what this does *not*
+need: a fixed workgroup configuration. Across devices, bitwise agreement is not
+promised, because a different adapter may choose a different kernel variant, and
+the reason is recorded.
 
 ## 4. The engine
 
@@ -558,21 +571,23 @@ and `run.json` records which route was taken.
 
 ### Q4 — Force accumulation and position precision
 
-See §3 for the full statement. In short: **fixed-point accumulation, gather
-instead of atomics wherever a gather exists, double-single positions,
-counter-based RNG**, with the invariant that a seed reproduces a trajectory
-bit-for-bit on one device.
+See §3 and [PRECISION.md](PRECISION.md) for the measured answer, which differs
+from this plan's first one in two places. In short: **fixed-point accumulation
+scattered through emulated 64-bit atomics, fixed-point positions with residual
+feedback, counter-based RNG**, with the invariant that a seed reproduces a
+trajectory bit-for-bit on one device. Gather is not needed for determinism —
+integer accumulation is order-independent — and double-single positions are
+unusable because Chrome/Metal folds the error-free arithmetic they rest on.
 
-*Expected accuracy cost.* Bonded and direct-space forces should agree with
-double precision to ~1e-6 relative; PME to ~1e-5 relative, limited by f32
+*Accuracy cost, now partly measured.* The bonded forces agree with our
+double-precision reference to between 5.6e-7 and 7.1e-6 relative RMS, and their
+energies agree with OpenMM's Reference platform to between 1.7e-8 and 1.6e-6
+relative, on both fixtures. PME is expected around 1e-5 relative, limited by f32
 B-spline and FFT arithmetic rather than by accumulation, which is exact. Energy
 conservation should match OpenMM mixed precision, because the scheme is the same
-one OpenMM mixed precision uses. The real cost is performance, not accuracy: the
-full neighbour list doubles direct-space pair work, and double-single positions
-add a few operations per atom per step in the integrator and the constraint
-solver. Phase 1 measures both; if the gather path proves too expensive, the
-atomic path is the documented alternative and the determinism invariant weakens
-to "deterministic up to atomic ordering", which goes in `DEVIATIONS.md`.
+class. The remaining cost is performance rather than accuracy, and it is smaller
+than this plan first assumed: no full neighbour list is needed for determinism's
+sake.
 
 ### Q5 — Largest system and expected ns/day
 

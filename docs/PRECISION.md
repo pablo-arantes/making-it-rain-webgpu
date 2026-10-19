@@ -163,11 +163,60 @@ The serial position integrator runs at 6.8 million dependent steps per second,
 which is a latency baseline rather than anything the engine will do — a real
 step integrates every atom in parallel.
 
+## Determinism comes free with the integers
+
+Worth stating because the plan originally got it backwards. `docs/PLAN.md`
+first argued for a *gather* force kernel -- one invocation per atom, summing
+every term that touches it, over a full rather than half neighbour list at
+twice the pair work -- in order to avoid atomics and so keep the determinism
+invariant.
+
+That trade does not exist. Because the accumulation is integer, **an atomic
+scatter is already bit-reproducible**: integer addition is exact and
+commutative, so the total does not depend on the order the atomic adds landed
+in, and the f32 value each term contributes depends only on that term's own
+inputs. There is no floating-point reduction anywhere for an order to matter
+to. The determinism invariant in `AGENTS.md` therefore holds without a fixed
+workgroup configuration, which is a stronger guarantee than the plan asked for,
+at less cost.
+
+Gather is still worth measuring for the nonbonded kernel, where it saves a
+different kind of work. It is a performance question there and nothing more.
+
+## The bonded kernels, against OpenMM
+
+`npm run test:browser`, Apple M3 Pro, Chrome 155. Energies against OpenMM's
+double-precision Reference platform; forces against `src/reference/`'s own
+double-precision implementation evaluated at the coordinates the device sees.
+
+| fixture | force | terms | energy rel. err vs OpenMM | force rel. RMS |
+| --- | --- | ---: | ---: | ---: |
+| 1L2Y, 2373 particles | HarmonicBond | 160 | 1.64e-6 | 7.06e-6 |
+| | PeriodicTorsion | 1017 | 8.18e-8 | 8.31e-7 |
+| | HarmonicAngle | 565 | 8.08e-8 | 5.60e-7 |
+| 3HTB, 26749 particles | HarmonicBond | 1331 | 1.43e-7 | 2.49e-6 |
+| | PeriodicTorsion | 8894 | 6.03e-8 | 7.70e-7 |
+| | HarmonicAngle | 4788 | 1.68e-8 | 6.02e-7 |
+
+All inside the 1e-5 thresholds, and in line with the floor OpenMM's own
+single-precision platform sits at. The bond term is the loosest of the three in
+both systems, which is what the stiffest force constants predict: a bond's
+`k` reaches 265265 kJ/mol/nm², so an f32 position difference is amplified
+harder there than anywhere else in the bonded set.
+
+Two of these numbers were wrong until a test said so, and both were in the
+torsion gradient: the signs of dφ/dp1 and dφ/dp4, and the coefficients that
+split the remainder onto the inner two atoms. The energies matched OpenMM
+throughout, because every ff14SB torsion has a phase of 0 or π and `cos` is
+even -- so an energy comparison alone would have shipped a wrong force. What
+caught it was comparing the analytic gradient against a central difference of
+our own energy, and the fix came from measuring dφ/dr numerically rather than
+recalling a convention from a textbook.
+
 ## Still open for Phase 1
 
 - Whether PME charge spreading gathers per grid point or uses the atomic path.
-  The benchmark above makes the atomic path look better than assumed; the
-  determinism invariant still argues for gather. Decide by measuring both.
+  Purely a performance question now, and the benchmark above favours atomics.
 - Whether the same conclusions hold on NVIDIA, AMD and an integrated GPU, in
   particular whether any backend honours error-free arithmetic.
 - A finer position scale, 2⁻⁴⁰ rather than 2⁻³², is available within the same
