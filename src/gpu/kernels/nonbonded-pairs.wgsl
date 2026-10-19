@@ -75,8 +75,32 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   // the home cell from the list makes the two agree by construction.
   let home = cell_axes(lists[params.cell_of_offset + i], cells);
 
-  var force_sum = vec3<f32>(0.0);
-  var energy_sum = 0.0;
+  // Accumulated in 64-bit fixed point, in registers, rather than in an f32
+  // vector.
+  //
+  // An atom in bulk water has around 240 neighbours inside a 1 nm cutoff and
+  // its net force is a difference of large opposing contributions, so an f32
+  // running sum loses significance to cancellation. Integers do not, and the
+  // cost is a `to_fixed` and a carry per component per pair.
+  //
+  // What it bought, measured: the energy-drift gate on 1L2Y went from 0.376 to
+  // 0.0428 kJ/mol per atom per ns, against OpenMM's own 0.374 on the same
+  // configuration -- so most of what was being measured as drift was noise in
+  // the *reported* energy, which is summed the same way and over the same 240
+  // terms.
+  //
+  // What it did not buy, equally measured: 3HTB's direct force relative RMS
+  // stayed at 1.13e-5, thirteen times 1L2Y's. So cancellation in the per-atom
+  // sum is not what makes that fixture worse, and an earlier version of this
+  // comment said it was. Part of the difference is the pair vector itself --
+  // `delta_periodic` converts a raw difference to f32 *before* the
+  // minimum-image wrap, which on a 6.58 nm box costs 2 to 3 times the accuracy
+  // of wrapping first (test/pair-vector.test.ts) -- and that accounts for about
+  // 3 of the 13. The rest is not yet explained. See docs/NONBONDED.md.
+  var force_x = vec2<u32>(0u, 0u);
+  var force_y = vec2<u32>(0u, 0u);
+  var force_z = vec2<u32>(0u, 0u);
+  var energy_sum = vec2<u32>(0u, 0u);
 
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
@@ -101,7 +125,10 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
           let alpha_r = params.alpha * r;
           let charge_product = 138.93545764498457 * me.x * other.x;
           let screened = erfc_approx(alpha_r);
-          energy_sum += charge_product * screened / r;
+          // Halved here rather than at the end: each pair is seen from both
+          // ends, and scaling by 0.5 is exact in f32, so this is the same total
+          // and keeps the running sum a pure integer.
+          energy_sum = add64(energy_sum, to_fixed(0.5 * charge_product * screened / r));
           var d_e_d_r = charge_product *
             (-screened / r_squared - params.alpha * erf_derivative(alpha_r) / r);
 
@@ -111,17 +138,23 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
             let s2 = sigma * sigma / r_squared;
             let s6 = s2 * s2 * s2;
             let s12 = s6 * s6;
-            energy_sum += 4.0 * epsilon * (s12 - s6);
+            energy_sum = add64(energy_sum, to_fixed(2.0 * epsilon * (s12 - s6)));
             d_e_d_r += (4.0 * epsilon / r) * (6.0 * s6 - 12.0 * s12);
           }
           // F_i = (dE/dr / r) * d, and this invocation owns only atom i.
-          force_sum += (d_e_d_r / r) * d;
+          let contribution = (d_e_d_r / r) * d;
+          force_x = add64(force_x, to_fixed(contribution.x));
+          force_y = add64(force_y, to_fixed(contribution.y));
+          force_z = add64(force_z, to_fixed(contribution.z));
         }
       }
     }
   }
 
-  add_force(i, force_sum);
-  // Each pair was seen from both ends, so the energy is counted twice.
-  accumulate_energy(0.5 * energy_sum);
+  accumulate_into(i * 3u + 0u, force_x);
+  accumulate_into(i * 3u + 1u, force_y);
+  accumulate_into(i * 3u + 2u, force_z);
+  // Each pair was seen from both ends; the halving happened as each
+  // contribution was formed.
+  accumulate_energy_fixed(energy_sum);
 }

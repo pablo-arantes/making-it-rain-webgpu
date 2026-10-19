@@ -230,3 +230,53 @@ pair contributes to one atom's force and not the other's. That is not a rounding
 error, it is a violation of Newton's third law, and it leaks momentum in a way
 the centre-of-mass remover would then quietly absorb. The kernel now reads
 `cell_of[i]` from the list, so the two agree by construction.
+
+## Exact accumulation in the pair kernel, and what it did and did not fix
+
+The pair kernel is a gather: one thread owns atom `i` and sums every
+contribution from the 27 surrounding cells. It used to sum them into a
+`vec3<f32>` and make a single fixed-point add at the end. It now accumulates in
+fixed point throughout, in registers, at the cost of a `to_fixed` and a carry
+per component per pair -- in the hottest loop in the engine.
+
+**What it fixed.** The energy-drift gate on 1L2Y went from 0.376 to **0.0428**
+kJ/mol per atom per ns. OpenMM, from the same captured configuration with the
+same integrator and timestep, drifts at **0.374** on its CPU platform
+(`tools/measure_drift.py`, `docs/measurements/drift-openmm-cpu-1L2Y.json`). So
+the engine is now an order of magnitude better than the comparison, and most of
+what was previously being measured as drift was noise in the *reported* energy
+rather than non-conservation: the energy is summed over the same 240-odd terms
+per atom, by the same kernel, and was losing significance the same way.
+
+**What it did not fix.** 3HTB's direct-space force relative RMS stayed at
+**1.13e-5**, against 1L2Y's 7.65e-7 -- thirteen times, for the same kernel on
+the same code path. Cancellation in the per-atom sum is therefore *not* what
+makes that fixture worse, and the first version of this section said it was. Its
+drift improved only from 1.175 to 0.960, against OpenMM's 0.385.
+
+### Part of the 3HTB gap: the order of the minimum-image wrap
+
+`delta_periodic` differences two positions exactly in fixed point -- the reason
+positions are integers at all -- and then converts the result to f32 and wraps
+it to the nearest image. The conversion happens while the value can still be as
+large as the box diagonal, so it is rounded at the ulp of a 6.58 nm number,
+4.8e-7 nm, and the wrap that follows cannot recover what the conversion dropped.
+
+Measured on the host in f64, over sampled pairs from each fixture
+(`test/pair-vector.test.ts`):
+
+| | box | convert then wrap (the kernel) | wrap then convert |
+| --- | --- | --- | --- |
+| 1L2Y | 3.08 nm | worst 1.29e-7 nm, rms 2.98e-8 | worst 5.94e-8 nm |
+| 3HTB | 6.58 nm | worst 3.45e-7 nm, rms 8.76e-8 | worst 1.19e-7 nm |
+
+So the ordering costs a factor of 2 to 3, and 3HTB's pair vectors are about 3
+times worse than 1L2Y's. That accounts for roughly 3 of the 13, and no more.
+**The rest is not explained**, and the honest version of this section says so
+rather than offering a second story. What is ruled out: the per-atom
+accumulation, which was made exact and changed nothing.
+
+Fixing the ordering means wrapping in fixed point before converting, which needs
+the box in fixed point in four kernels' uniform blocks -- converting the box to
+f32 first would reintroduce the same 4.8e-7 nm it is meant to remove, so there
+is no cheap version of this change.

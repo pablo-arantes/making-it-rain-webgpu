@@ -6,7 +6,8 @@
  * them.  Buffers come from the pool, so a step loop allocates nothing per step.
  */
 
-import { dispatch } from "./compute.js";
+import { pipelineCacheFor } from "./compute.js";
+import { submitPasses, type Pass, type PipelineCache } from "./pipeline.js";
 import { SETTLE, SHAKE } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { storageUsage } from "./usage.js";
@@ -138,6 +139,35 @@ export async function constrainOnDevice(
   trial: GPUBuffer,
   options: ConstrainOptions,
 ): Promise<void> {
+  const passes = await planConstraints(
+    pool,
+    pipelineCacheFor(pool.device),
+    tables,
+    reference,
+    trial,
+    options,
+  );
+  await submitPasses(pool.device, options.velocities === true ? "rattle" : "shake", passes);
+}
+
+/**
+ * The constraint passes, for a loop to encode every step.
+ *
+ * SETTLE for the rigid triangles and the iterative solver for the rest, in that
+ * order, which is how the reference routes them. They are disjoint, so the
+ * order between the two is immaterial; what matters is that both run, and that
+ * the triangles are not quietly left to the iterative kernel -- its tables do
+ * not contain them, so that is the same as not constraining them at all. See
+ * docs/DYNAMICS.md.
+ */
+export async function planConstraints(
+  pool: BufferPool,
+  cache: PipelineCache,
+  tables: ConstraintTables,
+  reference: GPUBuffer,
+  trial: GPUBuffer,
+  options: ConstrainOptions,
+): Promise<Pass[]> {
   const device = pool.device;
   const velocityMode = options.velocities === true;
   const need = (label: string): GPUBuffer => {
@@ -148,11 +178,7 @@ export async function constrainOnDevice(
     return buffer;
   };
 
-  // SETTLE handles the rigid triangles in both modes, analytically and with no
-  // tolerance, exactly as the reference routes them. It has to: the iterative
-  // kernel's tables hold only the *iterative* clusters, so leaving the
-  // triangles to it means leaving them unconstrained -- which cost 2.36 nm/ps
-  // on a thermostatted step before the staged diagnostic found it.
+  const passes: Pass[] = [];
   if (tables.settleCount > 0) {
     const params = pool.buffer({
       label: "constraint/settleParams",
@@ -170,25 +196,30 @@ export async function constrainOnDevice(
       { binding: 3, resource: { buffer: need("constraint/settleAtoms") } },
       { binding: 5, resource: { buffer: params } },
     ];
-    await dispatch(device, {
-      label: velocityMode ? "settle/velocities" : "settle/positions",
-      code: SETTLE,
-      entryPoint: velocityMode ? "settle_velocities" : "settle_cluster",
-      // The velocity solve needs no target distances: the bond directions come
-      // from the reference positions, and the distances are already implicit
-      // in them. Passing a binding an entry point does not reach is an error.
-      bindings: velocityMode
-        ? [...settleCommon, { binding: 6, resource: { buffer: trial } }]
-        : [
-            ...settleCommon,
-            { binding: 1, resource: { buffer: trial } },
-            { binding: 4, resource: { buffer: need("constraint/settleDistances") } },
-          ],
-      workgroups: [Math.ceil(tables.settleCount / 64)],
-    });
+    passes.push(
+      await cache.pass(
+        {
+          label: velocityMode ? "settle/velocities" : "settle/positions",
+          code: SETTLE,
+          entryPoint: velocityMode ? "settle_velocities" : "settle_cluster",
+        },
+        // The velocity solve needs no target distances: the bond directions
+        // come from the reference positions, and the distances are already
+        // implicit in them. Passing a binding an entry point does not reach is
+        // an error.
+        velocityMode
+          ? [...settleCommon, { binding: 6, resource: { buffer: trial } }]
+          : [
+              ...settleCommon,
+              { binding: 1, resource: { buffer: trial } },
+              { binding: 4, resource: { buffer: need("constraint/settleDistances") } },
+            ],
+        [Math.ceil(tables.settleCount / 64)],
+      ),
+    );
   }
 
-  if (tables.clusterCount === 0) return;
+  if (tables.clusterCount === 0) return passes;
   const shakeParams = new ArrayBuffer(16);
   new Uint32Array(shakeParams, 0, 2).set([
     tables.clusterCount,
@@ -196,7 +227,7 @@ export async function constrainOnDevice(
   ]);
   new Float32Array(shakeParams, 8, 1)[0] = options.tolerance;
   const params = pool.buffer({
-    label: "constraint/shakeParams",
+    label: `constraint/shakeParams${velocityMode ? "Velocity" : "Position"}`,
     byteLength: 16,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
@@ -212,13 +243,18 @@ export async function constrainOnDevice(
     { binding: 5, resource: { buffer: need("constraint/constraints") } },
     { binding: 6, resource: { buffer: params } },
   ];
-  await dispatch(device, {
-    label: velocityMode ? "rattle" : "shake",
-    code: SHAKE,
-    entryPoint: velocityMode ? "rattle_cluster" : "shake_cluster",
-    bindings: velocityMode
-      ? [...common, { binding: 7, resource: { buffer: trial } }]
-      : [...common, { binding: 1, resource: { buffer: trial } }],
-    workgroups: [Math.ceil(tables.clusterCount / 64)],
-  });
+  passes.push(
+    await cache.pass(
+      {
+        label: velocityMode ? "rattle" : "shake",
+        code: SHAKE,
+        entryPoint: velocityMode ? "rattle_cluster" : "shake_cluster",
+      },
+      velocityMode
+        ? [...common, { binding: 7, resource: { buffer: trial } }]
+        : [...common, { binding: 1, resource: { buffer: trial } }],
+      [Math.ceil(tables.clusterCount / 64)],
+    ),
+  );
+  return passes;
 }

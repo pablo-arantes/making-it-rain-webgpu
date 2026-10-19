@@ -27,6 +27,19 @@ fn accumulate_into(slot: u32, words: vec2<u32>) {
   atomicAdd(&force[slot * 2u + 1u], words.y);
 }
 
+/// Add an energy that is already in fixed point.
+///
+/// For a kernel that sums its own contributions exactly before contributing
+/// them, which is what the pair kernel does -- see the note on cancellation in
+/// nonbonded-pairs.wgsl.
+fn accumulate_energy_fixed(words: vec2<u32>) {
+  let previous = atomicAdd(&energy[0], words.x);
+  if (previous + words.x < previous) {
+    atomicAdd(&energy[1], 1u);
+  }
+  atomicAdd(&energy[1], words.y);
+}
+
 fn accumulate_energy(value: f32) {
   let words = to_fixed(value);
   let previous = atomicAdd(&energy[0], words.x);

@@ -20,6 +20,7 @@ import {
 import { checksum, decodeNpy } from "../src/analysis/npy.js";
 import { validateRandom, type RandomComparison } from "../src/gpu/validate-random.js";
 import { validateCellList, type CellListComparison } from "../src/gpu/validate-cell-list.js";
+import { validateLoop, type LoopComparison } from "../src/gpu/validate-loop.js";
 
 declare global {
   interface Window {
@@ -28,6 +29,7 @@ declare global {
     __mirIntegrators?: IntegratorReport | { error: string };
     __mirRandom?: RandomComparison | { error: string };
     __mirCellList?: CellListComparison | { error: string };
+    __mirLoop?: LoopComparison | { error: string };
   }
 }
 
@@ -146,6 +148,35 @@ function renderIntegrators(report: IntegratorReport): string {
     </p>`;
 }
 
+function renderLoop(loop: LoopComparison): string {
+  return `<h2>Step loop</h2><p class="note">
+      ${loop.passesPerStep} passes a step, one submission per batch, nothing
+      allocated or read back in between. Peak pool
+      ${(loop.peakPoolBytes / (1024 * 1024)).toFixed(1)} MB.
+    </p>
+    <table>
+      <tr><th>Two runs of 25 steps differ by</th>
+          <td class="num">${loop.determinismDifference}</td></tr>
+      <tr><th>One step vs the reference, same forces</th>
+          <td class="num">${exponential(loop.onePositionVsReference)} nm,
+              ${exponential(loop.oneVelocityVsReference)} nm/ps</td></tr>
+      <tr><th>Verlet over ${loop.conservationSteps} steps
+              (${loop.conservationPicoseconds.toFixed(1)} ps)</th>
+          <td class="num">${loop.totalEnergyChange.toFixed(3)} kJ/mol total,
+              ${loop.driftPerAtomPerNs.toFixed(4)} per atom per ns</td></tr>
+      <tr><th>Potential, start and end</th>
+          <td class="num">${loop.firstReport.potentialEnergy.toFixed(2)} →
+              ${loop.lastReport.potentialEnergy.toFixed(2)} kJ/mol</td></tr>
+      <tr><th>Temperature, start and end</th>
+          <td class="num">${loop.firstReport.temperature.toFixed(1)} →
+              ${loop.lastReport.temperature.toFixed(1)} K</td></tr>
+      <tr><th>Throughput</th>
+          <td class="num">${loop.nsPerDay.toFixed(2)} ns/day at 2 fs</td></tr>
+      <tr><th></th><td><span class="badge ${loop.ok ? "ok" : "bad"}">
+          ${loop.ok ? "pass" : "fail"}</span></td></tr>
+    </table>`;
+}
+
 async function main(): Promise<void> {
   const name = new URLSearchParams(location.search).get("fixture") ?? "1L2Y";
   try {
@@ -240,6 +271,7 @@ async function main(): Promise<void> {
         `${dynamicsResponse.status}; capture it with tools/capture_constraints.py.`;
       if (body) body.innerHTML += `<h2>Integrators</h2><p class="note">${message}</p>`;
       window.__mirIntegrators = { error: message };
+      window.__mirLoop = { error: message };
     } else {
       const dynamics = (await dynamicsResponse.json()) as {
         trajectory_verlet: { steps: number };
@@ -257,6 +289,18 @@ async function main(): Promise<void> {
       );
       if (body) body.innerHTML += renderIntegrators(integrators);
       window.__mirIntegrators = integrators;
+
+      // The loop starts from the captured frame, not from state.xml: that state
+      // is un-minimised (docs/NOTEBOOK_PARITY.md), and an energy-drift number
+      // measured from a configuration with a 5.6e5 kJ/mol/nm force on it would
+      // mean nothing.
+      const components = verlet.positions.length / (dynamics.trajectory_verlet.steps + 1);
+      const loop = await validateLoop(device, { systemXml, stateXml }, {
+        positions: verlet.positions.slice(0, components),
+        velocities: verlet.velocities.slice(0, components),
+      });
+      if (body) body.innerHTML += renderLoop(loop);
+      window.__mirLoop = loop;
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -266,6 +310,7 @@ async function main(): Promise<void> {
     window.__mirIntegrators = { error: message };
     window.__mirRandom = { error: message };
     window.__mirCellList = { error: message };
+    window.__mirLoop = { error: message };
   }
 }
 

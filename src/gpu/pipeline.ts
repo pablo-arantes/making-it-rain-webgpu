@@ -29,7 +29,28 @@ export interface Pass {
   readonly pipeline: GPUComputePipeline;
   readonly bindGroup: GPUBindGroup;
   readonly workgroups: readonly [number, number?, number?];
+  /**
+   * Byte offsets for any bindings the layout marked `hasDynamicOffset`.
+   *
+   * This is how one bind group serves every step of a batch. A bind group holds
+   * a *buffer*, not its contents, so a hundred steps encoded into one
+   * submission would all read whatever the uniform happened to contain when the
+   * queue reached them -- the last value written, not each step's own. The
+   * integrator's `step` counter feeds the thermostat's generator, so that would
+   * give every step in the batch the same noise.
+   *
+   * The alternative is a bind group per step, which works and costs one per
+   * step. A dynamic offset into a ring of parameter blocks costs nothing and
+   * does not bound the batch.
+   */
+  readonly dynamicOffsets?: readonly number[];
 }
+
+/** The same pass with different dynamic offsets. */
+export const withOffsets = (pass: Pass, dynamicOffsets: readonly number[]): Pass => ({
+  ...pass,
+  dynamicOffsets,
+});
 
 export interface PipelineSpec {
   readonly label: string;
@@ -141,7 +162,11 @@ export function encodePasses(
   for (const item of passes) {
     const pass = encoder.beginComputePass({ label: item.label });
     pass.setPipeline(item.pipeline);
-    pass.setBindGroup(0, item.bindGroup);
+    if (item.dynamicOffsets === undefined) {
+      pass.setBindGroup(0, item.bindGroup);
+    } else {
+      pass.setBindGroup(0, item.bindGroup, item.dynamicOffsets);
+    }
     pass.dispatchWorkgroups(
       item.workgroups[0],
       item.workgroups[1] ?? 1,

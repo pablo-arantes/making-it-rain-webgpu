@@ -16,6 +16,7 @@
  */
 
 import { dispatch, readBuffer } from "./compute.js";
+import type { Pass, PipelineCache } from "./pipeline.js";
 import { INTEGRATE, REDUCE } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { readableStorageUsage, uniformUsage } from "./usage.js";
@@ -69,16 +70,32 @@ function layoutsFor(device: GPUDevice): {
   const made = {
     // positions, velocities, forces, trial, unconstrained, residual,
     // inverseMass, params -- in the order integrate.wgsl declares them.
-    integrate: makeLayout(device, "integrate", [
-      "storage",
-      "storage",
-      "read-only-storage",
-      "storage",
-      "storage",
-      "storage",
-      "read-only-storage",
-      "uniform",
-    ]),
+    // Binding 7 is dynamic: see `Pass.dynamicOffsets`. One ring of parameter
+    // blocks, one bind group, and a different offset per step.
+    integrate: device.createBindGroupLayout({
+      label: "integrate",
+      entries: [
+        "storage",
+        "storage",
+        "read-only-storage",
+        "storage",
+        "storage",
+        "storage",
+        "read-only-storage",
+      ]
+        .map((type, binding) => ({
+          binding,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: type as Kind },
+        }))
+        .concat([
+          {
+            binding: 7,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "uniform" as Kind, hasDynamicOffset: true } as never,
+          },
+        ]),
+    }),
     // velocities, mass, totals, params.
     reduce: makeLayout(device, "reduce", [
       "storage",
@@ -141,17 +158,19 @@ export interface IntegratorOptions {
   readonly step?: number;
 }
 
+/** WebGPU's default `minUniformBufferOffsetAlignment`, and so the ring stride. */
+export const STEP_PARAMS_STRIDE = 256;
+
 /**
- * Pack `StepParams`.
+ * Pack one `StepParams` block.
  *
  * Eight scalars, so no vec3 padding to get wrong -- the one alignment trap
  * WGSL uniforms set, and the reason this struct has none.
  */
-function stepParams(
-  pool: BufferPool,
+export function packStepParams(
   system: OpenMMSystem,
   options: IntegratorOptions,
-): GPUBuffer {
+): ArrayBuffer {
   const friction = options.friction ?? 0;
   const temperature = options.temperature ?? 0;
   const velocityScale = Math.exp(-options.timeStep * friction);
@@ -175,13 +194,45 @@ function stepParams(
     noiseScale,
     BOLTZMANN_KJ_PER_MOL_K * temperature,
   ]);
+  return bytes;
+}
+
+/**
+ * A ring of `count` parameter blocks, one per step of a batch.
+ *
+ * Only `step` differs between them, and it is what the thermostat's generator
+ * counts on: without a distinct block per step, every step encoded into one
+ * submission would draw the same deviates.
+ */
+export function writeStepParamsRing(
+  pool: BufferPool,
+  system: OpenMMSystem,
+  options: IntegratorOptions,
+  count: number,
+  firstStep: number,
+): GPUBuffer {
+  const bytes = new Uint8Array(count * STEP_PARAMS_STRIDE);
+  for (let i = 0; i < count; i++) {
+    bytes.set(
+      new Uint8Array(packStepParams(system, { ...options, step: firstStep + i })),
+      i * STEP_PARAMS_STRIDE,
+    );
+  }
   const buffer = pool.buffer({
-    label: "integrate/params",
-    byteLength: 32,
+    label: "integrate/paramsRing",
+    byteLength: bytes.byteLength,
     usage: uniformUsage(),
   });
-  pool.device.queue.writeBuffer(buffer, 0, new Uint8Array(bytes));
+  pool.device.queue.writeBuffer(buffer, 0, bytes);
   return buffer;
+}
+
+function stepParams(
+  pool: BufferPool,
+  system: OpenMMSystem,
+  options: IntegratorOptions,
+): GPUBuffer {
+  return writeStepParamsRing(pool, system, options, 1, options.step ?? 0);
 }
 
 function integratorBindings(
@@ -203,8 +254,36 @@ function integratorBindings(
     { binding: 4, resource: { buffer: buffers.unconstrained } },
     { binding: 5, resource: { buffer: buffers.residual } },
     { binding: 6, resource: { buffer: inverseMass } },
-    { binding: 7, resource: { buffer: params } },
+    // The bound range is one block, not the whole ring: a dynamic offset
+    // selects which block, and the size here is what the shader sees.
+    { binding: 7, resource: { buffer: params, offset: 0, size: 32 } },
   ];
+}
+
+/**
+ * One integrator phase as a pass, for a loop to encode with a per-step offset.
+ *
+ * `params` is the ring from `writeStepParamsRing`; the returned pass carries
+ * offset zero and the loop replaces it with `withOffsets`.
+ */
+export function planPhase(
+  cache: PipelineCache,
+  entryPoint: string,
+  buffers: IntegratorBuffers,
+  pool: BufferPool,
+  system: OpenMMSystem,
+  params: GPUBuffer,
+): Promise<Pass> {
+  return cache.pass(
+    {
+      label: `integrate/${entryPoint}`,
+      code: INTEGRATE,
+      entryPoint,
+      bindGroupLayout: layoutsFor(pool.device).integrate,
+    },
+    integratorBindings(buffers, pool, params),
+    [Math.ceil(system.particleCount / 64)],
+  );
 }
 
 /**
@@ -240,6 +319,7 @@ const phase = async (
     entryPoint,
     bindings,
     bindGroupLayout: layoutsFor(pool.device).integrate,
+    dynamicOffsets: [0],
     workgroups: [Math.ceil(particleCount / 64)],
   });
 

@@ -114,6 +114,8 @@ export async function dispatch(
      * then a binding an entry point happens not to use is allowed to be there.
      */
     readonly bindGroupLayout?: GPUBindGroupLayout;
+    /** Offsets for bindings the layout marked `hasDynamicOffset`. */
+    readonly dynamicOffsets?: readonly number[];
   },
 ): Promise<void> {
   const pass = await pipelineCacheFor(device).pass(
@@ -128,5 +130,9 @@ export async function dispatch(
     options.bindings,
     options.workgroups,
   );
-  await submitPasses(device, options.label, [pass]);
+  await submitPasses(device, options.label, [
+    options.dynamicOffsets === undefined
+      ? pass
+      : { ...pass, dynamicOffsets: options.dynamicOffsets },
+  ]);
 }

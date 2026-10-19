@@ -21,8 +21,8 @@ for (const name of ["1L2Y", "3HTB"]) {
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
     await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirIntegrators !== undefined, null, {
-      timeout: 600_000,
+    await page.waitForFunction(() => window.__mirLoop !== undefined, null, {
+      timeout: 900_000,
     });
     const report = await page.evaluate(() => window.__mirValidation);
     if (report !== undefined && "error" in report) throw new Error(report.error);
@@ -91,6 +91,15 @@ for (const name of ["1L2Y", "3HTB"]) {
     expect(JSON.stringify(integrators!.reductions, null, 1)).toContain('"ok": true');
     expect(integrators!.ok).toBe(true);
 
+    const loop = await page.evaluate(() => window.__mirLoop);
+    if (loop !== undefined && "error" in loop) throw new Error(loop.error);
+    // Exactly zero: two runs of the same input differing at all is a race, not
+    // a precision question.
+    expect(loop!.determinismDifference).toBe(0);
+    expect(loop!.onePositionVsReference).toBeLessThan(loop!.thresholds.onePosition);
+    expect(loop!.driftPerAtomPerNs).toBeLessThan(loop!.thresholds.driftPerAtomPerNs);
+    expect(loop!.ok).toBe(true);
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -140,7 +149,16 @@ for (const name of ["1L2Y", "3HTB"]) {
           .join(" ")}` +
         `\n  reductions             COM ${integrators!.reductions.comVelocityError.toExponential(2)} nm/ps` +
         `  kinetic ${integrators!.reductions.kineticEnergy.toFixed(2)} kJ/mol` +
-        `  rel ${integrators!.reductions.kineticEnergyRelativeError.toExponential(2)}`,
+        `  rel ${integrators!.reductions.kineticEnergyRelativeError.toExponential(2)}` +
+        `\n  loop                   ${loop!.passesPerStep} passes/step` +
+        `  determinism ${loop!.determinismDifference}` +
+        `  one step vs ref ${loop!.onePositionVsReference.toExponential(2)} nm` +
+        `\n  conservation           ${loop!.conservationSteps} steps` +
+        ` (${loop!.conservationPicoseconds.toFixed(1)} ps)` +
+        `  drift ${loop!.driftPerAtomPerNs.toFixed(4)} kJ/mol/atom/ns` +
+        `  ${loop!.firstReport.temperature.toFixed(1)}→${loop!.lastReport.temperature.toFixed(1)} K` +
+        `\n  throughput             ${loop!.nsPerDay.toFixed(2)} ns/day at 2 fs` +
+        `  peak pool ${(loop!.peakPoolBytes / (1024 * 1024)).toFixed(1)} MB`,
     );
   });
 }

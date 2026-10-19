@@ -81,10 +81,25 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: the **step loop** on resident buffers with cached
-pipelines, the **barostat**, and the **minimiser**. The cell list no longer
-blocks the loop -- it is built on the device, so a step needs no position
-readback. After those, Phase 1's
+Phase 1 steps still to do: the **barostat** (`MonteCarloBarostat`, isotropic,
+frequency 25, molecule-wise scaling) and the **minimiser** (L-BFGS). After
+those, Phase 1 is complete and Phase 2 -- upload a system and run it -- is a
+user interface over what exists.
+
+The step loop runs. On an M3 Pro through Chrome 155, from the captured
+equilibrated frame, velocity Verlet at 2 fs with the cell list rebuilt every
+step:
+
+| | passes/step | two runs differ by | one step vs reference | drift | ns/day | peak pool |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1L2Y, 2,373 atoms | 28 | **0** | 8.08e-8 nm | 0.043 | 52.6 | 1.0 MB |
+| 3HTB, 26,749 atoms | 40 | **0** | 9.30e-8 nm | 0.960 | 16.5 | 9.9 MB |
+
+Drift is kJ/mol per atom per ns, from a least-squares slope. The number to read
+it against is OpenMM's own, from the same configuration and integrator on its
+CPU platform: **0.374** and **0.385** (`tools/measure_drift.py`). 1L2Y is an
+order of magnitude better than that; 3HTB is 2.5 times worse, and why is open --
+see below. After those, Phase 1's
 gates: NVE drift at 2 fs, and a measured ns/day.
 
 A whole step now runs on the GPU -- forces, constraints, both integrators, the
@@ -105,6 +120,18 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### 🟡 3HTB's direct-space force error is 13x 1L2Y's, and that is still open
+1.13e-5 relative RMS against 7.65e-7, for the same kernel. One explanation has
+been offered and **disproved**: cancellation in the per-atom f32 sum, which was
+made exact in fixed point and left the number unchanged (it did improve 1L2Y's
+drift ninefold, by removing the same error from the reported *energy*). One
+partial cause is measured: `delta_periodic` converts a pair difference to f32
+before the minimum-image wrap, which costs 2 to 3 times the accuracy on a
+6.58 nm box and accounts for about 3 of the 13 (`test/pair-vector.test.ts`).
+The remainder is not explained. Fixing the ordering needs the box in fixed point
+in four kernels' uniforms; there is no cheap version. docs/NONBONDED.md has both
+measurements.
 
 ### 🟡 One unexplained run, and the instrument that would name it next time
 A single `test:browser` run had 3HTB's LFMiddle step 0.0167 nm from OpenMM --
