@@ -81,10 +81,29 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: the **barostat** (`MonteCarloBarostat`, isotropic,
-frequency 25, molecule-wise scaling) and the **minimiser** (L-BFGS). After
-those, Phase 1 is complete and Phase 2 -- upload a system and run it -- is a
-user interface over what exists.
+Phase 1 steps still to do: **restraints** (`CustomExternalForce` with
+`k*periodicdistance(x,y,z,x0,y0,z0)^2`, for the equilibration stage) and the
+**barostat** (`MonteCarloBarostat`, isotropic, frequency 25, molecule-wise
+scaling). The barostat makes the box dynamic, and the open item on
+`delta_periodic` below needs the box in fixed point in the same four kernels'
+uniforms, so those two are one job rather than two.
+
+After those, Phase 1 is complete and Phase 2 -- upload a system and run it -- is
+a user interface over what exists.
+
+The minimiser is done. L-BFGS on the host with the forces on the device, which
+is OpenMM's own architecture, and OpenMM's objective exactly: constraint springs
+at `100/max(1e-4, tol)` growing tenfold, then an exact projection. Against
+OpenMM at matched iteration counts (docs/MINIMISER.md):
+
+| iterations | 1 | 2 | 5 |
+| --- | --- | --- | --- |
+| 1L2Y | 9.1e-5 | 3.5e-5 | 4.8e-5 |
+| 3HTB | 8.5e-6 | 2.7e-5 | 4.3e-4 |
+
+Two hundred iterations takes 1L2Y from -21,532 to **-33,871** kJ/mol and 3HTB
+from -204,407 to **-410,648**, with the constraints holding to 4.3e-8 and
+6.4e-8 -- from states that violate them by 25%.
 
 The step loop runs. On an M3 Pro through Chrome 155, from the captured
 equilibrated frame, velocity Verlet at 2 fs with the cell list rebuilt every
@@ -121,6 +140,16 @@ power-of-two sizes are the obvious next step, and the differential test in
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
 
+### 🔴 OpenMM's minimiser does not reach its own tolerance
+Its documented default is 10 kJ/mol/nm on the RMS force; on 1L2Y it stops at
+1080, because the outer loop ignores libLBFGS's return code and breaks as soon
+as the constraints are satisfied. A stalled line search therefore ends the
+minimisation silently. The energy still falls by 16,221 kJ/mol. Anyone writing
+a convergence assertion against the documented number will write a failing test.
+docs/MINIMISER.md has that and two other behaviours worth knowing -- including
+that OpenMM *discards the minimisation and returns the starting coordinates* if
+stiffening the springs stops helping.
+
 ### 🟡 3HTB's direct-space force error is 13x 1L2Y's, and that is still open
 1.13e-5 relative RMS against 7.65e-7, for the same kernel. One explanation has
 been offered and **disproved**: cancellation in the per-atom f32 sum, which was
@@ -130,8 +159,10 @@ partial cause is measured: `delta_periodic` converts a pair difference to f32
 before the minimum-image wrap, which costs 2 to 3 times the accuracy on a
 6.58 nm box and accounts for about 3 of the 13 (`test/pair-vector.test.ts`).
 The remainder is not explained. Fixing the ordering needs the box in fixed point
-in four kernels' uniforms; there is no cheap version. docs/NONBONDED.md has both
-measurements.
+in four kernels' uniforms; there is no cheap version, which is why it is bundled
+with the barostat, where the box has to become dynamic state anyway. It also
+shows up in the minimiser: 3HTB's search diverges from OpenMM's about nine times
+faster than 1L2Y's. docs/NONBONDED.md has both measurements.
 
 ### 🟡 One unexplained run, and the instrument that would name it next time
 A single `test:browser` run had 3HTB's LFMiddle step 0.0167 nm from OpenMM --

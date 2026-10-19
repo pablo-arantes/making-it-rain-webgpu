@@ -21,8 +21,8 @@ for (const name of ["1L2Y", "3HTB"]) {
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
     await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirLoop !== undefined, null, {
-      timeout: 900_000,
+    await page.waitForFunction(() => window.__mirMinimise !== undefined, null, {
+      timeout: 1_200_000,
     });
     const report = await page.evaluate(() => window.__mirValidation);
     if (report !== undefined && "error" in report) throw new Error(report.error);
@@ -39,7 +39,9 @@ for (const name of ["1L2Y", "3HTB"]) {
     const failures = checked.comparisons.filter((c) => !c.ok);
     expect(JSON.stringify(failures, null, 1)).toBe("[]");
     expect(checked.ok).toBe(true);
-    expect(consoleErrors).toEqual([]);
+    // A missing optional capture answers 404, which the browser logs; that is
+    // not a page error.
+    expect(consoleErrors.filter((m) => !m.includes("404"))).toEqual([]);
 
     const constraints = await page.evaluate(() => window.__mirConstraints);
     if (constraints !== undefined && "error" in constraints) {
@@ -100,6 +102,14 @@ for (const name of ["1L2Y", "3HTB"]) {
     expect(loop!.driftPerAtomPerNs).toBeLessThan(loop!.thresholds.driftPerAtomPerNs);
     expect(loop!.ok).toBe(true);
 
+    const minimised = await page.evaluate(() => window.__mirMinimise);
+    if (minimised !== undefined && "error" in minimised) {
+      throw new Error(minimised.error);
+    }
+
+    const badFrames = [...minimised!.frames, minimised!.converged].filter((m) => !m.ok);
+    expect(JSON.stringify(badFrames, null, 1)).toBe("[]");
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -158,7 +168,20 @@ for (const name of ["1L2Y", "3HTB"]) {
         `  drift ${loop!.driftPerAtomPerNs.toFixed(4)} kJ/mol/atom/ns` +
         `  ${loop!.firstReport.temperature.toFixed(1)}→${loop!.lastReport.temperature.toFixed(1)} K` +
         `\n  throughput             ${loop!.nsPerDay.toFixed(2)} ns/day at 2 fs` +
-        `  peak pool ${(loop!.peakPoolBytes / (1024 * 1024)).toFixed(1)} MB`,
+        `  peak pool ${(loop!.peakPoolBytes / (1024 * 1024)).toFixed(1)} MB` +
+        [...minimised!.frames, minimised!.converged]
+          .map(
+            (m) =>
+              `\n  minimise ${m.iterations.toString().padStart(3)} iters` +
+              `  energy ${m.energy.toFixed(2).padStart(13)}` +
+              (m.openmmEnergy === null
+                ? "  (no OpenMM capture)"
+                : `  vs OpenMM ${m.energyRelativeError!.toExponential(2)}`) +
+              `  |f| rms ${m.forceRms.toFixed(1).padStart(8)}` +
+              `  constraint ${m.maxConstraintError.toExponential(2)}` +
+              `  ${m.rounds}r/${m.evaluations}e ${m.status}`,
+          )
+          .join(""),
     );
   });
 }

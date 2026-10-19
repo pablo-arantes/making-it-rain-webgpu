@@ -39,7 +39,15 @@ def main() -> None:
         type=int,
         nargs="+",
         default=[1, 2, 5, 20, 100],
-        help="maxIterations values to capture, plus the converged run",
+        help="maxIterations values to capture",
+    )
+    parser.add_argument(
+        "--converged",
+        action="store_true",
+        help=(
+            "also capture an unlimited run. Thousands of iterations on a "
+            "solvated system, so it is opt-in"
+        ),
     )
     args = parser.parse_args()
 
@@ -140,7 +148,7 @@ def main() -> None:
     report["start"] = start
     np.save(args.fixture / "minimise-start-positions.npy", start_positions.ravel())
 
-    for max_iterations in [*args.iterations, 0]:
+    for max_iterations in [*args.iterations, *([0] if args.converged else [])]:
         context = fresh()
         openmm.LocalEnergyMinimizer.minimize(
             context, args.tolerance, max_iterations

@@ -21,6 +21,11 @@ import { checksum, decodeNpy } from "../src/analysis/npy.js";
 import { validateRandom, type RandomComparison } from "../src/gpu/validate-random.js";
 import { validateCellList, type CellListComparison } from "../src/gpu/validate-cell-list.js";
 import { validateLoop, type LoopComparison } from "../src/gpu/validate-loop.js";
+import {
+  validateMinimise,
+  type CapturedMinimisation,
+  type MinimiseComparison,
+} from "../src/gpu/validate-minimise.js";
 
 declare global {
   interface Window {
@@ -30,6 +35,7 @@ declare global {
     __mirRandom?: RandomComparison | { error: string };
     __mirCellList?: CellListComparison | { error: string };
     __mirLoop?: LoopComparison | { error: string };
+    __mirMinimise?: MinimiseComparison | { error: string };
   }
 }
 
@@ -146,6 +152,38 @@ function renderIntegrators(report: IntegratorReport): string {
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
     </p>`;
+}
+
+function renderMinimise(m: MinimiseComparison): string {
+  const row = (frame: MinimiseComparison["converged"]): string => `<tr>
+      <td class="num">${frame.iterations}</td>
+      <td class="num">${frame.energy.toFixed(4)}</td>
+      <td class="num">${frame.openmmEnergy === null ? "—" : frame.openmmEnergy.toFixed(4)}</td>
+      <td class="num">${
+        frame.energyRelativeError === null
+          ? "—"
+          : exponential(frame.energyRelativeError)
+      }</td>
+      <td class="num">${frame.forceRms.toFixed(2)}</td>
+      <td class="num">${frame.openmmForceRms === null ? "—" : frame.openmmForceRms.toFixed(2)}</td>
+      <td class="num">${exponential(frame.maxConstraintError)}</td>
+      <td class="num">${frame.rounds}/${frame.evaluations}</td>
+      <td><span class="badge ${frame.ok ? "ok" : "bad"}">${frame.ok ? "pass" : "fail"}</span></td>
+    </tr>`;
+  return `<h2>Minimisation</h2><p class="note">
+      L-BFGS on the host with the forces on the device, which is how OpenMM's own
+      minimiser works. Energies compared at <em>matched iteration counts</em>: a
+      minimum is not unique, so only a shared path compares tightly. The
+      fixture's own state violates its constraints by
+      ${(m.startConstraintError * 100).toFixed(1)}% before anything runs.
+    </p>
+    <table>
+      <tr><th>Iterations</th><th>Energy (kJ/mol)</th><th>OpenMM</th>
+          <th>Relative</th><th>|f| rms</th><th>OpenMM</th>
+          <th>Constraint error</th><th>Rounds/evals</th><th></th></tr>
+      ${m.frames.map(row).join("")}
+      ${row(m.converged)}
+    </table>`;
 }
 
 function renderLoop(loop: LoopComparison): string {
@@ -272,6 +310,7 @@ async function main(): Promise<void> {
       if (body) body.innerHTML += `<h2>Integrators</h2><p class="note">${message}</p>`;
       window.__mirIntegrators = { error: message };
       window.__mirLoop = { error: message };
+      window.__mirMinimise = { error: message };
     } else {
       const dynamics = (await dynamicsResponse.json()) as {
         trajectory_verlet: { steps: number };
@@ -301,6 +340,21 @@ async function main(): Promise<void> {
       });
       if (body) body.innerHTML += renderLoop(loop);
       window.__mirLoop = loop;
+
+      // The minimiser starts from the fixture's own state.xml, which is what a
+      // freshly built system looks like -- 25% constraint violation included.
+      const minimiseResponse = await fetch(`/fixtures/${name}/minimise-facts.json`);
+      const capturedMinimisation = minimiseResponse.ok
+        ? ((await minimiseResponse.json()) as CapturedMinimisation)
+        : null;
+      const minimised = await validateMinimise(
+        device,
+        { systemXml, stateXml },
+        capturedMinimisation,
+        name,
+      );
+      if (body) body.innerHTML += renderMinimise(minimised);
+      window.__mirMinimise = minimised;
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -311,6 +365,7 @@ async function main(): Promise<void> {
     window.__mirRandom = { error: message };
     window.__mirCellList = { error: message };
     window.__mirLoop = { error: message };
+    window.__mirMinimise = { error: message };
   }
 }
 

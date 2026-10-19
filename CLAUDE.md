@@ -32,7 +32,7 @@ The Python oracle is separate and is described in `tools/README.md`.
 | Unit + reference | `npm test` | nothing |
 | Slow reference | `npm run test:slow` | nothing, and a few minutes |
 | GPU, through Dawn | `npm run test:gpu` | a loadable `webgpu` binary — **not this machine**, see below |
-| GPU, through Chrome | `npm run test:browser` | Google Chrome installed |
+| GPU, through Chrome | `npm run test:browser` | Google Chrome installed, and ~6 minutes |
 | OpenMM oracle | `npm run test:oracle` | `vendor/openmm-wasm/`, which Phase 1 builds |
 | Benchmark | `npm run bench` | Google Chrome installed |
 | Everything | `npm run check` | nothing |

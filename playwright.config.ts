@@ -14,7 +14,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
-  timeout: 180_000,
+  // The page runs the whole engine on both fixtures: every force against
+  // OpenMM, the constraints, the cell list, both integrators over eight
+  // captured frames, a 500-step conservation run, and five minimisations up to
+  // 200 iterations. That is minutes, not seconds, and a timeout set for a
+  // single-point energy check turns a slow pass into a confusing failure.
+  timeout: 900_000,
   use: {
     baseURL: "http://localhost:4173",
     channel: "chrome",

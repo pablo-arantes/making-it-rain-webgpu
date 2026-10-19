@@ -527,6 +527,66 @@ export class StepLoop {
     };
   }
 
+  /**
+   * Replace the coordinates, and clear the integrator's carried residual.
+   *
+   * The residual belongs to the trajectory that produced the coordinates it was
+   * carrying; keeping it across a jump -- a minimiser's line search, a
+   * barostat's rejected move -- would apply a correction computed for a
+   * configuration that no longer exists.
+   */
+  setPositions(positions: Float64Array): void {
+    const components = this.system.particleCount * 3;
+    if (positions.length !== components) {
+      throw new Error(
+        `expected ${components} coordinates for ${this.system.particleCount} ` +
+          `particles, got ${positions.length}`,
+      );
+    }
+    this.device.queue.writeBuffer(
+      this.buffers.positions,
+      0,
+      packPositions(positions) as unknown as BufferSource,
+    );
+    this.device.queue.writeBuffer(this.buffers.residual, 0, new Float32Array(components));
+  }
+
+  /**
+   * The energy and forces at `positions`, as a minimiser's objective wants them.
+   *
+   * This is the shape OpenMM's own minimiser uses: it sets the context's
+   * positions and asks for `State::Forces | State::Energy` on every evaluation,
+   * so driving L-BFGS from the host with the forces on the device is its
+   * architecture rather than a concession. The cell list is rebuilt each time,
+   * which it has to be -- a line search moves atoms much further than a step
+   * does.
+   *
+   * The energy includes the three terms the kernels leave to the host, so that
+   * it is the same number `report()` gives and the same one OpenMM reports.
+   */
+  async potential(
+    positions: Float64Array,
+  ): Promise<{ energy: number; forces: Float64Array }> {
+    this.setPositions(positions);
+    await this.evaluateForces();
+    const components = this.system.particleCount * 3;
+    const energyWords = new Uint32Array(
+      await readBuffer(this.device, this.accumulators.energy, 8),
+    );
+    const energy =
+      fromFixed(fromWords(energyWords[0] as number, (energyWords[1] as number) | 0)) +
+      this.offsets.dispersion +
+      this.offsets.self +
+      this.offsets.netCharge;
+    const forces = unpackFixed(
+      new Uint32Array(
+        await readBuffer(this.device, this.buffers.forces, components * 8),
+      ),
+      components,
+    );
+    return { energy, forces };
+  }
+
   /** The current coordinates, nm. */
   async positions(): Promise<Float64Array> {
     const components = this.system.particleCount * 3;
