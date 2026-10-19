@@ -183,35 +183,59 @@ of three atoms where each atom holds exactly two constraints** and gives those
 to `ReferenceSETTLEAlgorithm`; everything else goes to CCMA.
 
 That triangle is rigid water, and it is **88 to 90% of all clusters** — 688 of
-784 in 1L2Y, 8021 of 8861 in 3HTB.
+784 in 1L2Y, 8021 of 8861 in 3HTB. The central atom is the one whose two bonds
+are equal, and 🔴 **OpenMM compares those two lengths after rounding them to
+`float`**, so bonds differing in the ninth decimal are equal to it and must be
+here too, or a cluster lands in a different solver.
 
 SETTLE is analytic: it computes the rigid-body placement that satisfies all
-three distances exactly. SHAKE is iterative and moves atoms along the reference
-bond directions. Both end up on the constraint manifold, and **they end up at
-different points on it.** Measured over one 2 fs step of 1L2Y, our SHAKE lands
-1.75e-5 nm from OpenMM's positions, and the worst-offending atoms are all
-waters.
+three distances exactly, so its answer is good to machine precision rather than
+to a tolerance. With it in place our water clusters come out at **3.085e-8**
+relative constraint error — the same figure OpenMM's own frames show, far inside
+its stated 1e-6 — against 9.9e-7 for SHAKE. That is what an analytic solution
+looks like, and it is how to tell the two apart.
 
-The diagnosis was that tightening our own tolerance does nothing:
+So `docs/PLAN.md`'s "SETTLE for water, CCMA-style for bonds to H" is a parity
+requirement, not the performance note it reads as.
 
-| our tolerance | iterations | distance from OpenMM's next frame |
+### 🔴 And a step is not just the integrator
+
+`CMMotionRemover` is in every `System` these force fields build, with
+`frequency = 1`, so it runs **every step**. It is not a force: OpenMM applies it
+from `ContextImpl::updateContextState`, which the integrator calls at the start
+of a step, *before* the forces are computed, and it subtracts the mass-weighted
+mean velocity from every particle.
+
+Leaving it out hides well. It shifts every atom by the same amount, so every
+constrained distance stays satisfied and every constraint test still passes —
+the trajectory just slides, by `|v_com| · dt`, which was 2.2e-5 nm on 1L2Y.
+
+### What it took to reproduce a step, and a lesson about residuals
+
+One 2 fs step, worst position difference from OpenMM:
+
+| | 1L2Y | 3HTB |
 | --- | ---: | ---: |
-| 1e-6 | 40 | 1.766e-5 nm |
-| 1e-8 | 58 | 1.753e-5 nm |
-| 1e-10 | 76 | 1.753e-5 nm |
-| 1e-12 | 94 | **1.753e-5 nm** |
+| SHAKE only, no COM removal | 1.766e-5 nm | 5.3e-6 nm |
+| SETTLE + SHAKE, no COM removal | 1.753e-5 nm | 5.2e-6 nm |
+| **SETTLE + SHAKE + COM removal** | **5.7e-9 nm** | **5.7e-9 nm** |
 
-A solver stopping too early would converge towards agreement. This does not, so
-the two are solving different problems. OpenMM's own frame satisfies the
-constraints to 3.1e-8 relative — far inside its 1e-6 tolerance — which is what
-an analytic solution looks like.
+5.7e-9 nm is f64 round-off through the constraint solve. Both omissions were
+real, and *either one alone leaves a residual that looks like the other's*.
 
-So `docs/PLAN.md`'s "SETTLE for water, CCMA-style for bonds to H" is a
-**parity requirement**, not the performance note it reads as. Until SETTLE is
-implemented, the step-by-step trajectory gate is held at 5e-5 nm instead of the
-1e-7 the tolerance would allow.
+🔴 **The residual got attributed to the wrong cause twice.** First to the
+integrator's discretisation, then to SETTLE alone. What finally settled it was
+asking whether OpenMM's correction could even be *produced* by the solver's
+ansatz: SHAKE can only move atoms along mass-weighted reference bond
+directions, and projecting OpenMM's correction onto that span left 1.892e-5 nm
+outside it. A span that cannot represent a uniform translation, and a leftover
+the size of `|v_com| · dt`, named the centre-of-mass remover without guessing.
 
-### The clusters are small, and that is measured
+The lesson is cheap to state and was not cheap to learn: when a discrepancy
+will not move as you tighten the thing you believe causes it, stop tightening
+and ask what *kind* of difference it is.
+
+### The clusters are small, and that is measured### The clusters are small, and that is measured
 
 Connected components of atoms joined by a constraint, with
 `constraints=HBonds` and `rigidWater=True`:

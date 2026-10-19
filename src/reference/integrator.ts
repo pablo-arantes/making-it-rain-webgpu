@@ -22,11 +22,15 @@
 import { BOLTZMANN_KJ_PER_MOL_K } from "../engine/units.js";
 import type { OpenMMSystem } from "../engine/system.js";
 import {
-  applyPositionConstraints,
-  applyVelocityConstraints,
+  constrainPositions,
+  constrainVelocities,
   inverseMasses,
   type ConstraintResult,
 } from "./constraints.js";
+import {
+  splitConstraints,
+  type ConstraintSplit,
+} from "../engine/constraint-clusters.js";
 
 export interface IntegratorState {
   /** nm, xyz interleaved. Modified in place. */
@@ -57,6 +61,7 @@ export function verletStep(
   forces: Float64Array,
   timeStep: number,
   constraintTolerance: number,
+  split: ConstraintSplit = splitConstraints(system),
 ): StepResult {
   const inverse = inverseMasses(system);
   const previous = Float64Array.from(state.positions);
@@ -76,11 +81,12 @@ export function verletStep(
       trial[at] = (previous[at] as number) + velocity * timeStep;
     }
   }
-  const positionConstraints = applyPositionConstraints(
+  const positionConstraints = constrainPositions(
     system,
     previous,
     trial,
     constraintTolerance,
+    split,
   );
   const scale = 1 / timeStep;
   for (let i = 0; i < system.particleCount; i++) {
@@ -109,6 +115,8 @@ export interface LangevinOptions {
    * is what makes a zero-friction run deterministic and usable as an oracle.
    */
   readonly normals?: Normals;
+  /** Precomputed constraint classification, to avoid redoing it every step. */
+  readonly split?: ConstraintSplit;
 }
 
 /**
@@ -126,6 +134,7 @@ export function langevinMiddleStep(
   options: LangevinOptions,
 ): StepResult {
   const { timeStep, temperature, friction, constraintTolerance } = options;
+  const split = options.split ?? splitConstraints(system);
   const inverse = inverseMasses(system);
   const halfStep = 0.5 * timeStep;
   const kT = BOLTZMANN_KJ_PER_MOL_K * temperature;
@@ -151,11 +160,12 @@ export function langevinMiddleStep(
         timeStep * inverseMass * (forces[at] as number);
     }
   }
-  const velocityConstraints = applyVelocityConstraints(
+  const velocityConstraints = constrainVelocities(
     system,
     state.positions,
     state.velocities,
     constraintTolerance,
+    split,
   );
 
   // Half drift, thermostat, half drift. `unconstrained` is OpenMM's `oldx`:
@@ -176,11 +186,12 @@ export function langevinMiddleStep(
     }
   }
   const unconstrained = Float64Array.from(trial);
-  const positionConstraints = applyPositionConstraints(
+  const positionConstraints = constrainPositions(
     system,
     state.positions,
     trial,
     constraintTolerance,
+    split,
   );
 
   // What the projection moved, over dt, is the velocity it implies.

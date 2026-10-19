@@ -5,6 +5,12 @@ import {
   verletStep,
   type IntegratorState,
 } from "../src/reference/integrator.js";
+import {
+  centreOfMassRemover,
+  removeCentreOfMassMotion,
+  removesOnStep,
+} from "../src/reference/com-motion.js";
+import { splitConstraints } from "../src/engine/constraint-clusters.js";
 import { readNpy } from "./npy.js";
 import { fixture, FIXTURE_NAMES } from "./fixtures.js";
 
@@ -20,9 +26,11 @@ import { fixture, FIXTURE_NAMES } from "./fixtures.js";
  * has none, and `LangevinIntegrator` with friction 0 has `noisescale = 0` -- so
  * both are deterministic without reproducing OpenMM's random stream.
  *
- * What limits the agreement is the constraint solver, not the integrator: we
- * use SHAKE where OpenMM uses SETTLE for rigid water. See the note on the
- * position bound below.
+ * A step is not just the integrator. OpenMM calls `updateContextState` first,
+ * which is where `CMMotionRemover` subtracts the centre-of-mass velocity -- and
+ * our fixtures carry one with `frequency = 1`, so it runs every step. Leaving
+ * it out leaves the trajectory 1.75e-5 nm out while every constraint still
+ * checks out, because it shifts every atom equally.
  */
 for (const name of FIXTURE_NAMES) {
   const f = fixture(name);
@@ -41,6 +49,9 @@ for (const name of FIXTURE_NAMES) {
         readFileSync(`fixtures/${name}/dynamics-facts.json`, "utf8"),
       ) as { trajectory_verlet: { steps: number } }
     ).trajectory_verlet.steps;
+    // Classified once: the split depends on the system, never on coordinates.
+    const split = splitConstraints(f!.system);
+    const remover = centreOfMassRemover(f!.system);
 
     /** The worst per-component difference between two arrays. */
     const worst = (a: Float64Array, b: Float64Array): number => {
@@ -64,12 +75,18 @@ for (const name of FIXTURE_NAMES) {
           positions: Float64Array.from(frame(positions, step)),
           velocities: Float64Array.from(frame(velocities, step)),
         };
+        // updateContextState, before the forces: this is where the
+        // centre-of-mass remover acts.
+        if (remover !== undefined && removesOnStep(remover.frequency, step)) {
+          removeCentreOfMassMotion(f!.system, state.velocities);
+        }
         const result = verletStep(
           f!.system,
           state,
           frame(forces, step),
           TIME_STEP,
           TOLERANCE,
+          split,
         );
         expect(result.positionConstraints.converged).toBe(true);
         worstPosition = Math.max(
@@ -81,17 +98,12 @@ for (const name of FIXTURE_NAMES) {
           worst(state.velocities, frame(velocities, step + 1)),
         );
       }
-      // 🔴 The floor is SHAKE against SETTLE, not the tolerance. OpenMM solves
-      // every closed triangle of three atoms each holding two constraints --
-      // rigid water, which is 88% of the clusters here -- with SETTLE, an
-      // analytic rigid-body solution, and only the rest with CCMA. SETTLE and
-      // SHAKE both satisfy the constraints and land on *different points* of
-      // the constraint manifold, about 1.8e-5 nm apart per step. Tightening our
-      // tolerance from 1e-6 to 1e-12 does not move it at all, which is how that
-      // was diagnosed. Implementing SETTLE is what tightens this; see
-      // docs/DYNAMICS.md and HANDOFF.md.
-      expect(worstPosition).toBeLessThan(5e-5);
-      expect(worstVelocity).toBeLessThan(5e-2);
+      // Measured at 5.7e-9 nm on both fixtures, which is f64 round-off through
+      // the constraint solve. Getting here needed SETTLE for the rigid-water
+      // triangles *and* the centre-of-mass remover; each alone leaves a
+      // residual that looks like the other's. See docs/DYNAMICS.md.
+      expect(worstPosition).toBeLessThan(1e-7);
+      expect(worstVelocity).toBeLessThan(1e-4);
     });
 
     it("reproduces OpenMM's LFMiddle step from each frame", () => {
@@ -105,11 +117,15 @@ for (const name of FIXTURE_NAMES) {
           positions: Float64Array.from(frame(positions, step)),
           velocities: Float64Array.from(frame(velocities, step)),
         };
+        if (remover !== undefined && removesOnStep(remover.frequency, step)) {
+          removeCentreOfMassMotion(f!.system, state.velocities);
+        }
         const result = langevinMiddleStep(f!.system, state, frame(forces, step), {
           timeStep: TIME_STEP,
           temperature: 300,
           friction: 0,
           constraintTolerance: TOLERANCE,
+          split,
         });
         expect(result.positionConstraints.converged).toBe(true);
         expect(result.velocityConstraints?.converged).toBe(true);
@@ -122,9 +138,9 @@ for (const name of FIXTURE_NAMES) {
           worst(state.velocities, frame(velocities, step + 1)),
         );
       }
-      // Same floor as the Verlet case, and the same cause.
-      expect(worstPosition).toBeLessThan(5e-5);
-      expect(worstVelocity).toBeLessThan(5e-2);
+      // Same floor as the Verlet case.
+      expect(worstPosition).toBeLessThan(1e-7);
+      expect(worstVelocity).toBeLessThan(1e-4);
     });
 
     it("refuses to invent randomness when the thermostat is on", () => {

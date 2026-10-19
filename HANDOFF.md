@@ -46,22 +46,26 @@ Done in Phase 1 so far:
 - **Two deterministic trajectory oracles**, velocity Verlet and LFMiddle at
   zero friction, with `tools/capture_constraints.py`, carrying positions,
   velocities and forces per frame.
-- **Both integrators, reference only**: velocity Verlet and LFMiddle,
-  transcribed from OpenMM. Tested step by step against both oracles, driven by
-  **OpenMM's own recorded forces** so a force-field error cannot leak into an
-  integrator test. Agreement is 1.8e-5 nm a step, limited by SHAKE against
-  SETTLE rather than by the integrators (below).
+- **Both integrators, SETTLE, SHAKE/RATTLE and centre-of-mass removal**, all in
+  the reference and transcribed from OpenMM. A step reproduces OpenMM's to
+  **5.7e-9 nm** on both fixtures -- f64 round-off through the constraint solve --
+  tested step by step against both oracles and driven by **OpenMM's own recorded
+  forces**, so a force-field error cannot leak into an integrator test.
 - **Both kinetic-energy conventions** (`src/reference/kinetic.ts`), reproducing
   what OpenMM reports to 1e-12 unshifted and 1e-5 shifted. This is a parity
   requirement for the notebook's log files, not a detail.
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: **SETTLE** (below), the **constraint and integrator
-kernels** (the references are done, and the measured cluster shapes -- at most 4
-atoms and 3 constraints -- mean one thread can hold a whole cluster), the
-**barostat**, and the **minimiser**. After those, Phase 1's gates: NVE drift at
-2 fs, and a measured ns/day.
+Phase 1 steps still to do: the **constraint and integrator kernels** (the
+references are done, and the measured cluster shapes -- at most 4 atoms and 3
+constraints -- mean one thread can hold a whole cluster), the **step loop** with
+resident buffers, the **barostat**, and the **minimiser**. After those, Phase
+1's gates: NVE drift at 2 fs, and a measured ns/day.
+
+Everything the physics needs now exists in `src/reference/`, verified against
+OpenMM: a step reproduces its trajectory to 5.7e-9 nm. What remains is moving
+it to the GPU and wrapping a loop around it.
 
 ## Open, in the order they are worth doing
 
@@ -73,20 +77,6 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
-
-### SETTLE, and it is next
-OpenMM solves every closed three-atom constraint triangle -- rigid water, 88 to
-90% of all clusters here -- with SETTLE, analytically, and only the rest with
-CCMA. SETTLE and SHAKE both satisfy the constraints and land on **different
-points** of the constraint manifold, 1.8e-5 nm apart per step. Tightening our
-tolerance from 1e-6 to 1e-12 moves that by nothing at all, which is how it was
-diagnosed.
-
-So `docs/PLAN.md`'s "SETTLE for water, CCMA-style for bonds to H" is a parity
-requirement rather than the performance note it reads as, and the step-by-step
-trajectory gate is held at 5e-5 nm until it is implemented instead of the 1e-7
-the tolerance would allow. Miyamoto & Kollman 1992 is the algorithm; the
-oracle for it already exists.
 
 ### The kinetic-energy convention is per integrator
 `VerletIntegrator` reports kinetic energy from velocities shifted by +dt/2 and

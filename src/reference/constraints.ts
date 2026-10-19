@@ -24,6 +24,11 @@
  */
 
 import type { OpenMMSystem } from "../engine/system.js";
+import {
+  splitConstraints,
+  type ConstraintSplit,
+} from "../engine/constraint-clusters.js";
+import { settlePositions, settleVelocities } from "./settle.js";
 
 /** OpenMM's default, and what it gives up after. */
 export const MAX_CONSTRAINT_ITERATIONS = 150;
@@ -61,25 +66,28 @@ function prepare(
   system: OpenMMSystem,
   referencePositions: Float64Array,
   inverse: Float64Array,
+  indices?: Int32Array,
 ): Prepared {
-  const count = system.constraintCount;
+  const count = indices === undefined ? system.constraintCount : indices.length;
+  const at = (k: number): number => (indices === undefined ? k : (indices[k] as number));
   const referenceVector = new Float64Array(count * 3);
   const referenceLengthSquared = new Float64Array(count);
   const reducedMass = new Float64Array(count);
-  for (let c = 0; c < count; c++) {
+  for (let k = 0; k < count; k++) {
+    const c = at(k);
     const i = (system.constraintP1[c] as number) * 3;
     const j = (system.constraintP2[c] as number) * 3;
     const x = (referencePositions[i] as number) - (referencePositions[j] as number);
     const y = (referencePositions[i + 1] as number) - (referencePositions[j + 1] as number);
     const z = (referencePositions[i + 2] as number) - (referencePositions[j + 2] as number);
-    referenceVector[c * 3] = x;
-    referenceVector[c * 3 + 1] = y;
-    referenceVector[c * 3 + 2] = z;
-    referenceLengthSquared[c] = x * x + y * y + z * z;
+    referenceVector[k * 3] = x;
+    referenceVector[k * 3 + 1] = y;
+    referenceVector[k * 3 + 2] = z;
+    referenceLengthSquared[k] = x * x + y * y + z * z;
     const sum =
       (inverse[system.constraintP1[c] as number] as number) +
       (inverse[system.constraintP2[c] as number] as number);
-    reducedMass[c] = sum === 0 ? 0 : 0.5 / sum;
+    reducedMass[k] = sum === 0 ? 0 : 0.5 / sum;
   }
   return { referenceVector, referenceLengthSquared, reducedMass };
 }
@@ -90,16 +98,19 @@ function applyDeltas(
   inverse: Float64Array,
   prepared: Prepared,
   delta: Float64Array,
+  indices?: Int32Array,
 ): void {
-  for (let c = 0; c < system.constraintCount; c++) {
-    const scale = delta[c] as number;
+  const count = indices === undefined ? system.constraintCount : indices.length;
+  for (let k = 0; k < count; k++) {
+    const c = indices === undefined ? k : (indices[k] as number);
+    const scale = delta[k] as number;
     if (scale === 0) continue;
     const p1 = system.constraintP1[c] as number;
     const p2 = system.constraintP2[c] as number;
     const invI = inverse[p1] as number;
     const invJ = inverse[p2] as number;
     for (let axis = 0; axis < 3; axis++) {
-      const dr = (prepared.referenceVector[c * 3 + axis] as number) * scale;
+      const dr = (prepared.referenceVector[k * 3 + axis] as number) * scale;
       trial[p1 * 3 + axis] = (trial[p1 * 3 + axis] as number) + dr * invI;
       trial[p2 * 3 + axis] = (trial[p2 * 3 + axis] as number) - dr * invJ;
     }
@@ -122,11 +133,13 @@ export function applyPositionConstraints(
   trialPositions: Float64Array,
   tolerance: number,
   maxIterations = MAX_CONSTRAINT_ITERATIONS,
+  subset?: Int32Array,
 ): ConstraintResult {
-  const count = system.constraintCount;
+  const indices = subset;
+  const count = indices === undefined ? system.constraintCount : indices.length;
   if (count === 0) return { iterations: 0, converged: true, worstRelativeError: 0 };
   const inverse = inverseMasses(system);
-  const prepared = prepare(system, referencePositions, inverse);
+  const prepared = prepare(system, referencePositions, inverse, indices);
   const delta = new Float64Array(count);
   const lowerTolerance = 1 - 2 * tolerance + tolerance * tolerance;
   const upperTolerance = 1 + 2 * tolerance + tolerance * tolerance;
@@ -136,7 +149,8 @@ export function applyPositionConstraints(
   while (iterations < maxIterations) {
     let converged = 0;
     worstRelativeError = 0;
-    for (let c = 0; c < count; c++) {
+    for (let k = 0; k < count; k++) {
+      const c = indices === undefined ? k : (indices[k] as number);
       const p1 = (system.constraintP1[c] as number) * 3;
       const p2 = (system.constraintP2[c] as number) * 3;
       const x = (trialPositions[p1] as number) - (trialPositions[p2] as number);
@@ -147,10 +161,10 @@ export function applyPositionConstraints(
       const targetSquared = target * target;
       const difference = targetSquared - trialLengthSquared;
       const projection =
-        x * (prepared.referenceVector[c * 3] as number) +
-        y * (prepared.referenceVector[c * 3 + 1] as number) +
-        z * (prepared.referenceVector[c * 3 + 2] as number);
-      delta[c] = projection === 0 ? 0 : ((prepared.reducedMass[c] as number) * difference) / projection;
+        x * (prepared.referenceVector[k * 3] as number) +
+        y * (prepared.referenceVector[k * 3 + 1] as number) +
+        z * (prepared.referenceVector[k * 3 + 2] as number);
+      delta[k] = projection === 0 ? 0 : ((prepared.reducedMass[k] as number) * difference) / projection;
       worstRelativeError = Math.max(
         worstRelativeError,
         Math.abs(Math.sqrt(trialLengthSquared) / target - 1),
@@ -166,7 +180,7 @@ export function applyPositionConstraints(
       return { iterations, converged: true, worstRelativeError };
     }
     iterations++;
-    applyDeltas(system, trialPositions, inverse, prepared, delta);
+    applyDeltas(system, trialPositions, inverse, prepared, delta, indices);
   }
   return { iterations, converged: false, worstRelativeError };
 }
@@ -184,11 +198,13 @@ export function applyVelocityConstraints(
   velocities: Float64Array,
   tolerance: number,
   maxIterations = MAX_CONSTRAINT_ITERATIONS,
+  subset?: Int32Array,
 ): ConstraintResult {
-  const count = system.constraintCount;
+  const indices = subset;
+  const count = indices === undefined ? system.constraintCount : indices.length;
   if (count === 0) return { iterations: 0, converged: true, worstRelativeError: 0 };
   const inverse = inverseMasses(system);
-  const prepared = prepare(system, positions, inverse);
+  const prepared = prepare(system, positions, inverse, indices);
   const delta = new Float64Array(count);
 
   let iterations = 0;
@@ -196,31 +212,80 @@ export function applyVelocityConstraints(
   while (iterations < maxIterations) {
     let converged = 0;
     worst = 0;
-    for (let c = 0; c < count; c++) {
+    for (let k = 0; k < count; k++) {
+      const c = indices === undefined ? k : (indices[k] as number);
       const p1 = (system.constraintP1[c] as number) * 3;
       const p2 = (system.constraintP2[c] as number) * 3;
       const projection =
         ((velocities[p1] as number) - (velocities[p2] as number)) *
-          (prepared.referenceVector[c * 3] as number) +
+          (prepared.referenceVector[k * 3] as number) +
         ((velocities[p1 + 1] as number) - (velocities[p2 + 1] as number)) *
-          (prepared.referenceVector[c * 3 + 1] as number) +
+          (prepared.referenceVector[k * 3 + 1] as number) +
         ((velocities[p1 + 2] as number) - (velocities[p2 + 2] as number)) *
-          (prepared.referenceVector[c * 3 + 2] as number);
-      const lengthSquared = prepared.referenceLengthSquared[c] as number;
+          (prepared.referenceVector[k * 3 + 2] as number);
+      const lengthSquared = prepared.referenceLengthSquared[k] as number;
       // Unlike the position case this divides by the *reference* squared
       // length, not by the target distance squared.
-      delta[c] =
+      delta[k] =
         lengthSquared === 0
           ? 0
-          : (-2 * (prepared.reducedMass[c] as number) * projection) / lengthSquared;
-      worst = Math.max(worst, Math.abs(delta[c] as number));
-      if (Math.abs(delta[c] as number) <= tolerance) converged++;
+          : (-2 * (prepared.reducedMass[k] as number) * projection) / lengthSquared;
+      worst = Math.max(worst, Math.abs(delta[k] as number));
+      if (Math.abs(delta[k] as number) <= tolerance) converged++;
     }
     if (converged === count) {
       return { iterations, converged: true, worstRelativeError: worst };
     }
     iterations++;
-    applyDeltas(system, velocities, inverse, prepared, delta);
+    applyDeltas(system, velocities, inverse, prepared, delta, indices);
   }
   return { iterations, converged: false, worstRelativeError: worst };
+}
+
+
+/**
+ * Apply every constraint, routing each cluster to the solver OpenMM routes it
+ * to: SETTLE for the closed three-atom triangles, the iterative solver for the
+ * rest.
+ *
+ * `split` can be passed in to avoid reclassifying on every step; it depends only
+ * on the system, never on the coordinates.
+ */
+export function constrainPositions(
+  system: OpenMMSystem,
+  referencePositions: Float64Array,
+  trialPositions: Float64Array,
+  tolerance: number,
+  split: ConstraintSplit = splitConstraints(system),
+  maxIterations = MAX_CONSTRAINT_ITERATIONS,
+): ConstraintResult {
+  settlePositions(system, split.settle, referencePositions, trialPositions);
+  return applyPositionConstraints(
+    system,
+    referencePositions,
+    trialPositions,
+    tolerance,
+    maxIterations,
+    split.iterative,
+  );
+}
+
+/** The same routing, for velocities. */
+export function constrainVelocities(
+  system: OpenMMSystem,
+  positions: Float64Array,
+  velocities: Float64Array,
+  tolerance: number,
+  split: ConstraintSplit = splitConstraints(system),
+  maxIterations = MAX_CONSTRAINT_ITERATIONS,
+): ConstraintResult {
+  settleVelocities(system, split.settle, positions, velocities);
+  return applyVelocityConstraints(
+    system,
+    positions,
+    velocities,
+    tolerance,
+    maxIterations,
+    split.iterative,
+  );
 }
