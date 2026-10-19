@@ -81,12 +81,19 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: **restraints** (`CustomExternalForce` with
-`k*periodicdistance(x,y,z,x0,y0,z0)^2`, for the equilibration stage) and the
-**barostat** (`MonteCarloBarostat`, isotropic, frequency 25, molecule-wise
-scaling). The barostat makes the box dynamic, and the open item on
-`delta_periodic` below needs the box in fixed point in the same four kernels'
-uniforms, so those two are one job rather than two.
+Phase 1 has one step left: the **barostat** (`MonteCarloBarostat`, isotropic,
+frequency 25, molecule-wise scaling). It makes the box dynamic, and the open
+item on `delta_periodic` below needs the box in fixed point in the same four
+kernels' uniforms, so those are one job rather than two.
+`src/gpu/kernels/restraint.wgsl` is a worked example of that fix.
+
+Restraints are done: `k*periodicdistance(x,y,z,x0,y0,z0)^2`, implemented
+directly rather than through an expression parser. Against OpenMM's own force
+group at three configurations, the third of which displaces every atom by a
+whole box to exercise the minimum image -- 154 restrained atoms on 1L2Y and
+1311 on 3HTB, matching the heavy-atom mask count in deviation 1. Worst force
+error 1.7e-4 kJ/mol/nm against forces of 2152, and the energy agrees to 1.9e-9
+relative at 9.8 million kJ/mol.
 
 After those, Phase 1 is complete and Phase 2 -- upload a system and run it -- is
 a user interface over what exists.
@@ -139,6 +146,27 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### A rigid translation isolates one force inside a total
+Checking that the restraint pass is actually *encoded into a step* -- rather
+than prepared and forgotten, which every single-point comparison would still
+pass -- needs a configuration where the restraint is a measurable share of a
+well-behaved total. The wrapped fixture is not it: 3 nm displacements overlap
+atoms and the total comes out at 3.9e14 kJ/mol, where f32 and f64 have nothing
+in common.
+
+Shifting every atom by the same vector works instead. Every distance, angle and
+minimum-image separation is untouched, so the force field is unchanged, while
+every restrained atom moves exactly that far from its reference point -- and the
+restraint's contribution is then known in closed form. At 0.1 nm it is 1078
+kJ/mol out of -20,454 on 1L2Y, and the loop's assembled total matches the
+reference's to 5.9e-7. Deviation 7 used as an instrument.
+
+An earlier attempt measured drift of restrained against free atoms over 200
+steps and got a ratio of 1.02 -- not because anything was wrong but because the
+run starts un-minimised, where the driving forces are ten times the restraint's.
+A statistical claim needs an equilibrated system and many steps; an energy
+comparison needs neither.
 
 ### 🔴 OpenMM's minimiser does not reach its own tolerance
 Its documented default is 10 kJ/mol/nm on the RMS force; on 1L2Y it stops at

@@ -21,7 +21,7 @@ for (const name of ["1L2Y", "3HTB"]) {
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
     await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirMinimise !== undefined, null, {
+    await page.waitForFunction(() => window.__mirRestraint !== undefined, null, {
       timeout: 1_200_000,
     });
     const report = await page.evaluate(() => window.__mirValidation);
@@ -110,6 +110,14 @@ for (const name of ["1L2Y", "3HTB"]) {
     const badFrames = [...minimised!.frames, minimised!.converged].filter((m) => !m.ok);
     expect(JSON.stringify(badFrames, null, 1)).toBe("[]");
 
+    const restraint = await page.evaluate(() => window.__mirRestraint);
+    if (restraint !== undefined && "error" in restraint) {
+      throw new Error(restraint.error);
+    }
+    expect(JSON.stringify(restraint!.cases.filter((c) => !c.ok), null, 1)).toBe("[]");
+    // The force is right; this is that it is actually encoded into a step.
+    expect(JSON.stringify(restraint!.assembled, null, 1)).toContain('"ok": true');
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -181,7 +189,23 @@ for (const name of ["1L2Y", "3HTB"]) {
               `  constraint ${m.maxConstraintError.toExponential(2)}` +
               `  ${m.rounds}r/${m.evaluations}e ${m.status}`,
           )
-          .join(""),
+          .join("") +
+        restraint!.cases
+          .map(
+            (c) =>
+              `\n  restraint ${c.label.padEnd(10)}` +
+              `  energy ${c.deviceEnergy.toFixed(4).padStart(13)}` +
+              `  vs OpenMM ${c.energyError.toExponential(2)}` +
+              `  worst force ${c.worstForceError.toExponential(2)}` +
+              `  of ${c.openmmMaxForce.toFixed(1)}`,
+          )
+          .join("") +
+        (restraint!.assembled === null
+          ? ""
+          : `\n  assembled potential  device ${restraint!.assembled.deviceEnergy.toFixed(2)}` +
+            `  reference ${restraint!.assembled.referenceEnergy.toFixed(2)}` +
+            `  rel ${restraint!.assembled.relativeError.toExponential(2)}` +
+            `  restraint share ${restraint!.assembled.restraintEnergy.toFixed(0)}`),
     );
   });
 }

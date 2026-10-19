@@ -411,18 +411,43 @@ function readPositionRestraint(
     );
   }
   const parameterNames: string[] = [];
+  const globalNames: string[] = [];
   const particle: number[] = [];
   const values: number[][] = [];
+  // 🔴 The element names here are OpenMM's, taken from a real serialised force
+  // rather than guessed: the parameters are `<Parameter name="k"/>` nested
+  // inside `<PerParticleParameters>` -- not `<PerParticleParameter>` -- and a
+  // particle's index attribute is `index`, not `p`. The first version of this
+  // parser had both wrong and had never met an actual `CustomExternalForce`,
+  // because no fixture carries one until a run adds it.
+  //
+  // `eachChild` reports every descendant's name without tracking depth, so
+  // which container a `<Parameter>` belongs to has to be tracked here. It
+  // matters: a global `k` and a per-particle `k` are different formulations of
+  // the same restraint, and only the second is what the notebook writes.
+  let container = "";
   eachChild(scanner, "Force", (name) => {
-    if (name === "PerParticleParameter") {
-      parameterNames.push(scanner.str("name"));
+    if (name === "PerParticleParameters" || name === "GlobalParameters") {
+      container = name;
+    } else if (name === "Parameter") {
+      if (container === "GlobalParameters") globalNames.push(scanner.str("name"));
+      else parameterNames.push(scanner.str("name"));
     } else if (name === "Particle") {
-      particle.push(scanner.int("p"));
+      particle.push(scanner.int("index"));
       // Per-particle parameters are written as param1..paramN in declaration
       // order, so the names tell us which column is which.
       values.push(parameterNames.map((_, i) => scanner.num(`param${i + 1}`)));
     }
   });
+  if (globalNames.length > 0) {
+    throw new UnsupportedForce(
+      "CustomExternalForce",
+      `it has global parameters (${globalNames.join(", ")}). This engine reads ` +
+        "k, x0, y0, z0 per particle, which is what the notebook writes; a " +
+        "global parameter would change what the expression means and is not " +
+        "silently substituted",
+    );
+  }
   const column = (want: string): Float64Array => {
     const index = parameterNames.indexOf(want);
     if (index < 0) {

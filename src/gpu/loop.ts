@@ -34,6 +34,7 @@ import {
   parseSystem,
   type NonbondedForce,
   type OpenMMSystem,
+  type PositionRestraintForce,
 } from "../engine/system.js";
 import { ewaldAlpha, pmeMinimumGridSize, smoothFftSize } from "../engine/units.js";
 import { splitConstraints } from "../engine/constraint-clusters.js";
@@ -63,6 +64,7 @@ import { planDirect, prepareDirect, type Accumulators } from "./nonbonded.js";
 import { planCellList } from "./cell-list.js";
 import { planPme, preparePme } from "./pme.js";
 import { planZero } from "./zero.js";
+import { planRestraint, prepareRestraint } from "./restraint.js";
 import {
   packConstraints,
   planConstraints,
@@ -269,6 +271,21 @@ export class StepLoop {
     for (const [slot, force] of bonded.entries()) {
       forcePasses.push(
         await planBonded(cache, prepareBonded(pool, force, slot), accumulators),
+      );
+    }
+    // Restraints, when the system carries them. The equilibration stage adds
+    // them and the production stage does not, so this follows the system rather
+    // than a flag.
+    const restraints = system.forces.filter(
+      (f): f is PositionRestraintForce => f.type === "PositionRestraint",
+    );
+    for (const [slot, force] of restraints.entries()) {
+      forcePasses.push(
+        await planRestraint(
+          cache,
+          prepareRestraint(pool, force, state.boxVectors, slot),
+          accumulators,
+        ),
       );
     }
     const { pairs, exceptions } = await planDirect(cache, direct, accumulators);

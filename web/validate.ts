@@ -26,6 +26,10 @@ import {
   type CapturedMinimisation,
   type MinimiseComparison,
 } from "../src/gpu/validate-minimise.js";
+import {
+  validateRestraint,
+  type RestraintComparison,
+} from "../src/gpu/validate-restraint.js";
 
 declare global {
   interface Window {
@@ -36,6 +40,7 @@ declare global {
     __mirCellList?: CellListComparison | { error: string };
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
+    __mirRestraint?: RestraintComparison | { error: string };
   }
 }
 
@@ -71,6 +76,18 @@ function render(report: ValidationReport): string {
       </tr>
       ${rows}
     </table>`;
+}
+
+/** One `.npy` file from the dev server. */
+async function fetchNpy(
+  name: string,
+  file: string,
+): Promise<ReturnType<typeof decodeNpy>> {
+  const response = await fetch(`/fixtures/${name}/${file}`);
+  if (!response.ok) {
+    throw new Error(`/fixtures/${name}/${file} returned ${response.status}.`);
+  }
+  return decodeNpy(await response.arrayBuffer(), file);
 }
 
 /** The captured trajectory for one integrator, fetched as three `.npy` files. */
@@ -152,6 +169,56 @@ function renderIntegrators(report: IntegratorReport): string {
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
     </p>`;
+}
+
+function renderRestraint(r: RestraintComparison): string {
+  return `<h2>Position restraints</h2><p class="note">
+      ${r.restrainedAtoms.toLocaleString("en-US")} atoms restrained, compared
+      against the restraint's own OpenMM force group. The reference
+      configuration has exactly zero energy and zero force, so it alone would
+      pass a kernel that computed nothing; the wrapped one displaces every atom
+      by a whole box, which is what exercises the minimum image.
+    </p>
+    <table>
+      <tr><th>Case</th><th>Device (kJ/mol)</th><th>OpenMM</th><th>Difference</th>
+          <th>Worst force error</th><th>vs our f64</th><th>Largest force</th><th></th></tr>
+      ${r.cases
+        .map(
+          (c) => `<tr>
+            <td>${c.label}</td>
+            <td class="num">${c.deviceEnergy.toFixed(4)}</td>
+            <td class="num">${c.openmmEnergy.toFixed(4)}</td>
+            <td class="num">${exponential(c.energyError)}</td>
+            <td class="num">${exponential(c.worstForceError)}</td>
+            <td class="num">${exponential(c.worstForceVsReference)}</td>
+            <td class="num">${c.openmmMaxForce.toFixed(2)}</td>
+            <td><span class="badge ${c.ok ? "ok" : "bad"}">${c.ok ? "pass" : "fail"}</span></td>
+          </tr>`,
+        )
+        .join("")}
+    </table>
+    ${
+      r.assembled === null
+        ? ""
+        : `<p class="note">
+            Under a rigid ${r.assembled.translation} nm translation -- which
+            leaves every distance in the force field untouched while moving every
+            restrained atom exactly that far from its reference point -- the
+            loop's assembled force field gives
+            ${r.assembled.deviceEnergy.toFixed(2)} kJ/mol against the
+            double-precision reference's
+            ${r.assembled.referenceEnergy.toFixed(2)},
+            ${exponential(r.assembled.relativeError)} relative. The restraint
+            contributes ${r.assembled.restraintEnergy.toFixed(1)} of it, against
+            ${r.assembled.expectedRestraintEnergy.toFixed(1)} in closed form.
+            That is what says the restraint pass is encoded into a step rather
+            than prepared and forgotten, and ${r.assembled.steps} steps from the
+            fixture's own state stayed finite.
+            <span class="badge ${r.assembled.ok ? "ok" : "bad"}">${
+              r.assembled.ok ? "pass" : "fail"
+            }</span>
+          </p>`
+    }`;
 }
 
 function renderMinimise(m: MinimiseComparison): string {
@@ -355,6 +422,39 @@ async function main(): Promise<void> {
       );
       if (body) body.innerHTML += renderMinimise(minimised);
       window.__mirMinimise = minimised;
+
+      // Restraints come from a separate fixture, because the force is added by
+      // a run rather than by the force field, so no plain system carries one.
+      const restraintFacts = await fetch(`/fixtures/${name}/restraint-facts.json`);
+      if (!restraintFacts.ok) {
+        const note =
+          `/fixtures/${name}/restraint-facts.json is absent; build it with ` +
+          "tools/build_restraint_fixture.py.";
+        if (body) body.innerHTML += `<h2>Position restraints</h2><p class="note">${note}</p>`;
+        window.__mirRestraint = { error: note };
+      } else {
+        const restraintData = (await restraintFacts.json()) as {
+          cases: Record<string, { energy_kJ_mol: number }>;
+        };
+        const restrainedXml = await fetchText("system-restrained.xml");
+        const labels = Object.keys(restraintData.cases);
+        const loaded = await Promise.all(
+          labels.map(async (label) => ({
+            label,
+            positions: (await fetchNpy(name, `restraint-${label}-positions.npy`)).data,
+            forces: (await fetchNpy(name, `restraint-${label}-forces.npy`)).data,
+            energy: restraintData.cases[label]!.energy_kJ_mol,
+          })),
+        );
+        const restraintResult = await validateRestraint(
+          device,
+          restrainedXml,
+          stateXml,
+          loaded,
+        );
+        if (body) body.innerHTML += renderRestraint(restraintResult);
+        window.__mirRestraint = restraintResult;
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -366,6 +466,7 @@ async function main(): Promise<void> {
     window.__mirCellList = { error: message };
     window.__mirLoop = { error: message };
     window.__mirMinimise = { error: message };
+    window.__mirRestraint = { error: message };
   }
 }
 

@@ -31,6 +31,7 @@ import cellList from "./kernels/cell-list.wgsl?raw";
 import randomProbe from "./kernels/random-probe.wgsl?raw";
 import integrate from "./kernels/integrate.wgsl?raw";
 import reduce from "./kernels/reduce.wgsl?raw";
+import restraint from "./kernels/restraint.wgsl?raw";
 import settle from "./kernels/settle.wgsl?raw";
 import shake from "./kernels/shake.wgsl?raw";
 
@@ -108,6 +109,9 @@ export const RANDOM_PROBE = composeKernel(randomProbe, ["fixed64", "random"]);
 
 /** Centre-of-mass momentum and kinetic energy, reduced exactly. */
 export const REDUCE = composeKernel(reduce);
+
+/** Position restraints, with the minimum image taken in fixed point. */
+export const RESTRAINT = composeKernel(restraint, ["fixed64", "accumulate"]);
 
 /** SETTLE, analytic, one thread per rigid three-atom cluster. */
 export const SETTLE = composeKernel(settle);

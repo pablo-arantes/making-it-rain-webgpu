@@ -127,18 +127,33 @@ export class PipelineCache {
     });
   }
 
-  /** A pass ready to encode. */
+  /**
+   * A pass ready to encode.
+   *
+   * The bind group is created inside its own error scope. Without one, a buffer
+   * too small for the struct it is bound to -- a uniform whose size was
+   * miscounted, say -- produces an *invalid* bind group, and the only thing
+   * said about it is at submission time: "is invalid due to a previous error".
+   * The previous error is the one that names the binding and the sizes, and it
+   * is thrown away unless somebody is listening when it happens. This is the
+   * same failure mode CLAUDE.md records for WGSL compilation, one layer down.
+   */
   async pass(
     spec: PipelineSpec,
     bindings: readonly { binding: number; resource: GPUBindingResource }[],
     workgroups: readonly [number, number?, number?],
   ): Promise<Pass> {
     const pipeline = await this.pipeline(spec);
+    this.device.pushErrorScope("validation");
     const bindGroup = this.device.createBindGroup({
       label: spec.label,
       layout: spec.bindGroupLayout ?? pipeline.getBindGroupLayout(0),
       entries: bindings.map(({ binding, resource }) => ({ binding, resource })),
     });
+    const error = await this.device.popErrorScope();
+    if (error !== null) {
+      throw new Error(`${spec.label}: bind group rejected: ${error.message}`);
+    }
     return { label: spec.label, pipeline, bindGroup, workgroups };
   }
 

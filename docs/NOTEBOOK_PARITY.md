@@ -337,3 +337,22 @@ uses `len(rmsd)` where it means `len(radgyr)`; the ligand network uses at most
 10 frames whatever the trajectory length. The app reads all of this from
 `run.json`, so the axis cannot disagree with the trajectory, and states the
 frame count behind every plot.
+
+### 12. The restraint force constant is labelled in the wrong units
+
+`Force_constant = 700 #@param {type:"slider", min:0, max:2000, step:100}`, and
+the comment on the line that reads it says `# kJ/mol`. It is not: `k` multiplies
+`periodicdistance(...)^2`, so it is an energy per squared length, **kJ/mol/nm²**.
+The printed line in the log repeats the wrong unit — `"Force Constant = 700
+kJ/mol"`.
+
+This one is only a label, and it is worth recording because the magnitude is
+easy to get wrong in the other direction. 700 kJ/mol/nm² holds a heavy atom to
+about `sqrt(kT/2k)` = 0.04 nm per axis at 300 K, which is a real restraint;
+700 kJ/mol would be a number with no meaning here, and a reader who takes the
+comment at face value and converts it has a restraint two orders of magnitude
+off. Measured while building the restraint fixture: at 10 kJ/mol/nm² the
+restrained atoms move indistinguishably from free ones.
+
+The app shows the unit on the field and records `k` in `run.json` in
+kJ/mol/nm².

@@ -31,6 +31,7 @@ import {
   selfEnergy,
 } from "./forces/nonbonded.js";
 import { reciprocalSpace } from "./forces/pme.js";
+import { positionRestraint } from "./forces/restraint.js";
 
 export interface PotentialResult {
   /** kJ/mol. */
@@ -124,15 +125,30 @@ export function evaluatePotential(
         );
         break;
       }
+      case "PositionRestraint":
+        add(force.type, positionRestraint(force, positions, boxVectors, forces));
+        break;
+      case "MonteCarloBarostat":
+        // Not a force. It rescales the box from `updateContextState`, and
+        // contributes no energy of its own.
+        break;
       case "CMMotionRemover":
         // Not a force. It acts on velocities, from `updateContextState`.
         break;
-      default:
+      default: {
+        // Exhaustive: every member of `Force` is handled above, and
+        // `parseSystem` refuses anything outside that union. The `never`
+        // binding is what makes adding a force type a compile error here
+        // rather than a silently missing energy term.
+        const unhandled: never = force;
         throw new Error(
-          `evaluatePotential does not implement ${force.type}. The engine only ` +
-            "claims the forces this workflow produces; an uploaded system with " +
-            "anything else has to be rejected rather than silently mis-evaluated.",
+          `evaluatePotential does not implement ${
+            (unhandled as { type: string }).type
+          }. The engine only claims the forces this workflow produces; an ` +
+            "uploaded system with anything else has to be rejected rather " +
+            "than silently mis-evaluated.",
         );
+      }
     }
   }
   return { energy, forces, byForce };
