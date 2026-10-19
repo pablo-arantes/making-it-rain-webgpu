@@ -74,7 +74,15 @@ export async function dispatch(
     readonly label: string;
     readonly code: string;
     readonly entryPoint?: string;
-    readonly bindings: readonly GPUBindingResource[];
+    /**
+     * Explicit binding indices, not a positional list.
+     *
+     * `layout: "auto"` derives a layout from the bindings an entry point
+     * actually uses, so two kernels in one module -- or one kernel that leaves
+     * an index unused -- do not share a layout. Naming the index here lets each
+     * kernel declare whatever set it needs without the host having to pad gaps.
+     */
+    readonly bindings: readonly { binding: number; resource: GPUBindingResource }[];
     readonly workgroups: readonly [number, number?, number?];
   },
 ): Promise<void> {
@@ -96,7 +104,7 @@ export async function dispatch(
   const group = device.createBindGroup({
     label: options.label,
     layout: pipeline.getBindGroupLayout(0),
-    entries: options.bindings.map((resource, binding) => ({ binding, resource })),
+    entries: options.bindings.map(({ binding, resource }) => ({ binding, resource })),
   });
   const encoder = device.createCommandEncoder({ label: options.label });
   const pass = encoder.beginComputePass({ label: options.label });

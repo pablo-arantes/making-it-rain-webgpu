@@ -188,15 +188,15 @@ describe("reciprocal space against OpenMM", () => {
 
 for (const name of FIXTURE_NAMES) {
   const f = fixture(name);
-  // 3HTB's grid is 54^3 and the direct transform is O(n^4) an axis; the small
-  // fixture and 1L2Y cover the physics, and the GPU lane covers the large one.
-  const skip = f === null || f.facts.atoms_total > 5000;
-  describe.skipIf(skip)(`reciprocal space for ${name}`, () => {
+  describe.skipIf(f === null)(`reciprocal space for ${name}`, () => {
     it("reproduces OpenMM's reciprocal force group", () => {
       const force = f!.system.forces.find(
         (x) => x.type === "NonbondedForce",
       ) as NonbondedForce;
       const alpha = f!.facts.pme.alpha_per_nm;
+      // OpenMM's Reference platform uses the exact minimum grid, so that is
+      // what this comparison has to use -- not the smooth size the engine
+      // rounds up to, which would be a different approximation.
       const grid = f!.facts.pme.grid_reference_platform as unknown as [number, number, number];
       const { energy } = reciprocalSpace(
         force,

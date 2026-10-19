@@ -26,30 +26,35 @@ Done in Phase 1 so far:
   correction. On the GPU: 1.05e-7 energy agreement with OpenMM on 1L2Y and
   **3.93e-7 on 3HTB's 26,749 atoms**, where +1.67e6 kJ/mol of exclusion
   corrections nearly cancel against a +1.56e6 total.
-- **Reciprocal-space PME, reference only**: order-5 B-splines, a 3D DFT,
-  the convolution and interpolated forces. Reproduces OpenMM's reciprocal force
-  group to < 1e-9 relative on 1L2Y.
+- **Reciprocal-space PME**, reference and WGSL: order-5 B-spline spreading, a
+  mixed-radix Stockham FFT over radices 2/3/5/7, the convolution and
+  interpolated forces. On the GPU, 1.23e-8 energy agreement with OpenMM on
+  1L2Y's 25³ mesh and 1.36e-7 on 3HTB's 54³. The transform has its own
+  differential test against the f64 reference, which is itself checked against a
+  direct O(n²) transform.
+- **Every force term of the notebook's `System` now runs on the GPU** and
+  agrees with OpenMM.
 - **erf and erfc**, f64 for the reference and a rational approximation for the
   kernel, the latter measured at < 1.2e-7 relative over the whole Ewald range.
 - **The nonbonded decomposition, measured and written down** in
   `docs/NONBONDED.md`. Three terms are not what a first reading suggests, and
   each is larger than the total energy or would have silently biased it.
 
-Phase 1 steps still to do, in the plan's order: **PME reciprocal space in
-WGSL**, constraints, the LFMiddle integrator, the barostat, the minimiser.
+Phase 1 steps still to do, in the plan's order: **constraints** (SETTLE for
+water, CCMA for bonds to hydrogen), the **LFMiddle integrator**, the
+**barostat**, and the **minimiser**. After those, Phase 1's gates: NVE drift at
+2 fs, and a measured ns/day.
 
 ## Open, in the order they are worth doing
 
-### Reciprocal space needs a transform on the GPU
-The reference uses a direct O(n²)-per-line DFT, which is the right choice there
--- 25 to 64 points an axis is a second in JavaScript, and a direct transform has
-no twiddle tables, no radix cases and no bit reversal to get wrong. The kernel
-cannot use that shape unchanged: at a 54³ grid it is about 4e8 flops a step,
-which would be perhaps 0.2 ms and so the dominant per-step cost. A mixed-radix
-transform over 2/3/5/7 factors is roughly ten times cheaper. **Write the direct
-version first and measure it**, since it is correct by construction and
-establishes the gate the fast one has to pass; `docs/PRIOR_ART.md` §5 notes that
-no TypeScript/WGSL 3D FFT exists to borrow.
+### The FFT is correct but not yet tuned
+Radices 2, 3, 5 and 7, with a generic R² inner product per butterfly rather
+than specialised butterflies — at most 49 terms, since the radix is at most 7.
+Specialised radix-2/3/4/5 butterflies and a radix-4 or radix-8 path for
+power-of-two sizes are the obvious next step, and the differential test in
+`src/gpu/checks.ts` is what they would be held to. **Measure before writing
+them**: the per-step cost of PME against everything else is not known yet,
+because there is no step loop to measure.
 
 ### The acceptance thresholds are provisional
 `AGENTS.md` quotes OpenCL **single** precision on an Apple M3 Pro, because this

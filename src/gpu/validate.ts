@@ -18,15 +18,26 @@
 
 import { parseState } from "../engine/state.js";
 import { parseSystem, type Force, type NonbondedForce } from "../engine/system.js";
-import { ewaldAlpha } from "../engine/units.js";
+import {
+  ewaldAlpha,
+  pmeMinimumGridSize,
+  smoothFftSize,
+} from "../engine/units.js";
 import {
   harmonicAngle,
   harmonicBond,
   periodicTorsion,
 } from "../reference/forces/bonded.js";
-import { directSpace } from "../reference/forces/nonbonded.js";
+import {
+  directSpace,
+  netChargeCorrection,
+  rectangularBox,
+  selfEnergy,
+} from "../reference/forces/nonbonded.js";
+import { reciprocalSpace } from "../reference/forces/pme.js";
 import { evaluateBondedForce, packPositions, unpackFixed } from "./forces.js";
 import { evaluateDirectSpace } from "./nonbonded.js";
+import { evaluateReciprocalSpace } from "./pme.js";
 
 export interface ForceComparison {
   readonly forceType: string;
@@ -86,6 +97,25 @@ export const BONDED_THRESHOLDS = {
 export const DIRECT_SPACE_THRESHOLDS = {
   energyRelative: 1e-4,
   forceRelativeRms: 1e-4,
+} as const;
+
+/**
+ * Reciprocal space is compared against our own f64 reference **at the same
+ * mesh**, which is the only comparison that isolates the kernel.
+ *
+ * Comparing against OpenMM instead would conflate two different things: the
+ * kernel's f32 arithmetic, and the fact that OpenMM's Reference platform uses
+ * the exact minimum grid -- 53 for the solvated fixture, which is prime --
+ * while this engine rounds up to a transform-friendly 54. Those are two
+ * different approximations of the same exact Ewald sum, and they differ by far
+ * more than the kernel does. The OpenMM number is still reported, as a physics
+ * check with its own looser bound.
+ */
+export const RECIPROCAL_THRESHOLDS = {
+  energyRelative: 1e-5,
+  forceRelativeRms: 1e-4,
+  /** How far our smooth-grid PME may sit from OpenMM's minimum-grid PME. */
+  versusOpenmmRelative: 2e-3,
 } as const;
 
 const REFERENCE: Record<
@@ -276,6 +306,89 @@ export async function validateBonded(
         forceRelativeRms < DIRECT_SPACE_THRESHOLDS.forceRelativeRms &&
         (energyVsOpenmm === null ||
           energyVsOpenmm < DIRECT_SPACE_THRESHOLDS.energyRelative),
+    });
+  }
+
+  // Reciprocal space, at the smooth grid the engine actually uses.
+  if (nonbonded !== undefined) {
+    const alpha =
+      nonbonded.alpha !== 0
+        ? nonbonded.alpha
+        : ewaldAlpha(nonbonded.cutoff, nonbonded.ewaldTolerance);
+    const box = rectangularBox(system.boxVectors);
+    const grid = box.map((extent) =>
+      smoothFftSize(pmeMinimumGridSize(alpha, extent, nonbonded.ewaldTolerance)),
+    ) as unknown as [number, number, number];
+    const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
+    const constant =
+      selfEnergy(nonbonded, alpha) + netChargeCorrection(nonbonded, alpha, volume);
+
+    const referenceForces = new Float64Array(system.particleCount * 3);
+    const reference = reciprocalSpace(
+      nonbonded,
+      positions,
+      system.boxVectors,
+      alpha,
+      grid,
+      referenceForces,
+    );
+    const device_ = await evaluateReciprocalSpace(
+      device,
+      nonbonded,
+      positionWords,
+      system.boxVectors,
+      alpha,
+      grid,
+    );
+
+    let sumSquaredError = 0;
+    let sumSquaredReference = 0;
+    let maxAbsoluteError = 0;
+    let worstAtom = 0;
+    for (let atom = 0; atom < system.particleCount; atom++) {
+      let atomError = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        const i = atom * 3 + axis;
+        const error = (device_.forces[i] as number) - (referenceForces[i] as number);
+        sumSquaredError += error * error;
+        sumSquaredReference += (referenceForces[i] as number) ** 2;
+        atomError += error * error;
+      }
+      if (atomError > maxAbsoluteError) {
+        maxAbsoluteError = atomError;
+        worstAtom = atom;
+      }
+    }
+    const openmm = openmmEnergyFor(
+      facts?.reference_energies_kJ_mol,
+      "NonbondedForce[reciprocal]",
+    );
+    const deviceTotal = device_.energy + constant;
+    const referenceTotal = reference.energy + constant;
+    const energyRelativeError =
+      Math.abs(deviceTotal - referenceTotal) / Math.abs(referenceTotal);
+    const forceRelativeRms =
+      sumSquaredReference === 0 ? 0 : Math.sqrt(sumSquaredError / sumSquaredReference);
+    const energyVsOpenmm =
+      openmm === null ? null : Math.abs(deviceTotal - openmm) / Math.abs(openmm);
+    comparisons.push({
+      forceType: "NonbondedForce[reciprocal]",
+      forceGroup: nonbonded.recipForceGroup,
+      termCount: grid[0] * grid[1] * grid[2],
+      deviceEnergy: deviceTotal,
+      referenceEnergy: referenceTotal,
+      openmmEnergy: openmm,
+      energyRelativeError,
+      energyVsOpenmmRelativeError: energyVsOpenmm,
+      forceRelativeRms,
+      forceMaxAbsoluteError: Math.sqrt(maxAbsoluteError),
+      referenceForceRms: Math.sqrt(sumSquaredReference / system.particleCount),
+      worstAtom,
+      ok:
+        energyRelativeError < RECIPROCAL_THRESHOLDS.energyRelative &&
+        forceRelativeRms < RECIPROCAL_THRESHOLDS.forceRelativeRms &&
+        (energyVsOpenmm === null ||
+          energyVsOpenmm < RECIPROCAL_THRESHOLDS.versusOpenmmRelative),
     });
   }
 

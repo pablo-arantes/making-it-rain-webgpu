@@ -49,10 +49,10 @@ export async function accumulateFixedPoint(
       label: "fixed-point accumulate",
       code: FIXED_POINT_ACCUMULATE,
       bindings: [
-        { buffer: valueBuffer },
-        { buffer: lo },
-        { buffer: hi },
-        { buffer: params },
+        { binding: 0, resource: { buffer: valueBuffer } },
+        { binding: 1, resource: { buffer: lo } },
+        { binding: 2, resource: { buffer: hi } },
+        { binding: 3, resource: { buffer: params } },
       ],
       workgroups: [Math.ceil(values.length / 64)],
     });
@@ -117,7 +117,11 @@ export async function integratePosition(
     await dispatch(device, {
       label: "position integrate",
       code: POSITION,
-      bindings: [{ buffer: incrementBuffer }, { buffer: out }, { buffer: params }],
+      bindings: [
+        { binding: 0, resource: { buffer: incrementBuffer } },
+        { binding: 1, resource: { buffer: out } },
+        { binding: 2, resource: { buffer: params } },
+      ],
       workgroups: [1],
     });
     const raw = await readBuffer(device, out, 32);

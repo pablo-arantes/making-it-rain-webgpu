@@ -35,7 +35,7 @@ test("the page reports an adapter and passes every precision check", async ({
     failed.map((c) => `${c.name}\n${JSON.stringify(c.detail, null, 1)}`).join("\n\n"),
   ).toBe("");
   expect(checked.ok).toBe(true);
-  expect(checked.checks.length).toBe(5);
+  expect(checked.checks.length).toBe(6);
 
   // The adapter panel has to say something real about the machine.
   expect(checked.sizeEstimate.maxAtoms).toBeGreaterThan(10_000);

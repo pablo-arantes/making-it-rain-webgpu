@@ -20,6 +20,11 @@ import position from "./kernels/position.wgsl?raw";
 import bonded from "./kernels/bonded.wgsl?raw";
 import nonbondedPairs from "./kernels/nonbonded-pairs.wgsl?raw";
 import nonbondedExceptions from "./kernels/nonbonded-exceptions.wgsl?raw";
+import fft from "./kernels/fft.wgsl?raw";
+import pmeSpread from "./kernels/pme.wgsl?raw";
+import pmeGrid from "./kernels/pme-grid.wgsl?raw";
+import pmeConvolve from "./kernels/pme-convolve.wgsl?raw";
+import pmeInterpolate from "./kernels/pme-interpolate.wgsl?raw";
 
 export const SHARED = { fixed64, accumulate, erfc } as const;
 
@@ -56,3 +61,21 @@ export const NONBONDED_EXCEPTIONS = composeKernel(nonbondedExceptions, [
   "accumulate",
   "erfc",
 ]);
+
+/**
+ * One mixed-radix Stockham FFT stage. Needs no shared include: it is pure
+ * complex f32 arithmetic with no fixed point anywhere.
+ */
+export const FFT = composeKernel(fft, []);
+
+/** B-spline charge spreading onto the mesh. */
+export const PME_SPREAD = composeKernel(pmeSpread);
+
+/** Fixed-point charge grid to complex f32 grid. */
+export const PME_GRID = composeKernel(pmeGrid);
+
+/** The reciprocal-space convolution and the mesh energy. */
+export const PME_CONVOLVE = composeKernel(pmeConvolve);
+
+/** Interpolating the convolved potential back onto the atoms as forces. */
+export const PME_INTERPOLATE = composeKernel(pmeInterpolate);

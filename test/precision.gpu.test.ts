@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dawn } from "./dawn.js";
 import {
   checkDekkerDiagnostic,
+  checkFft,
   checkFixedPointCarry,
   checkFixedPointExactness,
   checkPositionRandomWalk,
@@ -56,6 +57,10 @@ describe.skipIf(status.kind !== "ready")("precision primitives on Dawn", () => {
 
   it("tracks a realistic displacement history", async () => {
     expectPass(await checkPositionRandomWalk(handles!.device));
+  });
+
+  it("transforms as the reference transform does", async () => {
+    expectPass(await checkFft(handles!.device));
   });
 
   it("reports what the backend does with error-free arithmetic", async () => {

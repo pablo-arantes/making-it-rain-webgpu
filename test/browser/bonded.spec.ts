@@ -32,6 +32,7 @@ for (const name of ["1L2Y", "3HTB"]) {
       "HarmonicAngleForce",
       "HarmonicBondForce",
       "NonbondedForce[direct]",
+      "NonbondedForce[reciprocal]",
       "PeriodicTorsionForce",
     ]);
     const failures = checked.comparisons.filter((c) => !c.ok);

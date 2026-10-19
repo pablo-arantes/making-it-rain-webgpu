@@ -115,6 +115,44 @@ form. Three things to keep in mind if this ever needs revisiting:
   exact Ewald sum to 7e-6, which proved the mesh code right and pointed at a
   missing term rather than a coding error.
 
+## The transform, and a grid size that is prime
+
+Reciprocal space needs a 3D transform, and `docs/PRIOR_ART.md` §5 found no
+TypeScript/WGSL one to borrow. There are three implementations here, each
+checking the one above it:
+
+| | where | what it is for |
+| --- | --- | --- |
+| direct O(n²) per line | `src/reference/dft.ts` | obviously correct, no twiddle tables or radix cases; also the only one that can run at an arbitrary grid size |
+| mixed-radix Stockham, f64 | `src/reference/fft.ts` | a *model of the kernel*: same stage list, same index arithmetic, same twiddle angles |
+| mixed-radix Stockham, WGSL | `src/gpu/kernels/fft.wgsl` | the engine's |
+
+Stockham rather than in-place Cooley–Tukey, because Stockham auto-sorts: each
+stage reads one buffer and writes the other, and there is no digit-reversal
+permutation to get wrong. Two buffers and a ping-pong is a small price for
+deleting a class of bug. Radices 2, 3, 5 and 7 cover every 2/3/5/7-smooth size.
+
+One `base` formula serves all three axes, which is why there is one stage kernel
+rather than three:
+
+```
+base = (line / stride) * (stride * length) + (line % stride)
+```
+
+with stride 1 walking z, nz walking y, and ny·nz walking x.
+
+🔴 **OpenMM's Reference platform uses the exact minimum grid, and it is often
+not smooth.** For 3HTB that minimum is **53, which is prime**; for the small
+committed fixture it is 22 = 2·11. Its GPU platforms round up, as this engine
+does. So the reference needs *both* transforms: the mixed-radix one for the
+engine's grid, and the direct one to be able to run at OpenMM's. This is the
+same platform dependence `docs/NOTEBOOK_PARITY.md` finding 8 records — the
+notebook's own PME grid depends on which platform it ran on.
+
+It also means the kernel has to be compared against our own reference **at the
+same grid**, not against OpenMM. Those are two different approximations of the
+same exact Ewald sum, and they differ by much more than the kernel does.
+
 ## Current agreement
 
 Reference implementations in `src/reference/forces/`, kernels in
@@ -123,14 +161,29 @@ Reference implementations in `src/reference/forces/`, kernels in
 | | energy vs OpenMM | force rel. RMS vs our f64 |
 | --- | ---: | ---: |
 | direct space, f64 reference, 1L2Y and 3HTB | < 1e-10 relative | — |
-| reciprocal space, f64 reference, 1L2Y | < 1e-9 relative | — |
-| **direct space, WGSL, 1L2Y** | **1.05e-7** | **8.38e-7** |
-| **direct space, WGSL, 3HTB (26,749 atoms)** | **3.93e-7** | **1.13e-5** |
+| reciprocal space, f64 reference, 1L2Y and 3HTB, at OpenMM's own grid | < 1e-9 relative | — |
+| direct space, WGSL, 1L2Y | 1.05e-7 | 8.38e-7 |
+| direct space, WGSL, 3HTB (26,749 atoms) | 3.93e-7 | 1.13e-5 |
+| reciprocal space, WGSL, 1L2Y (25³ mesh) | 1.23e-8 | 3.78e-6 |
+| reciprocal space, WGSL, 3HTB (54³ mesh, 157,464 points) | 1.36e-7 | 6.53e-6 |
 
-The WGSL direct-space force error is about ten times the bonded terms', from
-two causes: the kernel's erfc is a rational approximation good to 1.2e-7
-relative rather than an exact function, and the terms cancel hard enough that a
-relative error in the large ones shows up magnified in the sum.
+So every force term of the notebook's `System` now runs on the GPU and agrees
+with OpenMM.
 
-Reciprocal space on the GPU is not written yet; `docs/HANDOFF.md` has what is
-left.
+The WGSL direct-space force error is about ten times the bonded terms', from two
+causes: the kernel's erfc is a rational approximation good to 1.2e-7 relative
+rather than an exact function, and the terms cancel hard enough that a relative
+error in the large ones shows up magnified in the sum. Reciprocal space is
+better than direct on the energy because its group is dominated by the
+self-energy term, which is a closed-form host-side constant.
+
+The transform itself, against the f64 reference (`npm run test:browser`, which
+runs it with no fixture):
+
+| grid | radices per axis | relative RMS |
+| --- | --- | ---: |
+| 8×8×8 | 2×2×2 | 2.96e-7 |
+| 9×9×9 | 3×3 | 5.77e-7 |
+| 25×25×25 | 5×5 | 1.41e-6 |
+| 54×4×6 | 3×3×3×2 mixed with 2×2 and 3×2 | 4.77e-7 |
+| 7×5×3 | 7, 5, 3 — one radix an axis | — |

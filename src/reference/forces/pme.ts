@@ -1,6 +1,11 @@
 /**
  * Reciprocal-space PME, in double precision.
  *
+ * Uses the mixed-radix transform in `src/reference/fft.ts`, which is itself
+ * checked against the direct O(n^2) transform in `src/reference/dft.ts`. A 54^3
+ * grid is 1.6e5 points, where the direct transform would be a few times 1e8
+ * operations an axis.
+ *
  * What this returns is the mesh sum alone. OpenMM's reciprocal force group is
  *
  *     reciprocalSpace(...).energy + selfEnergy(...) + netChargeCorrection(...)
@@ -24,6 +29,7 @@
 import { ONE_4PI_EPS0 } from "../../engine/units.js";
 import type { NonbondedForce, Vec3 } from "../../engine/system.js";
 import { complexGrid, forward3d, inverse3d } from "../dft.js";
+import { fft3d, planFft } from "../fft.js";
 import { bsplineModuli, bsplineWeightsAndDerivatives } from "./bspline.js";
 import { rectangularBox } from "./nonbonded.js";
 
@@ -31,9 +37,11 @@ import { rectangularBox } from "./nonbonded.js";
 export const PME_ORDER = 5;
 
 export interface ReciprocalResult {
-  /** kJ/mol, excluding the self-energy term. */
+  /** kJ/mol, excluding the self-energy and net-charge terms. */
   readonly energy: number;
   readonly grid: Vec3;
+  /** Whether the mixed-radix transform could be used, or the direct one was. */
+  readonly smoothGrid: boolean;
 }
 
 /**
@@ -74,6 +82,27 @@ export function reciprocalSpace(
   const [nx, ny, nz] = gridSize as unknown as [number, number, number];
   const n = force.particleCount;
   const grid = complexGrid([nx, ny, nz]);
+  // The mixed-radix transform where it applies, the direct one where it does
+  // not. This is not a performance fallback, it is a correctness requirement:
+  // OpenMM's *Reference* platform uses the exact minimum grid, which is often
+  // not smooth -- 53 for the solvated protein-ligand fixture and 22 for the
+  // committed one, both of which have a prime factor no radix covers. Its GPU
+  // platforms round up, as this engine does, and comparing against the
+  // Reference platform means being able to run at its grid.
+  const smooth = [nx, ny, nz].every((n) => {
+    try {
+      planFft(n);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const scratch = smooth ? new Float64Array(nx * ny * nz * 2) : undefined;
+  const transform = (sign: number): void => {
+    if (smooth) fft3d(grid.data, [nx, ny, nz], sign, scratch);
+    else if (sign < 0) forward3d(grid);
+    else inverse3d(grid);
+  };
 
   // --- spread the charges -------------------------------------------------
   const splines: Array<ReturnType<typeof splineFor>[]> = [];
@@ -99,7 +128,7 @@ export function reciprocalSpace(
     }
   }
 
-  forward3d(grid);
+  transform(-1);
 
   // --- convolve with the Ewald kernel ------------------------------------
   const moduliX = bsplineModuli(nx, PME_ORDER);
@@ -143,10 +172,10 @@ export function reciprocalSpace(
     }
   }
 
-  if (forces === undefined) return { energy, grid: gridSize };
+  if (forces === undefined) return { energy, grid: gridSize, smoothGrid: smooth };
 
   // --- interpolate the potential gradient back onto the atoms ------------
-  inverse3d(grid);
+  transform(1);
   for (let i = 0; i < n; i++) {
     const charge = force.charge[i] as number;
     if (charge === 0) continue;
@@ -187,5 +216,5 @@ export function reciprocalSpace(
     forces[i * 3 + 2] =
       (forces[i * 3 + 2] as number) + (scale * fz * nz) / (box[2] as number);
   }
-  return { energy, grid: gridSize };
+  return { energy, grid: gridSize, smoothGrid: smooth };
 }

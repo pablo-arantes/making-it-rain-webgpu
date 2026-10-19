@@ -142,15 +142,15 @@ export async function evaluateBondedForce(
       label: `${force.type} evaluate`,
       code: BONDED,
       entryPoint: ENTRY_POINT[force.type],
-      // The order accumulate.wgsl fixes: positions, forces, energy, then the
+      // The indices accumulate.wgsl fixes: positions, forces, energy, then the
       // kernel's own data, then its uniform.
       bindings: [
-        { buffer: positionBuffer },
-        { buffer: forceBuffer },
-        { buffer: energyBuffer },
-        { buffer: atomBuffer },
-        { buffer: paramBuffer },
-        { buffer: countBuffer },
+        { binding: 0, resource: { buffer: positionBuffer } },
+        { binding: 1, resource: { buffer: forceBuffer } },
+        { binding: 2, resource: { buffer: energyBuffer } },
+        { binding: 3, resource: { buffer: atomBuffer } },
+        { binding: 4, resource: { buffer: paramBuffer } },
+        { binding: 5, resource: { buffer: countBuffer } },
       ],
       workgroups: [Math.max(1, Math.ceil(force.count / 64))],
     });

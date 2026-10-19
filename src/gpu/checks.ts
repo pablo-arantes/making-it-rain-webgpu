@@ -19,6 +19,9 @@ import {
   f64Accumulate,
 } from "../reference/double-single.js";
 import { exactFixedSum, fromFixed } from "../reference/fixed-point.js";
+import { fft3d, planFft } from "../reference/fft.js";
+import { storageBuffer, readBuffer, uploadBuffer } from "./compute.js";
+import { transform3d } from "./pme.js";
 import { integrate, integrateCompensated } from "../reference/position.js";
 
 export interface CheckResult {
@@ -307,6 +310,83 @@ export async function checkDekkerDiagnostic(device: GPUDevice): Promise<CheckRes
   };
 }
 
+/**
+ * The mixed-radix FFT kernel against `src/reference/fft.ts`.
+ *
+ * Needs no fixture, so it runs in every lane alongside the precision checks.
+ * The grids exercise each radix on its own and mixed together, and a non-cubic
+ * shape, because the index arithmetic that maps a line index to a flat offset
+ * is shared by all three axes and is the part most likely to be wrong.
+ *
+ * f32 against f64 over a transform whose intermediate values grow like the
+ * grid size, so a few times 1e-6 relative is what a correct kernel looks like
+ * here, not 1e-7.
+ */
+export async function checkFft(device: GPUDevice): Promise<CheckResult> {
+  const shapes: ReadonlyArray<readonly [number, number, number]> = [
+    [8, 8, 8],
+    [9, 9, 9],
+    [25, 25, 25],
+    [54, 4, 6],
+    [7, 5, 3],
+  ];
+  const random = mulberry32(0x7f7);
+  const results: Array<Record<string, unknown>> = [];
+  let worst = 0;
+
+  for (const shape of shapes) {
+    const [nx, ny, nz] = shape;
+    const total = nx * ny * nz;
+    const original = new Float32Array(total * 2);
+    for (let i = 0; i < original.length; i++) {
+      original[i] = Math.fround(random() * 2 - 1);
+    }
+
+    const a = uploadBuffer(device, {
+      label: "fft check a",
+      data: original,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    const b = storageBuffer(device, "fft check b", total * 2 * 4);
+    let deviceResult: Float32Array;
+    try {
+      const plans = [nz, ny, nx].map((length) => planFft(length));
+      const held = await transform3d(device, a, b, shape, -1, plans);
+      deviceResult = new Float32Array(await readBuffer(device, held, total * 2 * 4));
+    } finally {
+      a.destroy();
+      b.destroy();
+    }
+
+    const expected = Float64Array.from(original);
+    fft3d(expected, shape, -1);
+    let sumSquaredError = 0;
+    let sumSquared = 0;
+    for (let i = 0; i < expected.length; i++) {
+      const error = (deviceResult[i] as number) - (expected[i] as number);
+      sumSquaredError += error * error;
+      sumSquared += (expected[i] as number) ** 2;
+    }
+    const relative = Math.sqrt(sumSquaredError / sumSquared);
+    worst = Math.max(worst, relative);
+    results.push({
+      shape: `${nx}x${ny}x${nz}`,
+      radices: [nz, ny, nx].map((n) => planFft(n).stages.map((s) => s.radix).join("x")),
+      relativeRms: relative,
+    });
+  }
+
+  return {
+    name: "the mixed-radix FFT matches the reference transform",
+    ok: worst < 1e-5,
+    claim:
+      "forward 3D transforms of five grid shapes, covering radices 2, 3, 5 and 7 " +
+      "separately and mixed, must match the f64 reference to better than 1e-5 " +
+      "relative RMS",
+    detail: { worstRelativeRms: worst, shapes: results },
+  };
+}
+
 export interface DeviceCheckReport {
   readonly adapter: AdapterReport;
   readonly sizeEstimate: ReturnType<typeof estimateMaxAtoms>;
@@ -326,6 +406,7 @@ export async function runDeviceChecks(
     checkPositionStagnation,
     checkPositionRandomWalk,
     checkDekkerDiagnostic,
+    checkFft,
   ]) {
     try {
       checks.push(await run(device));
