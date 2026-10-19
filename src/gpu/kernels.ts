@@ -25,6 +25,8 @@ import pmeSpread from "./kernels/pme.wgsl?raw";
 import pmeGrid from "./kernels/pme-grid.wgsl?raw";
 import pmeConvolve from "./kernels/pme-convolve.wgsl?raw";
 import pmeInterpolate from "./kernels/pme-interpolate.wgsl?raw";
+import settle from "./kernels/settle.wgsl?raw";
+import shake from "./kernels/shake.wgsl?raw";
 
 export const SHARED = { fixed64, accumulate, erfc } as const;
 
@@ -79,3 +81,9 @@ export const PME_CONVOLVE = composeKernel(pmeConvolve);
 
 /** Interpolating the convolved potential back onto the atoms as forces. */
 export const PME_INTERPOLATE = composeKernel(pmeInterpolate);
+
+/** SETTLE, analytic, one thread per rigid three-atom cluster. */
+export const SETTLE = composeKernel(settle);
+
+/** SHAKE and RATTLE, iterative, one thread per cluster. */
+export const SHAKE = composeKernel(shake);

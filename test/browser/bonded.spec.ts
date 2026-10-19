@@ -20,7 +20,7 @@ for (const name of ["1L2Y", "3HTB"]) {
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
     await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirValidation !== undefined, null, {
+    await page.waitForFunction(() => window.__mirConstraints !== undefined, null, {
       timeout: 300_000,
     });
     const report = await page.evaluate(() => window.__mirValidation);
@@ -40,6 +40,12 @@ for (const name of ["1L2Y", "3HTB"]) {
     expect(checked.ok).toBe(true);
     expect(consoleErrors).toEqual([]);
 
+    const constraints = await page.evaluate(() => window.__mirConstraints);
+    if (constraints !== undefined && "error" in constraints) {
+      throw new Error(constraints.error);
+    }
+    expect(JSON.stringify(constraints, null, 1)).toContain('"ok": true');
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -50,7 +56,11 @@ for (const name of ["1L2Y", "3HTB"]) {
               `  vs OpenMM ${c.energyVsOpenmmRelativeError?.toExponential(2) ?? "—"}` +
               `  force rel RMS ${c.forceRelativeRms.toExponential(2)}`,
           )
-          .join("\n"),
+          .join("\n") +
+        `\n  constraints            ${constraints!.settleClusters} SETTLE + ` +
+        `${constraints!.iterativeClusters} iterative` +
+        `  vs reference ${constraints!.worstDifference.toExponential(2)} nm` +
+        `  constraint error ${constraints!.deviceWorstRelativeError.toExponential(2)}`,
     );
   });
 }

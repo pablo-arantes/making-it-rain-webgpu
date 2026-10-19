@@ -31,12 +31,55 @@ export interface SettleCluster {
   readonly distance2: number;
 }
 
+/**
+ * A connected group of constraints for the iterative solver.
+ *
+ * Grouped because the GPU kernel gives one thread a whole cluster: constraints
+ * in different clusters never interact, so a thread can iterate its own to
+ * convergence in registers, with no atomics and no cross-thread coupling.
+ * Measured on both fixtures, the largest is 4 atoms and 3 constraints.
+ */
+export interface IterativeCluster {
+  /** Indices into the system's constraint list. */
+  readonly constraints: readonly number[];
+  readonly atoms: readonly number[];
+}
+
 export interface ConstraintSplit {
   readonly settle: readonly SettleCluster[];
   /** Indices into the system's constraint list, for the iterative solver. */
   readonly iterative: Int32Array;
+  /** The same constraints, grouped into connected clusters. */
+  readonly iterativeClusters: readonly IterativeCluster[];
+  /** The largest cluster, which sets the kernel's fixed array sizes. */
+  readonly largestCluster: { readonly atoms: number; readonly constraints: number };
   /** True for any atom handled by SETTLE. */
   readonly isSettleAtom: Uint8Array;
+}
+
+/**
+ * What a single GPU thread can hold.
+ *
+ * `constraints=HBonds` with `rigidWater=True` produces nothing above 4 atoms and
+ * 3 constraints, and `HAngles` would reach 6 constraints on a methyl group.
+ * `AllBonds` would put a whole molecule in one cluster, which this kernel
+ * cannot do -- so it is refused by name rather than silently truncated.
+ */
+export const MAX_CLUSTER_ATOMS = 8;
+export const MAX_CLUSTER_CONSTRAINTS = 8;
+
+export class ClusterTooLarge extends Error {
+  constructor(atoms: number, constraints: number) {
+    super(
+      `a constraint cluster has ${atoms} atoms and ${constraints} constraints, ` +
+        `beyond the ${MAX_CLUSTER_ATOMS} and ${MAX_CLUSTER_CONSTRAINTS} one GPU ` +
+        "thread holds. Systems built with constraints=HBonds or HAngles stay " +
+        "well inside that; AllBonds puts a whole molecule in one cluster and is " +
+        "not supported. Rebuild with constraints=HBonds, or run on the CPU " +
+        "reference.",
+    );
+    this.name = "ClusterTooLarge";
+  }
 }
 
 /**
@@ -147,5 +190,60 @@ export function splitConstraints(system: OpenMMSystem): ConstraintSplit {
     if (isSettleAtom[p1] === 1) continue;
     iterative.push(c);
   }
-  return { settle, iterative: Int32Array.from(iterative), isSettleAtom };
+
+  // Group what is left into connected components, by union-find over the atoms
+  // the remaining constraints join.
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let root = parent.get(x) ?? x;
+    while (root !== (parent.get(root) ?? root)) root = parent.get(root) ?? root;
+    let walk = x;
+    while (walk !== root) {
+      const next = parent.get(walk) ?? walk;
+      parent.set(walk, root);
+      walk = next;
+    }
+    return root;
+  };
+  for (const c of iterative) {
+    const a = find(system.constraintP1[c] as number);
+    const b = find(system.constraintP2[c] as number);
+    if (a !== b) parent.set(a, b);
+  }
+  const grouped = new Map<number, { constraints: number[]; atoms: Set<number> }>();
+  for (const c of iterative) {
+    const root = find(system.constraintP1[c] as number);
+    let group = grouped.get(root);
+    if (group === undefined) {
+      group = { constraints: [], atoms: new Set() };
+      grouped.set(root, group);
+    }
+    group.constraints.push(c);
+    group.atoms.add(system.constraintP1[c] as number);
+    group.atoms.add(system.constraintP2[c] as number);
+  }
+
+  const iterativeClusters: IterativeCluster[] = [];
+  let largestAtoms = 0;
+  let largestConstraints = 0;
+  for (const group of grouped.values()) {
+    const atoms = [...group.atoms].sort((a, b) => a - b);
+    if (
+      atoms.length > MAX_CLUSTER_ATOMS ||
+      group.constraints.length > MAX_CLUSTER_CONSTRAINTS
+    ) {
+      throw new ClusterTooLarge(atoms.length, group.constraints.length);
+    }
+    largestAtoms = Math.max(largestAtoms, atoms.length);
+    largestConstraints = Math.max(largestConstraints, group.constraints.length);
+    iterativeClusters.push({ constraints: group.constraints, atoms });
+  }
+
+  return {
+    settle,
+    iterative: Int32Array.from(iterative),
+    iterativeClusters,
+    largestCluster: { atoms: largestAtoms, constraints: largestConstraints },
+    isSettleAtom,
+  };
 }

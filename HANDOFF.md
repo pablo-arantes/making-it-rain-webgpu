@@ -46,6 +46,13 @@ Done in Phase 1 so far:
 - **Two deterministic trajectory oracles**, velocity Verlet and LFMiddle at
   zero friction, with `tools/capture_constraints.py`, carrying positions,
   velocities and forces per frame.
+- **A buffer pool** (`src/gpu/allocator.ts`), the single owner `AGENTS.md`
+  requires, with named buffers that persist and leases that get reused. Tested
+  against a stub device, so it is covered in the lane that runs everywhere.
+- **The constraint kernels**: SETTLE analytically and SHAKE/RATTLE iteratively,
+  one thread per cluster, no atomics. Within 8.7e-8 nm of the reference on 1L2Y
+  and 9.6e-8 on 3HTB, leaving the constraints satisfied to 1.0e-6 -- exactly the
+  tolerance they were asked for.
 - **Both integrators, SETTLE, SHAKE/RATTLE and centre-of-mass removal**, all in
   the reference and transcribed from OpenMM. A step reproduces OpenMM's to
   **5.7e-9 nm** on both fixtures -- f64 round-off through the constraint solve --
@@ -57,15 +64,14 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: the **constraint and integrator kernels** (the
-references are done, and the measured cluster shapes -- at most 4 atoms and 3
-constraints -- mean one thread can hold a whole cluster), the **step loop** with
-resident buffers, the **barostat**, and the **minimiser**. After those, Phase
-1's gates: NVE drift at 2 fs, and a measured ns/day.
+Phase 1 steps still to do: the **integrator kernel** (including
+centre-of-mass removal, which needs a reduction), the **step loop** on resident
+buffers, the **barostat**, and the **minimiser**. After those, Phase 1's gates:
+NVE drift at 2 fs, and a measured ns/day.
 
-Everything the physics needs now exists in `src/reference/`, verified against
-OpenMM: a step reproduces its trajectory to 5.7e-9 nm. What remains is moving
-it to the GPU and wrapping a loop around it.
+Everything the physics needs exists in `src/reference/`, verified against
+OpenMM to 5.7e-9 nm a step, and every force plus the constraints now also run
+on the GPU. What remains is the integrator kernel and the loop.
 
 ## Open, in the order they are worth doing
 
@@ -77,6 +83,20 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### RATTLE on the GPU still goes through SHAKE for water
+The reference solves a rigid triangle's velocity constraints with SETTLE's exact
+3x3 solve; the kernel currently sends every cluster, triangles included, through
+the iterative path. Both converge to the same condition and the difference is
+inside the tolerance, but it is an avoidable discrepancy and the exact solve is
+about twenty lines of WGSL.
+
+### A reserved-word scan now guards the kernels
+WGSL reserves a long list of words it does not yet use. Tint enforces only some
+of them -- `reference` compiles, `from` and `target` do not -- so this is
+precisely the class of bug that passes on one backend and fails on the next.
+`test/wgsl-reserved.test.ts` scans every kernel, needs no GPU, and went in after
+two of these each cost a round trip.
 
 ### The kinetic-energy convention is per integrator
 `VerletIntegrator` reports kinetic energy from velocities shifted by +dt/2 and
