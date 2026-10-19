@@ -1,0 +1,177 @@
+{
+ "host": {
+  "platform": "macOS-14.5-arm64-arm-64bit",
+  "processor": "arm"
+ },
+ "openmm": "8.4.0.dev-4768436",
+ "fixture": "/tmp/mir_fixtures/1L2Y/system.xml",
+ "available_platforms": [
+  "Reference",
+  "CPU",
+  "OpenCL"
+ ],
+ "equilibration": {
+  "platform": "OpenCL",
+  "picoseconds": 20.0,
+  "seconds": 8.9,
+  "potential_energy_kJ_mol": -30533.647679689253
+ },
+ "force_groups": [
+  "HarmonicBondForce",
+  "PeriodicTorsionForce",
+  "NonbondedForce",
+  "CMMotionRemover",
+  "HarmonicAngleForce",
+  "NonbondedForce[reciprocal]"
+ ],
+ "reference": {
+  "energies": {
+   "0:HarmonicBondForce": 281.2534104386199,
+   "1:PeriodicTorsionForce": 1053.9310875217973,
+   "2:NonbondedForce": 121580.02220656915,
+   "3:CMMotionRemover": 0.0,
+   "4:HarmonicAngleForce": 594.3072699886238,
+   "5:NonbondedForce[reciprocal]": -154043.16740344145
+  },
+  "total": -30533.65342892324,
+  "force_rms_kJ_mol_nm": 1057.6310004687775
+ },
+ "platforms": {
+  "OpenCL/single": {
+   "device": "Apple M3 Pro",
+   "single_point_vs_reference": {
+    "energy_abs_kJ_mol": {
+     "0:HarmonicBondForce": 0.0002516707551194486,
+     "1:PeriodicTorsionForce": 3.7867964692850364e-06,
+     "2:NonbondedForce": -0.006063931476091966,
+     "3:CMMotionRemover": 0.0,
+     "4:HarmonicAngleForce": 0.000568451317576546,
+     "5:NonbondedForce[reciprocal]": 0.0031369556090794504
+    },
+    "energy_rel": {
+     "0:HarmonicBondForce": 8.948185009631115e-07,
+     "1:PeriodicTorsionForce": 3.593020942374203e-09,
+     "2:NonbondedForce": -4.9876051723276645e-08,
+     "3:CMMotionRemover": null,
+     "4:HarmonicAngleForce": 9.564939658022813e-07,
+     "5:NonbondedForce[reciprocal]": 2.0364133391672706e-08
+    },
+    "total_abs_kJ_mol": -0.0019411957000556868,
+    "total_rel": -6.357561189244632e-08,
+    "force_rms_error_kJ_mol_nm": 0.011106619898487304,
+    "force_max_error_kJ_mol_nm": 0.1540858598629826,
+    "force_rel_rms": 1.0501412963088711e-05,
+    "force_rms_reference_kJ_mol_nm": 1057.6310004687775,
+    "worst_atom": 633,
+    "worst_atom_reference_force_kJ_mol_nm": 892.654980276981
+   },
+   "nve": {
+    "steps": 10000,
+    "timestep_fs": 2,
+    "atoms": 2349,
+    "drift_kJ_mol_per_ns_per_atom": -0.1684336031524916,
+    "max_excursion_kJ_mol_per_atom": 0.0041419719827586205,
+    "total_energy_series_kJ_mol": [
+     -24354.8056,
+     -24355.35,
+     -24353.4701,
+     -24354.2143,
+     -24348.0796,
+     -24357.4005,
+     -24358.9673,
+     -24356.5085,
+     -24360.5366,
+     -24360.881,
+     -24358.434,
+     -24359.4435,
+     -24358.4439,
+     -24363.7982,
+     -24364.5351,
+     -24363.5687,
+     -24360.8103,
+     -24362.07,
+     -24356.6193,
+     -24355.7284
+    ]
+   },
+   "speed": {
+    "steps": 2000,
+    "seconds": 0.76,
+    "ns_per_day": 457.0
+   }
+  },
+  "CPU": {
+   "device": "arm",
+   "single_point_vs_reference": {
+    "energy_abs_kJ_mol": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": 2.2737367544323206e-12,
+     "2:NonbondedForce": -0.004619132203515619,
+     "3:CMMotionRemover": 0.0,
+     "4:HarmonicAngleForce": -1.1368683772161603e-13,
+     "5:NonbondedForce[reciprocal]": 3.1833769753575325e-07
+    },
+    "energy_rel": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": 2.1573865515047683e-15,
+     "2:NonbondedForce": -3.799252640098663e-08,
+     "3:CMMotionRemover": null,
+     "4:HarmonicAngleForce": -1.9129302881284324e-16,
+     "5:NonbondedForce[reciprocal]": 2.0665486363443947e-12
+    },
+    "total_abs_kJ_mol": -0.0046188138985598926,
+    "total_rel": -1.512696117191363e-07,
+    "force_rms_error_kJ_mol_nm": 0.0009119653598678678,
+    "force_max_error_kJ_mol_nm": 0.00643739918681647,
+    "force_rel_rms": 8.62271774809602e-07,
+    "force_rms_reference_kJ_mol_nm": 1057.6310004687775,
+    "worst_atom": 952,
+    "worst_atom_reference_force_kJ_mol_nm": 2259.737621050794
+   },
+   "nve": {
+    "steps": 10000,
+    "timestep_fs": 2,
+    "atoms": 2349,
+    "drift_kJ_mol_per_ns_per_atom": -0.12311800438280616,
+    "max_excursion_kJ_mol_per_atom": 0.0029932461167800073,
+    "total_energy_series_kJ_mol": [
+     -24354.8072,
+     -24354.4989,
+     -24357.0004,
+     -24349.7532,
+     -24357.4415,
+     -24359.8573,
+     -24357.7161,
+     -24360.2167,
+     -24356.7371,
+     -24361.6032,
+     -24356.8447,
+     -24360.8039,
+     -24360.6649,
+     -24359.5213,
+     -24356.2466,
+     -24358.8109,
+     -24359.496,
+     -24361.8383,
+     -24360.2017,
+     -24359.2061
+    ]
+   },
+   "speed": {
+    "steps": 2000,
+    "seconds": 3.32,
+    "ns_per_day": 104.1
+   }
+  }
+ },
+ "proposed_thresholds": {
+  "basis": "OpenCL/single",
+  "basis_is_mixed_precision": false,
+  "device": "Apple M3 Pro",
+  "force_rel_rms": 1.0501412963088711e-05,
+  "force_max_error_kJ_mol_nm": 0.1540858598629826,
+  "total_energy_abs_kJ_mol": 0.0019411957000556868,
+  "nve_drift_kJ_mol_per_ns_per_atom": 0.1684336031524916,
+  "note": "the WebGPU engine must not exceed these by more than the factor recorded in AGENTS.md; raising the factor is a reviewed change. A single-precision basis is weaker than the intended mixed-precision one and must be replaced by a CUDA/mixed run."
+ }
+}

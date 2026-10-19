@@ -11,3 +11,5 @@ committed -- regenerate them with `tools/build_reference_system.py`.
 | `1L2Y-facts.json` | `tools/build_reference_system.py --pdb-id 1L2Y` | same |
 | `restraint-mask.json` | `tools/probe_restraint_mask.py` | same |
 | `host-timings.json` | `tools/bench_reference_host.py` | Apple M3 Pro (12 CPU cores, 14 GPU cores), 18 GB |
+| `preparation-determinism.json` | `tools/probe_preparation_determinism.py` | same |
+| `calibration-M3Pro-opencl.json` | `tools/calibrate_thresholds.py` | same — **provisional**: this host has no mixed-precision GPU platform, so the basis is OpenCL single. Replaced by a Colab T4 run |

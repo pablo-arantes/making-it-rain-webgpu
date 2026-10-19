@@ -17,6 +17,7 @@ server, and your structure is never uploaded.
 | [docs/PLAN.md](docs/PLAN.md) | what to build, in what order, and how each piece is held to the notebook |
 | [docs/NOTEBOOK_PARITY.md](docs/NOTEBOOK_PARITY.md) | every field of `reference/Uni_Dock+MD.ipynb`, what it does, and where it lands |
 | [docs/PRIOR_ART.md](docs/PRIOR_ART.md) | what already exists for this in a browser, its state, and its license |
+| [docs/DEVIATIONS.md](docs/DEVIATIONS.md) | every place the app will differ from the notebook, and why |
 | [docs/measurements/](docs/measurements/) | the numbers the documents quote, and the commands that produced them |
 
 ## Scope

@@ -17,7 +17,7 @@ build, in what order, and how each piece is held to the notebook.
 | How does system building run in the browser? | **Hybrid: TypeScript reimplementation in production, real OpenMM (WebAssembly, Reference platform) as the oracle** — in CI, and behind a "verify this system" button in the UI | The Python stack is blocked in four independent places; the TS subset is ~5000 lines and testable term by term; and a 906 KB WASM OpenMM gives us its double-precision answer in Node *and* in the tab |
 | What is the engine's input? | `system.xml` + `state.xml` (OpenMM serialisation) + a topology for output | The notebook and the browser then produce the same artefact, so the notebook is the oracle, and anyone's existing OpenMM system runs too |
 | Which forces? | `HarmonicBondForce`, `HarmonicAngleForce`, `PeriodicTorsionForce`, `NonbondedForce` (PME, exceptions, dispersion correction), `CMMotionRemover`, `MonteCarloBarostat`, the restraint `CustomExternalForce`, and PDBFixer's one soft-core `CustomNonbondedForce` | **Measured**: both the GAFF and the OpenFF/SMIRNOFF route produce exactly these five force types for 3HTB+JZ4 — no virtual sites, no switching function, no other custom force |
-| Ligand parameters | OpenFF (SMIRNOFF) by default, typed with RDKit WASM SMIRKS matching; GAFF by upload only | `antechamber` cannot run in a tab; SMIRKS matching can |
+| Ligand parameters | **`openff-2.3.0` (Sage 2.3.0) by default**, typed with RDKit WASM SMIRKS matching; GAFF kept as an option but **upload-only** | Verified: `GAFFTemplateGenerator` shells out to `antechamber` for **atom typing**, not just charging, and no GAFF SMIRNOFF port exists — see [§Ligand force field](#ligand-force-field-and-charges) |
 | Ligand charges | **OpenFF NAGL exported to ONNX**, run on ONNX Runtime Web; Gasteiger only as a labelled fallback | AM1-BCC needs `sqm`. NAGL is 0.016 e from OpenEye AM1-BCC where AmberTools itself is 0.034 e |
 | Force accumulation | **Fixed point**, with gather instead of atomics wherever a gather exists; emulated 64-bit (carry-propagating) atomics only where it does not | Fixed-point accumulation is *exact* and order-independent, which is what makes a 1.5-million-kJ/mol cancellation survivable and a run bit-reproducible |
 | Positions | **Double-single** (two f32, hi + lo) | A 1e-6 constraint tolerance on a 0.1 nm bond is 1e-7 nm; f32 at a 6.5 nm coordinate has a 3.9e-7 nm ulp, so the constraint cannot be satisfied in plain f32 |
@@ -123,10 +123,45 @@ when the template does not match are in [§Q3](#q3-how-reliable-is-ccd-based-bon
 
 ### Ligand force field and charges
 
+**Default: `openff-2.3.0` (Sage 2.3.0).** Decided; it is also the release NAGL's
+authors recommend pairing their charges with, so the default charge method and
+the default force field agree rather than being mixed across generations.
+
 `openff-*` and `smirnoff99Frosst-*` run in the browser: SMIRKS matching is what
-RDKit WASM already does well. The current Sage releases are offered alongside
-the notebook's list. `gaff-*` is **upload only** — `antechamber` cannot run in a
-tab — and the UI says so where the option would be.
+RDKit WASM already does well. Both the notebook's list and the current releases
+are offered — `openmmforcefields` 0.15.1 now ships `openff-2.1.x`, `2.2.x` and
+`2.3.0`, none of which existed when the notebook's list was written.
+
+**GAFF stays an option, and in the browser it is upload-only. This was checked
+rather than assumed**, three ways:
+
+1. `openmmforcefields.generators.GAFFTemplateGenerator` builds a shell command
+   and calls it: `antechamber -i … -fi …` then
+   `parmchk2 -i out.mol2 -f mol2 -p gaff.dat …`. Its own comment at the call
+   site reads *"Run antechamber without charging (which is done separately)"* —
+   so **antechamber is required for atom typing**, and supplying charges does
+   not remove the dependency. `sqm` is only the charge half.
+2. `openff-forcefields` ships 73 `.offxml` files and **none** of them is GAFF.
+   `smirnoff99Frosst` descends from parm99 and parm@Frosst, not from GAFF.
+3. OpenFF maintainers treat a complete GAFF→SMIRNOFF port as an open problem,
+   and note that the GAFF→Foyer attempt did not reach equivalence.
+   `rsdefever/antefoyer` has a SMARTS-based GAFF path, but in Foyer XML, not
+   SMIRNOFF, and unvalidated against antechamber.
+
+So browser-native GAFF means reimplementing antechamber's `ATOMTYPE.DEF` rule
+engine and validating it against antechamber on a few thousand ligands. That is
+its own project with its own parity risk, and it is **not** a Phase 4
+deliverable; it is a flagged research task. Until then GAFF works by uploading
+parameters made with AmberTools (or a complete `system.xml`/`prmtop`), and the
+UI says exactly that where the option appears. Versions offered rise to
+`gaff-2.2.20`, which is newer than the notebook's `gaff-2.11`.
+
+**A third option worth offering: `espaloma-0.3.2`**, which `openmmforcefields`
+0.15.1 already exposes through `EspalomaTemplateGenerator`. Espaloma is a graph
+neural network that predicts the valence parameters *and* the charges from the
+molecular graph — no antechamber, no SMARTS, no atom typing at all — so it is
+the most browser-native of the three, over the same ONNX path as NAGL. It is a
+Phase 4 stretch item, gated against the Python generator like everything else.
 
 Charges are NAGL through ONNX Runtime Web, with the method and model version in
 the UI and in `run.json`. Gasteiger exists as a labelled fallback that prints a
@@ -298,12 +333,29 @@ committed fixture, from `measurements/3HTB-JZ4-facts.json`:
 
 Acceptance: WebGPU against Reference no worse than OpenMM `CUDA` mixed
 precision against Reference, within a small factor. Those thresholds are
-**calibrated, not guessed** — `tools/calibrate_thresholds.py` runs the same
-fixtures on CUDA mixed, CUDA double, OpenCL mixed and CPU, and the numbers land
-in `AGENTS.md` with the machine that produced them. This machine has no usable
-GPU platform for OpenMM (`Reference`, `CPU`, `OpenCL` are listed, and OpenCL
-reports "No compatible OpenCL platform is available"), so the calibration runs
-in Colab, which is also where the notebook runs.
+**calibrated, not guessed** — `tools/calibrate_thresholds.py` minimises and runs
+20 ps of NVT first (measured at the fixture's raw starting coordinates, the
+relative force error says more about the input structure than about the
+platform), then compares every platform and precision this host offers against
+the double-precision Reference.
+
+Provisional numbers, equilibrated 1L2Y (`measurements/calibration-M3Pro-opencl.json`):
+
+| basis | force rel. RMS vs Reference | total energy error | NVE drift at 2 fs |
+| --- | ---: | ---: | ---: |
+| OpenCL single, Apple M3 Pro | 1.05e-05 | −0.0019 kJ/mol | −0.168 kJ/mol/ns/atom |
+| CPU, double | 8.6e-07 | −0.0046 kJ/mol | −0.123 kJ/mol/ns/atom |
+
+Two things worth reading off that table. **A legitimate single-precision
+implementation lands near 1e-5 relative force error** — that is the floor, not
+1e-7, and it is what our engine should be measured against. And **NVE drift is
+mostly algorithmic, not precision**: single precision adds about 40% over
+double, so a drift far above ~0.17 kJ/mol/ns/atom means a bug, not rounding.
+
+These are provisional because the basis is single, not mixed, precision. The
+authoritative set comes from a **Colab T4** run of the same script — Pablo's
+machine for it — since this Mac's OpenMM has no mixed-precision GPU platform
+(`OpenCL/mixed` reports "No compatible OpenCL platform is available").
 
 A TypeScript double-precision reference implementation in `src/reference/` sits
 between the two: it is the independent implementation each WGSL kernel is
@@ -440,6 +492,11 @@ anions, and sulfur/phosphorus chemistry, and NAGL's authors recommend pairing it
 with Sage 2.3.0 rather than swapping charge backends under an older force field —
 which is a reason to offer current Sage, not only the notebook's list.
 
+Sage 2.3.0 being the chosen default is what makes this coherent: NAGL's authors
+recommend pairing AshGC with Sage 2.3.0 rather than swapping charge backends
+under an older force field, so the default force field and the default charge
+method now come from the same generation.
+
 This is measured per test ligand before NAGL becomes a default, published in the
 report, and stated in the UI and `run.json`. Alternatives, in order: an uploaded
 SDF carrying charges; uploaded AmberTools parameters; a charge set computed in a
@@ -512,25 +569,31 @@ tensor. The GPU panel computes and shows this ceiling before a run starts.
 8–24 GB discrete GPU, ~100k–200k on an M-series with unified memory,
 ~30k–60k on a typical integrated laptop GPU.
 
-*ns/day for DHFR (23.5k atoms, 2 fs, PME).* These are **projections**, and the
-only measurement on the table is the anchor below.
+*ns/day.* There is now a **measured** native-GPU anchor, not just a projection.
+OpenMM's OpenCL platform does work on this machine in single precision (its
+`mixed` mode does not), so the 26,078-atom 3HTB system at 2 fs with PME runs at:
 
-| | projected ns/day |
+| platform on this host | ns/day, 26,078 atoms | source |
+| --- | ---: | --- |
+| **Apple M3 Pro GPU**, OpenMM OpenCL single | **112.8** | `measurements/calibration-M3Pro-opencl.json` |
+| Apple M3 Pro CPU (12 cores), OpenMM CPU | 16.0 | same |
+
+DHFR is 23.5k atoms, so those numbers carry over almost directly. OpenCL on
+Apple is a deprecated backend that nobody tunes, so 112.8 ns/day is a floor for
+what the hardware can do, not a ceiling.
+
+From that anchor, WebGPU projections at 1.5–3× off native for bandwidth-bound
+kernels, plus the barostat readbacks and the browser's submission granularity:
+
+| | projected ns/day for DHFR |
 | --- | --- |
 | Recent discrete NVIDIA | 100–400 |
-| Apple M-series | 25–80 |
+| **Apple M-series (M3 Pro class)** | **35–75** |
 | Typical integrated laptop GPU | 5–20 |
 
-The basis: OpenMM's CUDA platform on a current discrete card is in the
-several-hundred ns/day range for DHFR, and WebGPU compute typically lands within
-1.5–3× of native for bandwidth-bound kernels, with the barostat's readbacks and
-the browser's submission granularity costing more on top. **The one real
-number:** OpenMM's CPU platform on this M3 Pro does **16.4 ns/day** on the
-26,078-atom 3HTB system at 2 fs (`measurements/host-timings.json`). A 14-core
-M3 Pro GPU should beat its own CPU by a few times on this workload, which is
-where the 25–80 range comes from. Replace every row of that table with
-`npm run bench` output at the end of Phase 1, and never present it as a
-cross-device claim.
+The NVIDIA row is still a projection off OpenMM's published CUDA figures and
+gets replaced by the Colab T4 calibration run plus `npm run bench` at the end of
+Phase 1. None of this is a cross-device claim.
 
 ### Q6 — What should not be ported
 
@@ -577,20 +640,30 @@ are both wrong.
 
 ---
 
-## What I need from Pablo
+## Decisions taken
 
-1. **The restraint mask.** Reproduce the notebook's mask as written (hydrogens
-   restrained, histidine free) or restrain heavy atoms as the comment says, or
-   ship both with heavy atoms as the default? The plan assumes both-with-heavy-default.
-   See [NOTEBOOK_PARITY.md §7](NOTEBOOK_PARITY.md#7-the-equilibration-restraints-are-not-heavy-atom-restraints).
-2. **Ligand force field default.** The notebook defaults to `gaff-2.11`, which
-   cannot run in a browser. Default to a current OpenFF Sage release, or to the
-   closest `openff-*` in the notebook's list?
-3. **Whether to contact Rafal Wiewiora (Molarium)** before Phase 1 about the
-   OpenMM-WASM build, and whether to push the two emscripten patches to
-   [openmm#5422](https://github.com/openmm/openmm/issues/5422) jointly.
-4. **A Colab machine for threshold calibration**, since this Mac has no OpenMM
-   GPU platform. The acceptance thresholds have to come from a real
-   CUDA-mixed-vs-Reference comparison.
-5. **Confirmation of the phase order** — in particular that Phase 2 shipping
-   before any browser system building is the right first release.
+Settled by Pablo on 2026-10-19; `docs/DEVIATIONS.md` carries the consequences.
+
+| | Decision |
+| --- | --- |
+| Restraint mask | **Ship both**, defaulting to heavy atoms (`!(@H*) & …`), with the notebook's own mask available and recorded in `run.json` |
+| Ligand force field | Default **`openff-2.3.0`**. GAFF kept as an option; verified that it needs `antechamber` for atom typing, so in the browser it is upload-only, and browser-native GAFF typing is a flagged research task rather than a Phase 4 deliverable |
+| Molarium | No contact needed. The Apache-2.0 build scripts are used under their license, with attribution in `THIRD_PARTY.md` |
+| Threshold calibration | **Colab T4**, via `tools/calibrate_thresholds.py`. The committed M3 Pro numbers are provisional until that run replaces them |
+| Phase order | Confirmed. Phase 2 — upload an OpenMM system and run it — is the first release |
+
+## Next
+
+Phase 0 and Phase 1, in that order, unless told otherwise:
+
+1. Phase 0 skeleton — Vite, TypeScript strict, `AGENTS.md` with the calibrated
+   thresholds, `CLAUDE.md`, `THIRD_PARTY.md`, the five test lanes wired up
+   empty, the Pages workflow.
+2. Phase 1 engine core, built against the committed fixtures in the order
+   bonded → direct space → PME → constraints → integrator → barostat, with the
+   TypeScript double-precision reference written first so each WGSL kernel has
+   something independent to be differentially tested against.
+
+The one thing worth doing before Phase 1: run `tools/calibrate_thresholds.py`
+on the Colab T4 for 1L2Y, 3HTB and DHFR, so Phase 1's gates are real numbers
+from the start rather than placeholders.

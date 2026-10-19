@@ -63,3 +63,33 @@ python tools/bench_reference_host.py fixtures/3HTB/system.xml \
 * `compare_charges.py` — NAGL against AmberTools AM1-BCC per atom.
 * `capture_analysis_reference.py` — pytraj/MDAnalysis/ProLIF results on a
   committed trajectory, as the analysis gates.
+
+## Threshold calibration on Colab
+
+The engine's acceptance thresholds are "no worse than OpenMM mixed precision,
+within a recorded factor". That needs a real GPU. On a Colab GPU runtime:
+
+```python
+!pip -q install condacolab
+import condacolab; condacolab.install()          # restarts the kernel
+```
+
+```python
+!mamba install -q -y -c conda-forge openmm
+!git clone -q https://github.com/pablo-arantes/making-it-rain-webgpu
+%cd making-it-rain-webgpu
+# fixtures are regenerated, not committed; build them first or upload them
+!python tools/calibrate_thresholds.py fixtures/3HTB/system.xml \
+    fixtures/3HTB/state.xml --out docs/measurements/calibration-T4.json
+```
+
+It minimises and runs 20 ps of NVT before comparing, because at a fixture's raw
+starting coordinates the relative force error reports on the input structure
+rather than on the platform. Then, for every platform and precision the host
+offers, against the double-precision Reference: per-force-group energies,
+per-atom force error, NVE drift at 2 fs, and ns/day.
+
+`proposed_thresholds` in the output is what goes into `AGENTS.md`, named with
+the GPU that produced it. A run whose basis is not mixed precision says so and
+is marked provisional — which is the state of the committed M3 Pro numbers,
+since this Mac's `OpenCL/mixed` is unavailable and only `OpenCL/single` works.

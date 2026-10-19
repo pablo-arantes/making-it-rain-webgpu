@@ -65,7 +65,7 @@ boundary is explicit, not to be revisited later.
 | `Ions` | `NaCl` | `NaCl`, `KCl` | `positiveIon='Na+'` or `'K+'`; `negativeIon` is always `Cl-` | P3 |
 | `Concentration` | `0.15` | string, molar | `ionicStrength`; OpenMM adds neutralising counter-ions first, then ion pairs for the requested strength | P3 |
 | `pH` | `7.4` | string | `Modeller.addHydrogens(forcefield, pH=…)` | P3 — 🔴 no effect on this path, see finding 1 |
-| `Ligand_Force_field` | `gaff-2.11` | 5 `gaff-*` + 11 `smirnoff99Frosst-*` + 13 `openff-*` | prefix selects `GAFFTemplateGenerator` or `SMIRNOFFTemplateGenerator`; both charge with AM1-BCC through AmberTools `sqm` | P4 — the `openff-*` and `smirnoff99Frosst-*` families run in the browser with NAGL charges; `gaff-*` needs `antechamber`, so it is upload-only. See [PLAN.md](PLAN.md#ligand-force-field-and-charges) |
+| `Ligand_Force_field` | `gaff-2.11` | 5 `gaff-*` + 11 `smirnoff99Frosst-*` + 13 `openff-*` | prefix selects `GAFFTemplateGenerator` or `SMIRNOFFTemplateGenerator`; both charge with AM1-BCC through AmberTools `sqm`, and the GAFF path additionally needs `antechamber` for **atom typing** | P4 — **the app's default becomes `openff-2.3.0`**, since `gaff-2.11` cannot run in a tab. The `openff-*` and `smirnoff99Frosst-*` families run in the browser with NAGL charges; `gaff-*` is kept as an option but upload-only. The notebook's list is also stale: `openff-2.1.x`/`2.2.x`/`2.3.0` and `gaff-2.2.20` now exist. See [PLAN.md](PLAN.md#ligand-force-field-and-charges) |
 | *(implicit)* | | | `Modeller.add(ligand)` → `addHydrogens` → `addSolvent` | P3/P4 |
 | *(implicit)* | | | `positions + [30, 30, 30] Å` | P3 — 🔴 cosmetic, see finding 5 |
 | *(implicit)* | | | `PDBFile.writeFile` → `system.pdb` | P3 |
@@ -289,16 +289,14 @@ of the protein is held at 700 kJ/mol/nm² is not, and it scales with the
 histidine content of the structure (one of 163 residues in 3HTB, far more in a
 His-tagged construct).
 
-**This needs Pablo's decision**, and it is the one item in this document that
-changes a result rather than a label:
-
-* **(a) reproduce the mask as written** — bit-comparable with every run anyone
-  has already published from this notebook;
-* **(b) restrain heavy atoms as the comment says** (`!(@H*) & …`) — what the
-  protocol means, and what the Making it Rain papers describe;
-* **(c) offer both**, defaulting to (b), with the choice recorded in `run.json`.
-
-The plan assumes **(c)** until told otherwise.
+**Decided (2026-10-19): offer both, defaulting to heavy atoms.** The app's
+default is the heavy-atom mask `!(@H*) & !(:HOH) & !(:NA) & !(:CL) & !(:K)`,
+which is what the comment, the protocol and the Making it Rain papers describe.
+The notebook's own mask stays selectable as *"Making it Rain notebook
+(hydrogens restrained, histidine free)"*, so a run can still be made
+comparable with anything already published from the notebook. Which one was
+used goes in `run.json` and on the equilibration panel. Recorded in
+[DEVIATIONS.md](DEVIATIONS.md).
 
 ### 8. The PME grid depends on the platform, so "the same grid" is a choice
 
