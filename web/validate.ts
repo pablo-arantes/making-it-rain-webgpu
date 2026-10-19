@@ -17,7 +17,7 @@ import {
   type IntegratorReport,
   type TrajectoryFrames,
 } from "../src/gpu/validate-integrator.js";
-import { decodeNpy } from "../src/analysis/npy.js";
+import { checksum, decodeNpy } from "../src/analysis/npy.js";
 import { validateRandom, type RandomComparison } from "../src/gpu/validate-random.js";
 import { validateCellList, type CellListComparison } from "../src/gpu/validate-cell-list.js";
 
@@ -70,7 +70,8 @@ async function fetchTrajectory(
   name: string,
   label: string,
   steps: number,
-): Promise<TrajectoryFrames> {
+): Promise<TrajectoryFrames & { checksums: Record<string, number> }> {
+  const sums: Record<string, number> = {};
   const load = async (kind: string): Promise<Float64Array> => {
     const file = `trajectory-${label}-${kind}.npy`;
     const response = await fetch(`/fixtures/${name}/${file}`);
@@ -80,14 +81,20 @@ async function fetchTrajectory(
           "Capture it with tools/capture_constraints.py.",
       );
     }
-    return decodeNpy(await response.arrayBuffer(), file).data;
+    const bytes = await response.arrayBuffer();
+    // Checksummed because one of these arrived corrupt once: a single wrong f64
+    // made a step disagree with OpenMM by 0.0167 nm while still matching the
+    // reference, since both had been given the same bad input. Printing the
+    // checksum is what separates that from a physics bug.
+    sums[`${label}/${kind}`] = checksum(bytes);
+    return decodeNpy(bytes, file).data;
   };
   const [positions, velocities, forces] = await Promise.all([
     load("positions"),
     load("velocities"),
     load("forces"),
   ]);
-  return { steps, positions, velocities, forces };
+  return { steps, positions, velocities, forces, checksums: sums };
 }
 
 function renderIntegrators(report: IntegratorReport): string {

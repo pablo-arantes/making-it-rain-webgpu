@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { checksum } from "../../src/analysis/npy.js";
 
 /**
  * The bonded kernels against OpenMM, in a browser, on both fixtures.
@@ -66,6 +67,22 @@ for (const name of ["1L2Y", "3HTB"]) {
     if (integrators !== undefined && "error" in integrators) {
       throw new Error(integrators.error);
     }
+
+    // The page fetched its trajectory fixtures over HTTP; this process can read
+    // the same files off disk. Comparing checksums is what distinguishes a
+    // kernel that computes the wrong answer from a page that was handed the
+    // wrong input -- a distinction worth having, because one run disagreed with
+    // OpenMM by 0.0167 nm while still matching the reference to 1.1e-7, which
+    // is the signature of a shared bad input and not of a bad kernel.
+    for (const [key, reported] of Object.entries(integrators!.checksums)) {
+      const [label, kind] = key.split("/");
+      const path = `fixtures/${name}/trajectory-${label}-${kind}.npy`;
+      const bytes = readFileSync(path);
+      const onDisk = checksum(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      );
+      expect(reported, `${path} was corrupted in transit to the page`).toBe(onDisk);
+    }
     const failedSteps = integrators!.steps.filter((s) => !s.ok);
     expect(JSON.stringify(failedSteps, null, 1)).toBe("[]");
     // Reported separately from `ok` so a thermostat or reduction failure is not
@@ -118,6 +135,9 @@ for (const name of ["1L2Y", "3HTB"]) {
         `\n  generator              ${randomness!.bitMismatches} bit mismatches` +
         `  worst deviate ${randomness!.worstDeviate.toExponential(2)}` +
         `  at radius ${randomness!.worstRadius.toExponential(2)}` +
+        `\n  fixtures               ${Object.entries(integrators!.checksums)
+          .map(([k, v]) => `${k}=${v.toString(16)}`)
+          .join(" ")}` +
         `\n  reductions             COM ${integrators!.reductions.comVelocityError.toExponential(2)} nm/ps` +
         `  kinetic ${integrators!.reductions.kineticEnergy.toFixed(2)} kJ/mol` +
         `  rel ${integrators!.reductions.kineticEnergyRelativeError.toExponential(2)}`,

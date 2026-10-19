@@ -106,6 +106,22 @@ power-of-two sizes are the obvious next step, and the differential test in
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
 
+### 🟡 One unexplained run, and the instrument that would name it next time
+A single `test:browser` run had 3HTB's LFMiddle step 0.0167 nm from OpenMM --
+while still matching our own f64 reference to 1.07e-7, and with every other
+number unchanged. That combination is the signature of a **shared bad input**:
+the reference is deterministic given its inputs, so if it and the device agree
+and both disagree with OpenMM, what they were handed differed. Five subsequent
+runs were clean and the fixtures' checksums were byte-identical every time, so
+whatever happened was in the transport and not on disk.
+
+It is not reproduced and not explained, so it is not called fixed. What is in
+place is the instrument: the page checksums each trajectory array as it fetches
+it and reports it, and `test/browser/bonded.spec.ts` reads the same files off
+disk and compares. If it recurs, the failure says which file arrived wrong
+instead of looking like a physics regression -- which is the part that cost time
+here, because 0.0167 nm is exactly the size of a plausible bug.
+
 ### An exact accumulator does not make a kernel order-independent
 The forces accumulate in fixed point, so the sum across threads is exact. But
 the pair kernel sums one atom's neighbours in an f32 register before the single

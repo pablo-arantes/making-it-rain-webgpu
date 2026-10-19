@@ -58,3 +58,28 @@ export function decodeNpy(buffer: ArrayBuffer, what = "array"): NpyArray {
   for (let i = 0; i < count; i++) data[i] = view.getFloat64(offset + i * 8, true);
   return { shape, data };
 }
+
+/**
+ * A checksum over an array's raw bytes.
+ *
+ * FNV-1a over the 32-bit words: cheap, order-sensitive, and enough to tell
+ * "this is the file I expected" from "this is nearly the file I expected". It
+ * exists because a trajectory fixture reached the validation page corrupt once
+ * -- one f64 in 642,000 was wrong, which showed up as a step that disagreed
+ * with OpenMM by 0.0167 nm while still agreeing with the reference to 1.1e-7,
+ * because both sides had been handed the same bad input. A difference that size
+ * is indistinguishable from a physics bug until you can show the input changed.
+ */
+export function checksum(buffer: ArrayBuffer | ArrayBufferView): number {
+  const bytes =
+    buffer instanceof ArrayBuffer
+      ? new Uint8Array(buffer)
+      : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i] as number;
+    // FNV prime, 16777619, as shifts so the product stays in 32 bits.
+    hash = (hash + (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)) >>> 0;
+  }
+  return hash >>> 0;
+}

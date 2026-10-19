@@ -89,6 +89,15 @@ export const INTEGRATOR_THRESHOLDS = {
 
 export interface TrajectoryFrames {
   readonly steps: number;
+  /**
+   * FNV-1a over each array's raw bytes, so a report says which input it saw.
+   *
+   * Not decoration. A fixture reached the page corrupt once and the only visible
+   * symptom was a step 0.0167 nm from OpenMM that still matched the reference to
+   * 1.1e-7 -- the signature of a shared bad input rather than a bad kernel, but
+   * only if you can show the input changed.
+   */
+  readonly checksums?: Record<string, number>;
   /** (steps + 1) x 3N, nm. */
   readonly positions: Float64Array;
   /** (steps + 1) x 3N, nm/ps. */
@@ -148,6 +157,7 @@ export interface ReductionComparison {
 
 export interface IntegratorReport {
   readonly fixture: string;
+  readonly checksums: Record<string, number>;
   readonly particleCount: number;
   readonly steps: readonly StepComparison[];
   readonly thermostat: ThermostatComparison;
@@ -577,6 +587,10 @@ export async function validateIntegrators(
     );
     return {
       fixture: fixtureName,
+      checksums: {
+        ...(trajectories.verlet.checksums ?? {}),
+        ...(trajectories.lfmiddle.checksums ?? {}),
+      },
       particleCount: system.particleCount,
       steps,
       thermostat,
