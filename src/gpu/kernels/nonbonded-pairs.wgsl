@@ -22,10 +22,21 @@ struct Params {
   exclusion_start_offset: u32,
   /// Where the flat exclusion list begins in `lists`.
   exclusion_list_offset: u32,
+  /// Where each atom's cell index begins in `lists`.
+  cell_of_offset: u32,
   cells: vec3<u32>,
   cutoff: f32,
   box: vec3<f32>,
   alpha: f32,
+}
+
+/// Decompose a flat cell index back into its three axis indices.
+///
+/// Row-major in (x, y, z), matching `cell-list.wgsl` and the host builder.
+fn cell_axes(cell: u32, cells: vec3<u32>) -> vec3<u32> {
+  let z = cell % cells.z;
+  let rest = cell / cells.z;
+  return vec3<u32>(rest / cells.y, rest % cells.y, z);
 }
 
 /// Does `other` appear in `atom`'s exclusion list?
@@ -51,14 +62,18 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   let cutoff_squared = params.cutoff * params.cutoff;
   let cells = params.cells;
 
-  // Which cell this atom is in, from its wrapped fractional coordinate.
-  let p = vec3<f32>(
-    from_fixed(positions[i * 3u + 0u]),
-    from_fixed(positions[i * 3u + 1u]),
-    from_fixed(positions[i * 3u + 2u]),
-  );
-  let fraction = p / params.box - floor(p / params.box);
-  let home = min(vec3<u32>(fraction * vec3<f32>(cells)), cells - vec3<u32>(1u));
+  // Which cell this atom is in, read from the list rather than recomputed.
+  //
+  // 🔴 It used to be recomputed here, from the wrapped fractional coordinate in
+  // f32. That is a different calculation from the one that built the list --
+  // which buckets in fixed point -- and at the 6.5 nm edge of the 3HTB box an
+  // f32 coordinate has a 4.8e-7 nm ulp, so the two could disagree for an atom
+  // near a cell boundary. In a gather kernel that is worse than it sounds: atom
+  // i would scan the neighbourhood of a cell it is not listed in, so i could
+  // miss j while j still finds i. The pair contributes to one atom's force and
+  // not the other's, which breaks Newton's third law and leaks momentum. Taking
+  // the home cell from the list makes the two agree by construction.
+  let home = cell_axes(lists[params.cell_of_offset + i], cells);
 
   var force_sum = vec3<f32>(0.0);
   var energy_sum = 0.0;

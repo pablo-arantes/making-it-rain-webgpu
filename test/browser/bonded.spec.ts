@@ -46,6 +46,14 @@ for (const name of ["1L2Y", "3HTB"]) {
     }
     expect(JSON.stringify(constraints, null, 1)).toContain('"ok": true');
 
+    const cells = await page.evaluate(() => window.__mirCellList);
+    if (cells !== undefined && "error" in cells) throw new Error(cells.error);
+    // Bit-identical forces from a differently ordered list, which is what makes
+    // the non-deterministic scatter safe. Asserted exactly, not approximately.
+    expect(cells!.forceDifference).toBe(0);
+    expect(cells!.deviceEnergy).toBe(cells!.hostEnergy);
+    expect(JSON.stringify(cells, null, 1)).toContain('"ok": true');
+
     const randomness = await page.evaluate(() => window.__mirRandom);
     if (randomness !== undefined && "error" in randomness) {
       throw new Error(randomness.error);
@@ -103,6 +111,10 @@ for (const name of ["1L2Y", "3HTB"]) {
         `/${integrators!.thermostat.stages.afterDriftPosition.toExponential(2)}` +
         `  shake ${integrators!.thermostat.stages.afterShake.toExponential(2)}` +
         `  finish ${integrators!.thermostat.stages.afterFinishVelocity.toExponential(2)}` +
+        `\n  cell list              ${cells!.divisions.join("x")} = ${cells!.cellCount} cells` +
+        `  ${cells!.assignmentDifferences} assignment diffs` +
+        `  ${cells!.orderDifferences} reordered` +
+        `  force difference ${cells!.forceDifference}` +
         `\n  generator              ${randomness!.bitMismatches} bit mismatches` +
         `  worst deviate ${randomness!.worstDeviate.toExponential(2)}` +
         `  at radius ${randomness!.worstRadius.toExponential(2)}` +

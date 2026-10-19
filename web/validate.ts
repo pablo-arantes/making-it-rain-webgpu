@@ -19,6 +19,7 @@ import {
 } from "../src/gpu/validate-integrator.js";
 import { decodeNpy } from "../src/analysis/npy.js";
 import { validateRandom, type RandomComparison } from "../src/gpu/validate-random.js";
+import { validateCellList, type CellListComparison } from "../src/gpu/validate-cell-list.js";
 
 declare global {
   interface Window {
@@ -26,6 +27,7 @@ declare global {
     __mirConstraints?: ConstraintComparison | { error: string };
     __mirIntegrators?: IntegratorReport | { error: string };
     __mirRandom?: RandomComparison | { error: string };
+    __mirCellList?: CellListComparison | { error: string };
   }
 }
 
@@ -189,6 +191,25 @@ async function main(): Promise<void> {
     // The captured trajectories are a separate tool's output, so a fixture can
     // have a system without them. Say which command produces them rather than
     // failing the force checks that already passed.
+    const cells = await validateCellList(device, { systemXml, stateXml });
+    if (body) {
+      body.innerHTML += `<h2>Cell list</h2><p class="note">
+        ${cells.divisions.join(" x ")} cells, ${cells.cellCount} in all, built on
+        the device from the position buffer with no readback.
+        ${cells.assignmentDifferences} atoms assigned differently from the host
+        builder and ${cells.populationDifferences} cells populated differently;
+        ${cells.orderDifferences.toLocaleString("en-US")} of
+        ${cells.particleCount.toLocaleString("en-US")} ordered differently
+        <em>within</em> their cell, which the atomics decide and which must not
+        matter. It does not: the same kernel fed both lists gives
+        ${cells.hostEnergy.toFixed(4)} and ${cells.deviceEnergy.toFixed(4)} kJ/mol
+        and a worst force difference of ${cells.forceDifference}, bit for bit,
+        because the accumulator is exact.
+        <span class="badge ${cells.ok ? "ok" : "bad"}">${cells.ok ? "pass" : "fail"}</span>
+      </p>`;
+    }
+    window.__mirCellList = cells;
+
     const randomness = await validateRandom(device);
     if (body) {
       body.innerHTML += `<h2>Thermostat noise</h2><p class="note">
@@ -237,6 +258,7 @@ async function main(): Promise<void> {
     window.__mirConstraints = { error: message };
     window.__mirIntegrators = { error: message };
     window.__mirRandom = { error: message };
+    window.__mirCellList = { error: message };
   }
 }
 

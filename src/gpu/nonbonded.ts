@@ -154,10 +154,19 @@ export async function evaluateDirectSpace(
   positions: Float64Array,
   boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
+  /**
+   * A cell list to use instead of building one here.
+   *
+   * The step loop builds its list on the device and never brings the positions
+   * back; this is also what lets the device-built list be compared against the
+   * host's by the only measure that matters -- whether the forces come out the
+   * same. See src/gpu/validate-cell-list.ts.
+   */
+  suppliedCellList?: CellList,
 ): Promise<DirectSpaceResult> {
   const box = rectangularBox(boxVectors);
   const n = force.particleCount;
-  const cellList = buildCellList(positions, box, force.cutoff);
+  const cellList = suppliedCellList ?? buildCellList(positions, box, force.cutoff);
   const exclusions = buildExclusionLists(force);
 
   // One `lists` buffer so the kernel stays inside the eight storage bindings
@@ -166,11 +175,23 @@ export async function evaluateDirectSpace(
   const sortedOffset = cellList.cellCount + 1;
   const exclusionStartOffset = sortedOffset + n;
   const exclusionListOffset = exclusionStartOffset + n + 1;
-  const lists = new Uint32Array(exclusionListOffset + exclusions.list.length);
+  const cellOfOffset = exclusionListOffset + exclusions.list.length;
+  const lists = new Uint32Array(cellOfOffset + n);
   lists.set(cellList.starts, 0);
   lists.set(cellList.order, sortedOffset);
   lists.set(exclusions.starts, exclusionStartOffset);
   lists.set(exclusions.list, exclusionListOffset);
+  // Each atom's cell, so the kernel reads its home cell instead of recomputing
+  // it in f32 and possibly disagreeing with the list it is indexing into.
+  for (let cell = 0; cell < cellList.cellCount; cell++) {
+    for (
+      let slot = cellList.starts[cell] as number;
+      slot < (cellList.starts[cell + 1] as number);
+      slot++
+    ) {
+      lists[cellOfOffset + (cellList.order[slot] as number)] = cell;
+    }
+  }
 
   const particle = new Float32Array(n * 4);
   for (let i = 0; i < n; i++) {
@@ -214,21 +235,24 @@ export async function evaluateDirectSpace(
 
   // struct Params { u32 x4; vec3<u32> cells; f32 cutoff; vec3<f32> box; f32 alpha }
   // vec3 has 16-byte alignment, so cells lands at 16 and box at 32; 48 bytes.
-  const pairParams = new ArrayBuffer(48);
+  // 64 bytes: five u32 offsets, then `cells` on its 16-byte boundary, the
+  // cutoff, the box on the next one, and alpha.
+  const pairParams = new ArrayBuffer(64);
   const pairU32 = new Uint32Array(pairParams);
   const pairF32 = new Float32Array(pairParams);
   pairU32[0] = n;
   pairU32[1] = sortedOffset;
   pairU32[2] = exclusionStartOffset;
   pairU32[3] = exclusionListOffset;
-  pairU32[4] = cellList.cells[0] as number;
-  pairU32[5] = cellList.cells[1] as number;
-  pairU32[6] = cellList.cells[2] as number;
-  pairF32[7] = force.cutoff;
-  pairF32[8] = box[0] as number;
-  pairF32[9] = box[1] as number;
-  pairF32[10] = box[2] as number;
-  pairF32[11] = alpha;
+  pairU32[4] = cellOfOffset;
+  pairU32[8] = cellList.cells[0] as number;
+  pairU32[9] = cellList.cells[1] as number;
+  pairU32[10] = cellList.cells[2] as number;
+  pairF32[11] = force.cutoff;
+  pairF32[12] = box[0] as number;
+  pairF32[13] = box[1] as number;
+  pairF32[14] = box[2] as number;
+  pairF32[15] = alpha;
   const pairParamBuffer = uploadBuffer(device, {
     label: "pair params",
     data: new Uint8Array(pairParams),

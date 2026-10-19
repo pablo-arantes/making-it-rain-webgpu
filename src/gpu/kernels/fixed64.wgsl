@@ -91,3 +91,22 @@ fn from_fixed(v: vec2<u32>) -> f32 {
   if (negative) { return -value; }
   return value;
 }
+
+/// Whether a fixed-point value is negative: the sign bit of the high word.
+fn negative64(v: vec2<u32>) -> bool {
+  return (v.y & 0x80000000u) != 0u;
+}
+
+/// Unsigned 64-bit `a < b`, for values already known to be non-negative.
+///
+/// Used by the cell list, which wraps a coordinate into [0, box) and then
+/// buckets it by comparing against accumulated multiples of the cell size.
+/// Doing that in integers rather than in f32 matters: an absolute coordinate
+/// converted to f32 has a 4.8e-7 nm ulp at the 6.5 nm edge of the 3HTB box,
+/// which is enough to put an atom in the wrong cell and lose a pair just inside
+/// the cutoff. Comparisons are exact, so the only error left is the 2.3e-10 nm
+/// the position already carries.
+fn less64(a: vec2<u32>, b: vec2<u32>) -> bool {
+  if (a.y != b.y) { return a.y < b.y; }
+  return a.x < b.x;
+}

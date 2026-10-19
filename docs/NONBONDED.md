@@ -187,3 +187,46 @@ runs it with no fixture):
 | 25×25×25 | 5×5 | 1.41e-6 |
 | 54×4×6 | 3×3×3×2 mixed with 2×2 and 3×2 | 4.77e-7 |
 | 7×5×3 | 7, 5, 3 — one radix an axis | — |
+
+## 🔴 An exact accumulator does not make a kernel order-independent
+
+The forces accumulate in 64-bit fixed point, so the sum across threads is exact
+and independent of the order the atomic adds landed in. That is true, and it is
+why the cell list's scatter was originally left as the atomics produced it --
+the order within a cell could not matter.
+
+It does. `nonbonded-pairs.wgsl` is a gather: one thread owns atom `i`, walks the
+27 neighbouring cells, and sums every contribution into an **f32 register**,
+making a single fixed-point add at the end. The exactness applies to that one
+add. Everything before it reassociates with the order the neighbours arrive in.
+
+Measured by feeding the same kernel two different orderings of the *same*
+partition -- the host builder's ascending order and the device's atomic scatter
+-- on 1L2Y: a worst force-component difference of **1.89e-3 kJ/mol/nm**, about
+2e-6 of the force RMS. Far too small to show up in a force comparison against
+OpenMM, and large enough to make two runs of the same input diverge.
+
+So `cell-list.wgsl` has a fifth pass, `sort_cells`, putting each cell's atoms in
+ascending index order: one thread per slot, counting how many atoms of the same
+cell have a lower index, which is around 120 reads per atom here and needs no
+atomics. The device's list is then the same permutation as the host builder's,
+and the two give bit-identical forces -- asserted as `=== 0`, not as a
+tolerance.
+
+OpenMM resolves this the same way. Its CUDA and OpenCL nonbonded kernels also
+accumulate in registers per tile; what it guarantees is that the neighbour list
+is built deterministically.
+
+### And the home cell has to come from the list
+
+The same kernel used to recompute atom `i`'s cell from its wrapped fractional
+coordinate in f32. The list buckets in fixed point, so the two are different
+calculations, and at the 6.5 nm edge of the 3HTB box an f32 coordinate has a
+4.8e-7 nm ulp -- enough to disagree for an atom near a cell boundary.
+
+In a gather that is worse than a misplaced atom. If `i` scans the neighbourhood
+of a cell it is not listed in, `i` can miss `j` while `j` still finds `i`: the
+pair contributes to one atom's force and not the other's. That is not a rounding
+error, it is a violation of Newton's third law, and it leaks momentum in a way
+the centre-of-mass remover would then quietly absorb. The kernel now reads
+`cell_of[i]` from the list, so the two agree by construction.

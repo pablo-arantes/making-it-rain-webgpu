@@ -26,6 +26,7 @@ import pmeGrid from "./kernels/pme-grid.wgsl?raw";
 import pmeConvolve from "./kernels/pme-convolve.wgsl?raw";
 import pmeInterpolate from "./kernels/pme-interpolate.wgsl?raw";
 import random from "./kernels/random.wgsl?raw";
+import cellList from "./kernels/cell-list.wgsl?raw";
 import randomProbe from "./kernels/random-probe.wgsl?raw";
 import integrate from "./kernels/integrate.wgsl?raw";
 import reduce from "./kernels/reduce.wgsl?raw";
@@ -94,6 +95,9 @@ export const PME_INTERPOLATE = composeKernel(pmeInterpolate);
  * compute the same ones and compare.
  */
 export const INTEGRATE = composeKernel(integrate, ["fixed64", "random"]);
+
+/** The cell list as a counting sort: clear, assign, scan, scatter. */
+export const CELL_LIST = composeKernel(cellList);
 
 /** The generator's raw and Box-Muller output, for comparison with the host. */
 export const RANDOM_PROBE = composeKernel(randomProbe, ["fixed64", "random"]);

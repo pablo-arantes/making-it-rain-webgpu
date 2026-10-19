@@ -66,6 +66,10 @@ Done in Phase 1 so far:
 - **Centre-of-mass removal and the kinetic energy**, reduced in fixed point so
   the total does not depend on the order the workgroups landed in. 4.8e-10 nm/ps
   and 2.1e-8 relative.
+- **The cell list, built on the device** as a counting sort and then sorted
+  within each cell. It puts every atom in the cell the host builder puts it in
+  (0 differences on both fixtures) and gives bit-identical forces -- which it has
+  to, and which is not free: see below.
 - **Both integrators, SETTLE, SHAKE/RATTLE and centre-of-mass removal**, all in
   the reference and transcribed from OpenMM. A step reproduces OpenMM's to
   **5.7e-9 nm** on both fixtures -- f64 round-off through the constraint solve --
@@ -78,7 +82,9 @@ Done in Phase 1 so far:
   things a first reading gets wrong.
 
 Phase 1 steps still to do: the **step loop** on resident buffers with cached
-pipelines, the **barostat**, and the **minimiser**. After those, Phase 1's
+pipelines, the **barostat**, and the **minimiser**. The cell list no longer
+blocks the loop -- it is built on the device, so a step needs no position
+readback. After those, Phase 1's
 gates: NVE drift at 2 fs, and a measured ns/day.
 
 A whole step now runs on the GPU -- forces, constraints, both integrators, the
@@ -99,6 +105,16 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### An exact accumulator does not make a kernel order-independent
+The forces accumulate in fixed point, so the sum across threads is exact. But
+the pair kernel sums one atom's neighbours in an f32 register before the single
+exact add at the end, and that part reassociates. Measured at 1.89e-3 kJ/mol/nm
+between two orderings of the same partition -- 2e-6 of the force RMS, invisible
+in a force comparison and enough to make two runs differ. The cell list is
+sorted for that reason, `AGENTS.md`'s determinism bullet is amended, and
+docs/NONBONDED.md has the measurement. The same section covers why the pair
+kernel now reads its home cell from the list instead of recomputing it in f32.
 
 ### A step can hide a broken stage
 The device's first RATTLE did nothing at all to the rigid waters -- the

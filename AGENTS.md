@@ -58,10 +58,23 @@ measurements these rest on.
   differential test or it does not ship.
 - **Route GPU allocations through one place** so peak memory stays measurable.
 - **Determinism**: for one device and one seed, a run is reproducible bit for
-  bit, and it does not depend on the workgroup configuration. That holds because
-  every accumulation is exact integer addition, whose result is independent of
-  the order the adds landed in, so an atomic scatter is as deterministic as a
-  gather. Introducing a floating-point reduction anywhere would break this.
+  bit, and it does not depend on the workgroup configuration. Two things are
+  needed for that and only the first is free.
+
+  *Every accumulation **between** threads is exact integer addition*, so its
+  result does not depend on the order the adds landed in and an atomic scatter
+  is as deterministic as a gather. Introducing a floating-point reduction across
+  threads would break this.
+
+  *Every list a kernel walks is in a defined order.* A thread may still sum its
+  own terms in f32 before the one exact add at the end -- `nonbonded-pairs.wgsl`
+  does, and so does OpenMM -- and that sum reassociates with the order the terms
+  come in. So the cell list is sorted rather than left as the atomics produced
+  it. Measured, by feeding one kernel two orderings of the same partition:
+  1.89e-3 kJ/mol/nm, about 2e-6 of the force RMS. This bullet previously claimed
+  the exact accumulator made ordering irrelevant; it does not, and the claim
+  cost nothing only because the test that found it was written to check it.
+
   Across devices bitwise agreement is not promised, and the reason is recorded.
 - **Validate shapes, dtypes and byte sizes at public boundaries**, and use a
   WebGPU error scope around every dispatch: a validation error otherwise appears
