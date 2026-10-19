@@ -31,39 +31,75 @@ immediately after the kick, and **not** again at the end of the step. And
 `oldx` holds the trial positions *before* SHAKE, so `(xP − oldx)/dt` is the
 velocity the constraint projection implies.
 
-### 🔴 LFMiddle at zero friction does not conserve energy
+### 🔴 Kinetic energy is reported differently per integrator, and that is the whole story
 
-With `friction = 0`, `vscale = 1` and `noisescale = 0`, so the thermostat is
-the identity and the step becomes `v += dt·F/m` then `x += dt·v`. That is
-**symplectic Euler, not velocity Verlet**. It conserves a *modified*
-Hamiltonian, so the naive potential-plus-kinetic energy oscillates at O(dt)
-amplitude instead of drifting.
+**Corrected.** An earlier version of this file said LFMiddle at zero friction
+is "symplectic Euler, not velocity Verlet" and does not conserve energy. That
+was wrong, and the real explanation matters more.
 
-Measured on 1L2Y, equilibrated, total energy change over 8 steps per atom:
+`VerletIntegrator` is, verbatim from `ReferenceVerletDynamics::update`:
 
-| dt (fs) | Langevin, friction 0 | velocity Verlet |
-| ---: | ---: | ---: |
-| 2.00 | +3.47e-2 | −2.7e-4 |
-| 1.00 | −3.09e-2 | −6.4e-4 |
-| 0.50 | −3.11e-2 | −3.7e-5 |
-| 0.25 | −1.16e-2 | −1.2e-4 |
+```
+v += dt · F/m
+xP = x + dt · v
+apply(x, xP, tol)                    SHAKE
+v  = (xP − x)/dt
+x  = xP
+```
 
-Over 40 steps at 2 fs the Langevin series reads +0.000, +0.017, +0.014, +0.000,
-+0.022, +0.015, +0.025, +0.009, −0.004 — bouncing, with no trend, and not
-shrinking cleanly with the timestep. Verlet on the same configuration stays
-inside 3e-3 and does fall with dt.
+Set `friction = 0` in LFMiddle and the two are the *same dynamics*. The two
+half drifts collapse into one full drift, and `v += (xP − oldx)/dt` is
+algebraically `v = (xP − x)/dt`, since `oldx = x + dt·v_kicked`. The only
+difference is that LFMiddle also RATTLE-projects the velocities right after the
+kick.
 
-This is by design: LFMiddle exists for thermostatted *sampling*, where it
-samples configurations better than velocity Verlet at a given timestep. It is
-not an NVE integrator.
+What differs is **how the kinetic energy is reported**. From
+`ReferenceKernels.cpp`:
 
-**Consequence for Phase 1's gates.** The NVE energy-drift gate must use
-velocity Verlet, which is what `tools/calibrate_thresholds.py` already does —
-and why the threshold it measured is 0.17 kJ/mol/ns/atom rather than something
-fifty times larger. LFMiddle at zero friction is still the right oracle for
-**step-by-step determinism**, because it *is* deterministic; it just is not
-conservative. Both trajectories are therefore captured, and the engine
-implements both integrators.
+| integrator | kinetic energy from |
+| --- | --- |
+| `VerletIntegrator` | velocities shifted by **+dt/2**, then RATTLE'd at a 1e-4 tolerance |
+| `LangevinIntegrator`, `LangevinMiddleIntegrator` | the velocities as they are |
+
+and `computeShiftedVelocities` is
+
+```cpp
+velocities[i] = velData[i] + forceData[i]*(timeShift/masses[i]);
+if (timeShift != 0)
+    constraints.applyToVelocities(posData, velocities, inverseMasses, 1e-4);
+```
+
+The shift is the standard leapfrog correction: a leapfrog integrator carries its
+velocities half a step out of step with its positions, so a kinetic energy
+computed from them is evaluated at the wrong time. Measured on 1L2Y,
+equilibrated, over 40 steps at 2 fs — the range of the total energy, per atom:
+
+| | Verlet trajectory | LFMiddle trajectory |
+| --- | ---: | ---: |
+| PE + KE as OpenMM reports it | **3.08e-3** | 2.54e-2 |
+| PE + KE from unshifted velocities | 2.54e-2 | 2.54e-2 |
+| PE + KE from `v + dt/2·F/m`, **no** RATTLE | 2.06e-2 | 2.06e-2 |
+
+So the conserved quantity is the shifted *and re-constrained* one, and it is
+about eight times better than the unshifted figure. The dynamics was never the
+problem. Skipping the RATTLE gets most of the way to nothing: the shift moves
+velocities off the constraint surface, and the components along the constrained
+bonds then contribute kinetic energy that should not exist.
+
+**Two consequences.**
+
+*For the NVE drift gate:* it has to use the shifted, re-constrained kinetic
+energy, whichever integrator produced the trajectory. Running
+`VerletIntegrator` is the easy way to get that, because OpenMM applies the shift
+for you — which is what `tools/calibrate_thresholds.py` does, and why the
+threshold it measured is 0.17 kJ/mol/ns/atom.
+
+*For parity, which matters more:* the notebook's `StateDataReporter` logs
+`kineticEnergy`, `totalEnergy` and `temperature` every 10 ps, and the notebook
+uses `LangevinIntegrator`. So **the engine's reporters must use the unshifted
+convention**, or every line of every log file disagrees with the notebook's. The
+convention is a property of the integrator, not a free choice, and
+`src/reference/kinetic.ts` implements both.
 
 ## The constraint solver
 
@@ -138,6 +174,42 @@ CCMA's refinement — premultiplying the deltas by an approximate inverse of the
 constraint coupling matrix — is the fix if that ever becomes the bottleneck, and
 for the clusters this workload produces there is very little coupling to
 accelerate anyway.
+
+### 🔴 SETTLE is not an optimisation. It changes the answer.
+
+OpenMM does not use one constraint algorithm. From
+`ReferenceConstraints::ReferenceConstraints`, it finds every **closed triangle
+of three atoms where each atom holds exactly two constraints** and gives those
+to `ReferenceSETTLEAlgorithm`; everything else goes to CCMA.
+
+That triangle is rigid water, and it is **88 to 90% of all clusters** — 688 of
+784 in 1L2Y, 8021 of 8861 in 3HTB.
+
+SETTLE is analytic: it computes the rigid-body placement that satisfies all
+three distances exactly. SHAKE is iterative and moves atoms along the reference
+bond directions. Both end up on the constraint manifold, and **they end up at
+different points on it.** Measured over one 2 fs step of 1L2Y, our SHAKE lands
+1.75e-5 nm from OpenMM's positions, and the worst-offending atoms are all
+waters.
+
+The diagnosis was that tightening our own tolerance does nothing:
+
+| our tolerance | iterations | distance from OpenMM's next frame |
+| --- | ---: | ---: |
+| 1e-6 | 40 | 1.766e-5 nm |
+| 1e-8 | 58 | 1.753e-5 nm |
+| 1e-10 | 76 | 1.753e-5 nm |
+| 1e-12 | 94 | **1.753e-5 nm** |
+
+A solver stopping too early would converge towards agreement. This does not, so
+the two are solving different problems. OpenMM's own frame satisfies the
+constraints to 3.1e-8 relative — far inside its 1e-6 tolerance — which is what
+an analytic solution looks like.
+
+So `docs/PLAN.md`'s "SETTLE for water, CCMA-style for bonds to H" is a
+**parity requirement**, not the performance note it reads as. Until SETTLE is
+implemented, the step-by-step trajectory gate is held at 5e-5 nm instead of the
+1e-7 the tolerance would allow.
 
 ### The clusters are small, and that is measured
 

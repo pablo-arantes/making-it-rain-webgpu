@@ -44,16 +44,24 @@ Done in Phase 1 so far:
   `Context.applyConstraints` to 1.8e-7 nm on 1L2Y and 6.2e-7 on 3HTB, which is
   the width of the tolerance band.
 - **Two deterministic trajectory oracles**, velocity Verlet and LFMiddle at
-  zero friction, with `tools/capture_constraints.py`. The integrator and
-  constraint algorithms, and four things a first reading gets wrong about them,
-  are in `docs/DYNAMICS.md`.
+  zero friction, with `tools/capture_constraints.py`, carrying positions,
+  velocities and forces per frame.
+- **Both integrators, reference only**: velocity Verlet and LFMiddle,
+  transcribed from OpenMM. Tested step by step against both oracles, driven by
+  **OpenMM's own recorded forces** so a force-field error cannot leak into an
+  integrator test. Agreement is 1.8e-5 nm a step, limited by SHAKE against
+  SETTLE rather than by the integrators (below).
+- **Both kinetic-energy conventions** (`src/reference/kinetic.ts`), reproducing
+  what OpenMM reports to 1e-12 unshifted and 1e-5 shifted. This is a parity
+  requirement for the notebook's log files, not a detail.
+- **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
+  things a first reading gets wrong.
 
-Phase 1 steps still to do: the **constraint kernel** (the reference is done,
-and the measured cluster shapes -- at most 4 atoms and 3 constraints -- mean one
-thread can hold a whole cluster), the **integrators** (LFMiddle for production
-and velocity Verlet for the NVE gate, both with reference implementations still
-to write), the **barostat**, and the **minimiser**. After those, Phase 1's
-gates: NVE drift at 2 fs, and a measured ns/day.
+Phase 1 steps still to do: **SETTLE** (below), the **constraint and integrator
+kernels** (the references are done, and the measured cluster shapes -- at most 4
+atoms and 3 constraints -- mean one thread can hold a whole cluster), the
+**barostat**, and the **minimiser**. After those, Phase 1's gates: NVE drift at
+2 fs, and a measured ns/day.
 
 ## Open, in the order they are worth doing
 
@@ -66,14 +74,29 @@ power-of-two sizes are the obvious next step, and the differential test in
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
 
-### The NVE gate cannot use the notebook's integrator
-LFMiddle at zero friction is symplectic Euler, so its naive total energy
-oscillates at O(dt) rather than drifting -- measured at ±0.02 kJ/mol an atom on
-1L2Y at 2 fs, against 3e-4 for velocity Verlet. The drift gate therefore runs
-velocity Verlet, which is what `tools/calibrate_thresholds.py` already used.
-That means the engine ships **two** integrators, and LFMiddle's own correctness
-is gated on step-by-step determinism rather than on energy conservation.
-`docs/DYNAMICS.md` has the numbers.
+### SETTLE, and it is next
+OpenMM solves every closed three-atom constraint triangle -- rigid water, 88 to
+90% of all clusters here -- with SETTLE, analytically, and only the rest with
+CCMA. SETTLE and SHAKE both satisfy the constraints and land on **different
+points** of the constraint manifold, 1.8e-5 nm apart per step. Tightening our
+tolerance from 1e-6 to 1e-12 moves that by nothing at all, which is how it was
+diagnosed.
+
+So `docs/PLAN.md`'s "SETTLE for water, CCMA-style for bonds to H" is a parity
+requirement rather than the performance note it reads as, and the step-by-step
+trajectory gate is held at 5e-5 nm until it is implemented instead of the 1e-7
+the tolerance would allow. Miyamoto & Kollman 1992 is the algorithm; the
+oracle for it already exists.
+
+### The kinetic-energy convention is per integrator
+`VerletIntegrator` reports kinetic energy from velocities shifted by +dt/2 and
+then RATTLE'd; the Langevin integrators report it unshifted. The shifted one is
+the conserved quantity for a leapfrog integrator -- 3.1e-3 against 2.5e-2
+kJ/mol an atom over 40 steps of 1L2Y -- so the NVE gate uses it. But the
+notebook logs with `LangevinIntegrator`, so **the reporters must use the
+unshifted convention** or every log line disagrees. Both are implemented and
+tested; the thing still to do is wire them to the right integrator in the run
+loop, and record which was used in `run.json`.
 
 ### The acceptance thresholds are provisional
 `AGENTS.md` quotes OpenCL **single** precision on an Apple M3 Pro, because this

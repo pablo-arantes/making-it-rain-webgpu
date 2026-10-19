@@ -179,12 +179,19 @@ def main() -> None:
         context.setVelocities(start_velocities * NM / unit.picosecond)
         frames_x = []
         frames_v = []
+        frames_f = []
         energies = []
         for step in range(args.steps + 1):
-            s = context.getState(getPositions=True, getVelocities=True, getEnergy=True)
+            s = context.getState(getPositions=True, getVelocities=True,
+                                 getForces=True, getEnergy=True)
             frames_x.append(np.array(s.getPositions().value_in_unit(NM)))
             frames_v.append(
                 np.array(s.getVelocities().value_in_unit(NM / unit.picosecond)))
+            # Forces travel with the frame so a test can reproduce OpenMM's
+            # kinetic-energy convention without recomputing them: Verlet reports
+            # it from velocities shifted by dt/2 using these forces, then
+            # re-constrained. See docs/DYNAMICS.md.
+            frames_f.append(np.array(s.getForces().value_in_unit(KJ / NM)))
             energies.append({
                 "potential": s.getPotentialEnergy().value_in_unit(KJ),
                 "kinetic": s.getKineticEnergy().value_in_unit(KJ),
@@ -196,6 +203,8 @@ def main() -> None:
                 np.array(frames_x))
         np.save(os.path.join(out, f"trajectory-{label}-velocities.npy"),
                 np.array(frames_v))
+        np.save(os.path.join(out, f"trajectory-{label}-forces.npy"),
+                np.array(frames_f))
         totals = [e["potential"] + e["kinetic"] for e in energies]
         if not np.isfinite(totals).all():
             raise SystemExit(
