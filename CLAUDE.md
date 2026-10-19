@@ -30,6 +30,7 @@ The Python oracle is separate and is described in `tools/README.md`.
 | --- | --- | --- |
 | Typecheck | `npm run build` | nothing |
 | Unit + reference | `npm test` | nothing |
+| Slow reference | `npm run test:slow` | nothing, and a few minutes |
 | GPU, through Dawn | `npm run test:gpu` | a loadable `webgpu` binary — **not this machine**, see below |
 | GPU, through Chrome | `npm run test:browser` | Google Chrome installed |
 | OpenMM oracle | `npm run test:oracle` | `vendor/openmm-wasm/`, which Phase 1 builds |
@@ -38,6 +39,13 @@ The Python oracle is separate and is described in `tools/README.md`.
 
 `npm run check` is typecheck, unit tests and the web build. It deliberately does
 not include a GPU lane, so it stays runnable in CI on a machine with no GPU.
+
+`*.slow.test.ts` is excluded from `npm test` and collected by
+`vitest.slow.config.ts` instead. Not lower-value tests — the minimiser's parity
+against OpenMM is one — but minutes of double-precision PME, because a minimiser
+calls the force field fifty times and the reference evaluates the mesh in f64 on
+the CPU. A unit suite that takes minutes stops being run, which is worse than a
+lane that is explicitly separate.
 
 ## Reaching a GPU
 

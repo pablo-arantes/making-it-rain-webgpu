@@ -19,7 +19,8 @@
     "test:browser": "playwright test",
     "bench": "tsx tools/bench.ts",
     "report:adapter": "tsx tools/report-adapter.ts",
-    "check": "npm run build && npm run test && npm run build:web"
+    "check": "npm run build && npm run test && npm run build:web",
+    "test:slow": "vitest run --config vitest.slow.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
