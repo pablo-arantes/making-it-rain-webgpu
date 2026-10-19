@@ -44,8 +44,18 @@ export interface StepResult {
   readonly velocityConstraints: ConstraintResult | null;
 }
 
-/** A source of standard normal deviates, so a run can be made reproducible. */
-export type Normals = () => number;
+/**
+ * A source of standard normal deviates, so a run can be made reproducible.
+ *
+ * Indexed by particle and axis rather than sequential, which is a requirement
+ * and not a convenience: the GPU draws its deviates from the thread's own
+ * particle index, with no order between threads, so a sequential source could
+ * never be compared against it. `thermostatNormals` in src/reference/random.ts
+ * is the one both sides use. Note also that a sequential source would skip
+ * frozen particles here but not on the device, which alone would put the two
+ * streams permanently out of phase.
+ */
+export type Normals = (particle: number, axis: number) => number;
 
 /**
  * One velocity-Verlet (leapfrog) step.
@@ -181,7 +191,7 @@ export function langevinMiddleStep(
       trial[at] = (trial[at] as number) + (state.velocities[at] as number) * halfStep;
       state.velocities[at] =
         velocityScale * (state.velocities[at] as number) +
-        (noise === 0 ? 0 : noise * (normals as Normals)());
+        (noise === 0 ? 0 : noise * (normals as Normals)(i, axis));
       trial[at] = (trial[at] as number) + (state.velocities[at] as number) * halfStep;
     }
   }

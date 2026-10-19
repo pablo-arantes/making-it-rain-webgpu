@@ -235,7 +235,67 @@ The lesson is cheap to state and was not cheap to learn: when a discrepancy
 will not move as you tighten the thing you believe causes it, stop tightening
 and ask what *kind* of difference it is.
 
-### The clusters are small, and that is measured### The clusters are small, and that is measured
+### 🔴 A whole step can hide a broken velocity constraint
+
+The device's first RATTLE was not approximate, it was absent: the iterative
+kernel's cluster tables hold only the *iterative* clusters, so 688 of 1L2Y's
+784 -- every rigid water -- got no velocity projection at all. Both integrators
+still reproduced OpenMM's trajectory step for step, to 1.0e-7 nm and 5.1e-5
+nm/ps.
+
+They did because LFMiddle repairs it. The velocities go into the drift wrong,
+the positions land off the constraint surface, SHAKE pulls them back, and
+`v += (x' - x_unconstrained)/dt` folds that correction into the velocity --
+reconstructing most of what RATTLE should have removed. The error only survives
+where the thermostat separates the two half-drifts, so it showed up at friction
+1 and nowhere else: 2.36 nm/ps after the velocity solve, 2.35e-3 nm/ps by the
+end of the step, with the positions still agreeing to 9.1e-8 nm.
+
+Two things follow, and the second is the general one.
+
+A thermostatted step has to be tested, not just a friction-free one. That needs
+a generator the host can reproduce, which is why `src/reference/random.ts` is
+counter-based (see also deviation 15).
+
+And an end-to-end comparison measures the *composition* of the stages, which
+can be far better conditioned than any stage in it. The number that found this
+came from comparing each dispatch against the reference's corresponding
+intermediate -- `stageThermostat` in src/gpu/validate-integrator.ts, which is
+now a permanent part of the report for exactly this reason. With SETTLE's exact
+velocity solve on the device the same step reads 4.6e-5 nm/ps, the same floor
+as every other number here.
+
+### The clusters are small, and that is measured### 🔴 A whole step can hide a broken velocity constraint
+
+The device's first RATTLE was not approximate, it was absent: the iterative
+kernel's cluster tables hold only the *iterative* clusters, so 688 of 1L2Y's
+784 -- every rigid water -- got no velocity projection at all. Both integrators
+still reproduced OpenMM's trajectory step for step, to 1.0e-7 nm and 5.1e-5
+nm/ps.
+
+They did because LFMiddle repairs it. The velocities go into the drift wrong,
+the positions land off the constraint surface, SHAKE pulls them back, and
+`v += (x' - x_unconstrained)/dt` folds that correction into the velocity --
+reconstructing most of what RATTLE should have removed. The error only survives
+where the thermostat separates the two half-drifts, so it showed up at friction
+1 and nowhere else: 2.36 nm/ps after the velocity solve, 2.35e-3 nm/ps by the
+end of the step, with the positions still agreeing to 9.1e-8 nm.
+
+Two things follow, and the second is the general one.
+
+A thermostatted step has to be tested, not just a friction-free one. That needs
+a generator the host can reproduce, which is why `src/reference/random.ts` is
+counter-based (see also deviation 15).
+
+And an end-to-end comparison measures the *composition* of the stages, which
+can be far better conditioned than any stage in it. The number that found this
+came from comparing each dispatch against the reference's corresponding
+intermediate -- `stageThermostat` in src/gpu/validate-integrator.ts, which is
+now a permanent part of the report for exactly this reason. With SETTLE's exact
+velocity solve on the device the same step reads 4.6e-5 nm/ps, the same floor
+as every other number here.
+
+### The clusters are small, and that is measured
 
 Connected components of atoms joined by a constraint, with
 `constraints=HBonds` and `rigidWater=True`:

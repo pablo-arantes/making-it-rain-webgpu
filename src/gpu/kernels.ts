@@ -25,10 +25,14 @@ import pmeSpread from "./kernels/pme.wgsl?raw";
 import pmeGrid from "./kernels/pme-grid.wgsl?raw";
 import pmeConvolve from "./kernels/pme-convolve.wgsl?raw";
 import pmeInterpolate from "./kernels/pme-interpolate.wgsl?raw";
+import random from "./kernels/random.wgsl?raw";
+import randomProbe from "./kernels/random-probe.wgsl?raw";
+import integrate from "./kernels/integrate.wgsl?raw";
+import reduce from "./kernels/reduce.wgsl?raw";
 import settle from "./kernels/settle.wgsl?raw";
 import shake from "./kernels/shake.wgsl?raw";
 
-export const SHARED = { fixed64, accumulate, erfc } as const;
+export const SHARED = { fixed64, accumulate, erfc, random } as const;
 
 export function composeKernel(
   source: string,
@@ -81,6 +85,21 @@ export const PME_CONVOLVE = composeKernel(pmeConvolve);
 
 /** Interpolating the convolved potential back onto the atoms as forces. */
 export const PME_INTERPOLATE = composeKernel(pmeInterpolate);
+
+/**
+ * Both integrators, split at the points the constraint solver runs.
+ *
+ * Needs the generator as well as the fixed point: the thermostat draws its
+ * deviates from the thread's own particle index, which is what lets the host
+ * compute the same ones and compare.
+ */
+export const INTEGRATE = composeKernel(integrate, ["fixed64", "random"]);
+
+/** The generator's raw and Box-Muller output, for comparison with the host. */
+export const RANDOM_PROBE = composeKernel(randomProbe, ["fixed64", "random"]);
+
+/** Centre-of-mass momentum and kinetic energy, reduced exactly. */
+export const REDUCE = composeKernel(reduce);
 
 /** SETTLE, analytic, one thread per rigid three-atom cluster. */
 export const SETTLE = composeKernel(settle);

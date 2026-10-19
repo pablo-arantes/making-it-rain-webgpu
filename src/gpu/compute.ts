@@ -84,6 +84,16 @@ export async function dispatch(
      */
     readonly bindings: readonly { binding: number; resource: GPUBindingResource }[];
     readonly workgroups: readonly [number, number?, number?];
+    /**
+     * An explicit layout, for a module whose entry points share one buffer set.
+     *
+     * `layout: "auto"` derives the layout from what *one* entry point reaches,
+     * so a module where five of them read overlapping subsets -- the
+     * integrator -- gets five incompatible layouts and rejects any bind group
+     * built for the whole set. Declaring the layout makes it the host's, and
+     * then a binding an entry point happens not to use is allowed to be there.
+     */
+    readonly bindGroupLayout?: GPUBindGroupLayout;
   },
 ): Promise<void> {
   device.pushErrorScope("validation");
@@ -98,12 +108,18 @@ export async function dispatch(
   }
   const pipeline = device.createComputePipeline({
     label: options.label,
-    layout: "auto",
+    layout:
+      options.bindGroupLayout === undefined
+        ? "auto"
+        : device.createPipelineLayout({
+            label: options.label,
+            bindGroupLayouts: [options.bindGroupLayout],
+          }),
     compute: { module, entryPoint: options.entryPoint ?? "main" },
   });
   const group = device.createBindGroup({
     label: options.label,
-    layout: pipeline.getBindGroupLayout(0),
+    layout: options.bindGroupLayout ?? pipeline.getBindGroupLayout(0),
     entries: options.bindings.map(({ binding, resource }) => ({ binding, resource })),
   });
   const encoder = device.createCommandEncoder({ label: options.label });

@@ -14,14 +14,16 @@ directly rather than only through a whole simulation:
     every step is reproducible without matching OpenMM's random stream. That
     makes it the oracle for comparing our LFMiddle implementation step by step.
 
-    It is **not** an oracle for energy conservation. With friction zero,
-    LFMiddle is `v += dt*F/m` then `x += dt*v` -- symplectic Euler, not
-    velocity Verlet -- which conserves a *modified* Hamiltonian, so the naive
-    potential-plus-kinetic energy oscillates at O(dt) amplitude instead of
-    drifting. Measured on 1L2Y at 2 fs: it bounces over +/-0.02 kJ/mol an atom
-    with no trend and does not shrink cleanly with the timestep, while velocity
-    Verlet on the same configuration stays inside 3e-3 and falls with dt. That
-    is by design; LFMiddle exists for thermostatted sampling, not for NVE.
+    It is **not** an oracle for energy conservation, and the reason is not what
+    it first looks like. Both integrators are leapfrog; what differs is the
+    kinetic energy each one *reports*. `VerletIntegrator` shifts the velocities
+    half a step and re-projects them, which is the conserved quantity;
+    `LangevinIntegrator` reports them unshifted, which is correct for sampling
+    and is not conserved. Measured on 1L2Y at 2 fs from the same configuration:
+    the LFMiddle log bounces over +/-0.02 kJ/mol an atom with no trend, the
+    Verlet log stays inside 3e-3 and falls with dt. Same trajectory, different
+    reporter. See docs/DYNAMICS.md, which corrects an earlier claim here that
+    LFMiddle at zero friction is symplectic Euler -- it is not.
 
     So `VerletIntegrator` is captured as well, and it is what the NVE drift
     gate uses.
@@ -225,7 +227,7 @@ def main() -> None:
             args.timestep * unit.picosecond)),
         "integrator": "LangevinIntegrator, friction 0 (= LFMiddle)",
         "purpose": "step-by-step determinism; NOT energy conservation, because "
-                   "LFMiddle at zero friction is symplectic Euler and its naive "
+                   "LangevinIntegrator reports the unshifted kinetic energy and its "
                    "total energy oscillates at O(dt)",
     }
     report["trajectory_verlet"] = {

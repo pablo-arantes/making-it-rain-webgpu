@@ -12,11 +12,20 @@ import {
   validateConstraints,
   type ConstraintComparison,
 } from "../src/gpu/validate-constraints.js";
+import {
+  validateIntegrators,
+  type IntegratorReport,
+  type TrajectoryFrames,
+} from "../src/gpu/validate-integrator.js";
+import { decodeNpy } from "../src/analysis/npy.js";
+import { validateRandom, type RandomComparison } from "../src/gpu/validate-random.js";
 
 declare global {
   interface Window {
     __mirValidation?: ValidationReport | { error: string };
     __mirConstraints?: ConstraintComparison | { error: string };
+    __mirIntegrators?: IntegratorReport | { error: string };
+    __mirRandom?: RandomComparison | { error: string };
   }
 }
 
@@ -52,6 +61,80 @@ function render(report: ValidationReport): string {
       </tr>
       ${rows}
     </table>`;
+}
+
+/** The captured trajectory for one integrator, fetched as three `.npy` files. */
+async function fetchTrajectory(
+  name: string,
+  label: string,
+  steps: number,
+): Promise<TrajectoryFrames> {
+  const load = async (kind: string): Promise<Float64Array> => {
+    const file = `trajectory-${label}-${kind}.npy`;
+    const response = await fetch(`/fixtures/${name}/${file}`);
+    if (!response.ok) {
+      throw new Error(
+        `/fixtures/${name}/${file} returned ${response.status}. ` +
+          "Capture it with tools/capture_constraints.py.",
+      );
+    }
+    return decodeNpy(await response.arrayBuffer(), file).data;
+  };
+  const [positions, velocities, forces] = await Promise.all([
+    load("positions"),
+    load("velocities"),
+    load("forces"),
+  ]);
+  return { steps, positions, velocities, forces };
+}
+
+function renderIntegrators(report: IntegratorReport): string {
+  const rows = report.steps
+    .map(
+      (s) => `<tr>
+        <td>${s.integrator}</td>
+        <td class="num">${s.steps}</td>
+        <td class="num">${exponential(s.worstPositionVsReference)}</td>
+        <td class="num">${exponential(s.worstPositionVsOpenmm)}</td>
+        <td class="num">${exponential(s.worstVelocityVsReference)}</td>
+        <td class="num">${exponential(s.worstVelocityVsOpenmm)}</td>
+        <td><span class="badge ${s.ok ? "ok" : "bad"}">${s.ok ? "pass" : "fail"}</span></td>
+      </tr>`,
+    )
+    .join("");
+  const t = report.thermostat;
+  const r = report.reductions;
+  return `<h2>Integrators</h2><p class="note">
+      One step from each captured frame, driven by the forces OpenMM recorded
+      there, so nothing from the force kernels leaks in. Position bound
+      ${exponential(report.thresholds.position)} nm, velocity bound
+      ${exponential(report.thresholds.velocity)} nm/ps.
+    </p>
+    <table>
+      <tr><th>Integrator</th><th>Steps</th>
+          <th>Position vs ref (nm)</th><th>vs OpenMM (nm)</th>
+          <th>Velocity vs ref</th><th>vs OpenMM</th><th></th></tr>
+      ${rows}
+    </table>
+    <p class="note">
+      With friction ${t.friction} ps<sup>-1</sup> the host draws the same
+      deviates from the same counters, so the thermostat is compared exactly
+      rather than statistically: positions
+      ${exponential(t.worstPositionVsReference)} nm and velocities
+      ${exponential(t.worstVelocityVsReference)} nm/ps from the reference, against
+      a thermostat that moved the velocities by ${t.velocityChange.toFixed(3)} nm/ps.
+      Stage by stage: kick ${exponential(t.stages.afterKick)}, RATTLE
+      ${exponential(t.stages.afterRattle)}, drift
+      ${exponential(t.stages.afterDriftVelocity)} nm/ps and
+      ${exponential(t.stages.afterDriftPosition)} nm, SHAKE
+      ${exponential(t.stages.afterShake)} nm, finish
+      ${exponential(t.stages.afterFinishVelocity)} nm/ps.
+      The centre-of-mass reduction lands ${exponential(r.comVelocityError)} nm/ps
+      from the reference and the kinetic energy ${exponential(
+        r.kineticEnergyRelativeError,
+      )} relative.
+      <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
+    </p>`;
 }
 
 async function main(): Promise<void> {
@@ -102,11 +185,58 @@ async function main(): Promise<void> {
       </table>`;
     }
     window.__mirConstraints = constraints;
+
+    // The captured trajectories are a separate tool's output, so a fixture can
+    // have a system without them. Say which command produces them rather than
+    // failing the force checks that already passed.
+    const randomness = await validateRandom(device);
+    if (body) {
+      body.innerHTML += `<h2>Thermostat noise</h2><p class="note">
+        Threefry-2x32-20 over ${randomness.particles.toLocaleString("en-US")}
+        particles: ${randomness.bitMismatches} raw-output mismatches against the
+        host, worst deviate difference ${exponential(randomness.worstDeviate)}
+        (host ${randomness.worstHost.toFixed(6)}, device
+        ${randomness.worstDevice.toFixed(6)}, Box-Muller radius
+        ${randomness.worstRadius.toExponential(3)}).
+        <span class="badge ${randomness.ok ? "ok" : "bad"}">${
+          randomness.ok ? "pass" : "fail"
+        }</span>
+      </p>`;
+    }
+    window.__mirRandom = randomness;
+
+    const dynamicsResponse = await fetch(`/fixtures/${name}/dynamics-facts.json`);
+    if (!dynamicsResponse.ok) {
+      const message =
+        `/fixtures/${name}/dynamics-facts.json returned ` +
+        `${dynamicsResponse.status}; capture it with tools/capture_constraints.py.`;
+      if (body) body.innerHTML += `<h2>Integrators</h2><p class="note">${message}</p>`;
+      window.__mirIntegrators = { error: message };
+    } else {
+      const dynamics = (await dynamicsResponse.json()) as {
+        trajectory_verlet: { steps: number };
+        trajectory_lfmiddle: { steps: number };
+      };
+      const [verlet, lfmiddle] = await Promise.all([
+        fetchTrajectory(name, "verlet", dynamics.trajectory_verlet.steps),
+        fetchTrajectory(name, "lfmiddle", dynamics.trajectory_lfmiddle.steps),
+      ]);
+      const integrators = await validateIntegrators(
+        device,
+        { systemXml, stateXml },
+        { verlet, lfmiddle },
+        name,
+      );
+      if (body) body.innerHTML += renderIntegrators(integrators);
+      window.__mirIntegrators = integrators;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (body) body.innerHTML = `<p class="bad-box">${message}</p>`;
     window.__mirValidation = { error: message };
     window.__mirConstraints = { error: message };
+    window.__mirIntegrators = { error: message };
+    window.__mirRandom = { error: message };
   }
 }
 

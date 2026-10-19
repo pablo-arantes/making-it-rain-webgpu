@@ -52,7 +52,20 @@ Done in Phase 1 so far:
 - **The constraint kernels**: SETTLE analytically and SHAKE/RATTLE iteratively,
   one thread per cluster, no atomics. Within 8.7e-8 nm of the reference on 1L2Y
   and 9.6e-8 on 3HTB, leaving the constraints satisfied to 1.0e-6 -- exactly the
-  tolerance they were asked for.
+  tolerance they were asked for. Positions and velocities go through separate
+  entry points, because on the device they are separate formats.
+- **Both integrator kernels**, against OpenMM's captured trajectories, driven by
+  the forces OpenMM recorded at each frame so nothing from the force kernels
+  leaks in. Verlet 9.6e-8 nm and LFMiddle 1.0e-7 nm a step on 1L2Y, 1.0e-7 and
+  1.1e-7 on 3HTB, velocities 5.3e-5 nm/ps -- which is the position agreement
+  divided by the timestep, so the whole budget is the constraint solve.
+- **A thermostat that is tested with the noise switched on**, which needed a
+  counter-based generator: Threefry-2x32-20, bit-identical to Random123's
+  published known answers on the host and to the host on the device. At friction
+  1 a step lands 4.6e-5 nm/ps from the reference.
+- **Centre-of-mass removal and the kinetic energy**, reduced in fixed point so
+  the total does not depend on the order the workgroups landed in. 4.8e-10 nm/ps
+  and 2.1e-8 relative.
 - **Both integrators, SETTLE, SHAKE/RATTLE and centre-of-mass removal**, all in
   the reference and transcribed from OpenMM. A step reproduces OpenMM's to
   **5.7e-9 nm** on both fixtures -- f64 round-off through the constraint solve --
@@ -64,14 +77,17 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 steps still to do: the **integrator kernel** (including
-centre-of-mass removal, which needs a reduction), the **step loop** on resident
-buffers, the **barostat**, and the **minimiser**. After those, Phase 1's gates:
-NVE drift at 2 fs, and a measured ns/day.
+Phase 1 steps still to do: the **step loop** on resident buffers with cached
+pipelines, the **barostat**, and the **minimiser**. After those, Phase 1's
+gates: NVE drift at 2 fs, and a measured ns/day.
 
-Everything the physics needs exists in `src/reference/`, verified against
-OpenMM to 5.7e-9 nm a step, and every force plus the constraints now also run
-on the GPU. What remains is the integrator kernel and the loop.
+A whole step now runs on the GPU -- forces, constraints, both integrators, the
+thermostat, centre-of-mass removal and the reported kinetic energy -- and
+reproduces OpenMM's own trajectory to 1.1e-7 nm a step. What remains is to stop
+taking it apart between dispatches: `src/gpu/integrate.ts` still builds a
+module, a pipeline and a bind group per phase and drains the queue after each,
+which is six sync points a step. That is the loop's job, and the allocator and
+the declared bind group layouts are already in place for it.
 
 ## Open, in the order they are worth doing
 
@@ -84,12 +100,17 @@ power-of-two sizes are the obvious next step, and the differential test in
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
 
-### RATTLE on the GPU still goes through SHAKE for water
-The reference solves a rigid triangle's velocity constraints with SETTLE's exact
-3x3 solve; the kernel currently sends every cluster, triangles included, through
-the iterative path. Both converge to the same condition and the difference is
-inside the tolerance, but it is an avoidable discrepancy and the exact solve is
-about twenty lines of WGSL.
+### A step can hide a broken stage
+The device's first RATTLE did nothing at all to the rigid waters -- the
+iterative kernel's tables hold only the iterative clusters -- and both
+integrators still reproduced OpenMM step for step. LFMiddle repairs it: the
+position solve and the velocity correction that follows reconstruct most of what
+the velocity solve should have removed. It showed only at friction 1, and only
+once each dispatch was compared against the reference's corresponding
+intermediate. That staged comparison is now part of the report
+(`stageThermostat`), and the lesson is in docs/DYNAMICS.md: an end-to-end number
+measures the composition of the stages and can be far better conditioned than
+any one of them.
 
 ### A reserved-word scan now guards the kernels
 WGSL reserves a long list of words it does not yet use. Tint enforces only some

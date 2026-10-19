@@ -5,6 +5,22 @@
 // tolerance: the result satisfies all three distances to the precision of the
 // arithmetic.
 //
+// Two entry points. `settle_cluster` projects the trial positions;
+// `settle_velocities` removes the velocity component along each of the three
+// bonds, by the same analytic route -- a 3x3 solve for the three constraint
+// multipliers, not an iteration.
+//
+// The velocity solve is here rather than left to the iterative kernel because
+// the reference uses it, and leaving it out was not the harmless approximation
+// it looked like. With the rigid waters sent through SHAKE instead, a
+// thermostatted step came out 2.36 nm/ps from the reference -- the whole
+// off-manifold velocity, because the device's cluster tables hold only the
+// *iterative* clusters and so 688 of 1L2Y's 784 got no velocity projection at
+// all. It hid from the end-to-end test: the position solve and the velocity
+// correction that follows it reconstruct most of what a bad RATTLE got wrong,
+// which is why it only showed once the thermostat broke that cancellation and
+// once the step was compared stage by stage.
+//
 // Everything is computed in f32 *relative to the reference positions*. The
 // displacements a step produces are around 1e-4 nm and the reference bond
 // vectors around 0.1 nm, so f32 has room for both; the absolute coordinates,
@@ -17,6 +33,7 @@
 @group(0) @binding(3) var<storage, read>       cluster_atoms: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read>       cluster_distances: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform>             params: Params;
+@group(0) @binding(6) var<storage, read_write> velocities: array<f32>;
 
 struct Params {
   cluster_count: u32,
@@ -25,8 +42,8 @@ struct Params {
 /// The reference position of one atom, relative to another's: exact in fixed
 /// point, then converted.
 fn reference_delta(atom_a: u32, atom_b: u32) -> vec3<f32> {
-  // Not `from`/`to` and not `origin`/`target distance`: WGSL reserves a long list of
-  // words for future use, and `from` and `target distance` are both on it.
+  // Not `from`/`to` and not `origin`/`target`: WGSL reserves a long list of
+  // words for future use, and `from` and `target` are both on it.
   return vec3<f32>(
     from_fixed(sub64(reference_position[atom_b * 3u + 0u], reference_position[atom_a * 3u + 0u])),
     from_fixed(sub64(reference_position[atom_b * 3u + 1u], reference_position[atom_a * 3u + 1u])),
@@ -145,4 +162,95 @@ fn settle_cluster(@builtin(global_invocation_id) gid: vec3<u32>) {
   store(a0, com + a3);
   store(a1, com + b3 - b0);
   store(a2, com + c3 - c0);
+}
+
+/// A particle's velocity.
+fn velocity_of(atom: u32) -> vec3<f32> {
+  return vec3<f32>(
+    velocities[atom * 3u + 0u],
+    velocities[atom * 3u + 1u],
+    velocities[atom * 3u + 2u],
+  );
+}
+
+/// RATTLE for a rigid triangle, solved rather than iterated.
+///
+/// Transcribed from `settleVelocities` in src/reference/settle.ts, itself from
+/// `ReferenceSETTLEAlgorithm::applyToVelocities`. The three multipliers `tab`,
+/// `tbc` and `tca` are the solution of the 3x3 system that makes all three
+/// relative velocities along the bonds vanish at once; applying them along the
+/// bond directions, scaled by inverse mass, is the correction.
+@compute @workgroup_size(64)
+fn settle_velocities(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let index = gid.x;
+  if (index >= params.cluster_count) { return; }
+  let atoms = cluster_atoms[index];
+  let a = atoms.x;
+  let b = atoms.y;
+  let c = atoms.z;
+
+  let m_a = mass[a];
+  let m_b = mass[b];
+  let m_c = mass[c];
+  if (m_a == 0.0 || m_b == 0.0 || m_c == 0.0) { return; }
+  let inv_a = 1.0 / m_a;
+  let inv_b = 1.0 / m_b;
+  let inv_c = 1.0 / m_c;
+
+  // Bond directions, from the reference positions these velocities belong to.
+  let e_ab = normalize(reference_delta(a, b));
+  let e_bc = normalize(reference_delta(b, c));
+  let e_ca = normalize(reference_delta(c, a));
+
+  let v_a = velocity_of(a);
+  let v_b = velocity_of(b);
+  let v_c = velocity_of(c);
+  // The relative velocity along each bond, which the correction must cancel.
+  let v_ab = dot(v_b - v_a, e_ab);
+  let v_bc = dot(v_c - v_b, e_bc);
+  let v_ca = dot(v_a - v_c, e_ca);
+
+  // Cosines of the triangle's interior angles, and their sines squared.
+  let c_a = -dot(e_ab, e_ca);
+  let c_b = -dot(e_ab, e_bc);
+  let c_c = -dot(e_bc, e_ca);
+  let s2_a = 1.0 - c_a * c_a;
+  let s2_b = 1.0 - c_b * c_b;
+  let s2_c = 1.0 - c_c * c_c;
+
+  let mabc_inv = 1.0 / (m_a * m_b * m_c);
+  let denom =
+    (((s2_a * m_b + s2_b * m_a) * m_c +
+      (s2_a * m_b * m_b + 2.0 * (c_a * c_b * c_c + 1.0) * m_a * m_b + s2_b * m_a * m_a)) *
+       m_c +
+     s2_c * m_a * m_b * (m_a + m_b)) * mabc_inv;
+  let total = m_a + m_b + m_c;
+  let t_ab =
+    ((c_b * c_c * m_a - c_a * m_b - c_a * m_c) * v_ca +
+     (c_a * c_c * m_b - c_b * m_c - c_b * m_a) * v_bc +
+     (s2_c * m_a * m_a * m_b * m_b * mabc_inv + total) * v_ab) / denom;
+  let t_bc =
+    ((c_a * c_b * m_c - c_c * m_b - c_c * m_a) * v_ca +
+     (s2_a * m_b * m_b * m_c * m_c * mabc_inv + total) * v_bc +
+     (c_a * c_c * m_b - c_b * m_a - c_b * m_c) * v_ab) / denom;
+  let t_ca =
+    ((s2_b * m_a * m_a * m_c * m_c * mabc_inv + total) * v_ca +
+     (c_a * c_b * m_c - c_c * m_b - c_c * m_a) * v_bc +
+     (c_b * c_c * m_a - c_a * m_b - c_a * m_c) * v_ab) / denom;
+
+  let new_a = v_a + (e_ab * t_ab - e_ca * t_ca) * inv_a;
+  let new_b = v_b + (e_bc * t_bc - e_ab * t_ab) * inv_b;
+  let new_c = v_c + (e_ca * t_ca - e_bc * t_bc) * inv_c;
+  for (var axis = 0u; axis < 3u; axis++) {
+    velocities[a * 3u + axis] = component_of(new_a, axis);
+    velocities[b * 3u + axis] = component_of(new_b, axis);
+    velocities[c * 3u + axis] = component_of(new_c, axis);
+  }
+}
+
+/// Pull one component out of a vec3 by a runtime index.
+fn component_of(value: vec3<f32>, axis: u32) -> f32 {
+  if (axis == 0u) { return value.x; }
+  if (axis == 1u) { return value.y; }
+  return value.z;
 }

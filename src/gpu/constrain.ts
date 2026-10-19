@@ -104,14 +104,22 @@ export function uploadConstraintTables(
   put("constraint/headers", tables.headers);
   put("constraint/atoms", tables.atoms);
   put("constraint/constraints", tables.constraints);
-  put("constraint/mass", tables.mass);
-  put("constraint/inverseMass", tables.inverseMass);
+  // Neutral labels: the integrator and the reductions need the same two
+  // tables, and the pool is idempotent by label, so they upload once.
+  put("system/mass", tables.mass);
+  put("system/inverseMass", tables.inverseMass);
 }
 
 export interface ConstrainOptions {
   readonly tolerance: number;
   readonly maxIterations?: number;
-  /** Constrain velocities rather than positions. */
+  /**
+   * Project velocities rather than positions.
+   *
+   * Then `trial` is the f32 velocity buffer and `reference` the fixed-point
+   * positions they belong to -- two different formats, which is why the kernel
+   * has a separate entry point and a separate binding for each.
+   */
   readonly velocities?: boolean;
 }
 
@@ -119,8 +127,9 @@ export interface ConstrainOptions {
  * Project `trial` onto the constraint surface on the device.
  *
  * `reference` and `trial` are pool-owned fixed-point position buffers. In
- * velocity mode `trial` holds velocities and `reference` the positions they
- * belong to.
+ * velocity mode `trial` is instead the f32 velocity buffer, and `reference`
+ * stays the positions those velocities belong to -- the reference bond vectors
+ * come from there.
  */
 export async function constrainOnDevice(
   pool: BufferPool,
@@ -139,30 +148,42 @@ export async function constrainOnDevice(
     return buffer;
   };
 
-  // SETTLE is analytic and has no tolerance; it is also only defined for
-  // positions, so velocity mode goes entirely through the iterative kernel --
-  // which is what the reference does too, via settleVelocities' own exact
-  // solve. That solve is not on the GPU yet, so velocity mode here is SHAKE
-  // over every cluster including the triangles.
-  if (!velocityMode && tables.settleCount > 0) {
+  // SETTLE handles the rigid triangles in both modes, analytically and with no
+  // tolerance, exactly as the reference routes them. It has to: the iterative
+  // kernel's tables hold only the *iterative* clusters, so leaving the
+  // triangles to it means leaving them unconstrained -- which cost 2.36 nm/ps
+  // on a thermostatted step before the staged diagnostic found it.
+  if (tables.settleCount > 0) {
     const params = pool.buffer({
       label: "constraint/settleParams",
       byteLength: 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     device.queue.writeBuffer(params, 0, new Uint32Array([tables.settleCount]));
+    // The two entry points read the state they project from different
+    // bindings -- fixed-point positions at 1, f32 velocities at 6 -- so each
+    // is given only what it reaches. `layout: "auto"` derives a layout per
+    // entry point and rejects a bind group carrying anything more.
+    const settleCommon = [
+      { binding: 0, resource: { buffer: reference } },
+      { binding: 2, resource: { buffer: need("system/mass") } },
+      { binding: 3, resource: { buffer: need("constraint/settleAtoms") } },
+      { binding: 5, resource: { buffer: params } },
+    ];
     await dispatch(device, {
-      label: "settle",
+      label: velocityMode ? "settle/velocities" : "settle/positions",
       code: SETTLE,
-      entryPoint: "settle_cluster",
-      bindings: [
-        { binding: 0, resource: { buffer: reference } },
-        { binding: 1, resource: { buffer: trial } },
-        { binding: 2, resource: { buffer: need("constraint/mass") } },
-        { binding: 3, resource: { buffer: need("constraint/settleAtoms") } },
-        { binding: 4, resource: { buffer: need("constraint/settleDistances") } },
-        { binding: 5, resource: { buffer: params } },
-      ],
+      entryPoint: velocityMode ? "settle_velocities" : "settle_cluster",
+      // The velocity solve needs no target distances: the bond directions come
+      // from the reference positions, and the distances are already implicit
+      // in them. Passing a binding an entry point does not reach is an error.
+      bindings: velocityMode
+        ? [...settleCommon, { binding: 6, resource: { buffer: trial } }]
+        : [
+            ...settleCommon,
+            { binding: 1, resource: { buffer: trial } },
+            { binding: 4, resource: { buffer: need("constraint/settleDistances") } },
+          ],
       workgroups: [Math.ceil(tables.settleCount / 64)],
     });
   }
@@ -174,26 +195,30 @@ export async function constrainOnDevice(
     options.maxIterations ?? MAX_CONSTRAINT_ITERATIONS,
   ]);
   new Float32Array(shakeParams, 8, 1)[0] = options.tolerance;
-  new Uint32Array(shakeParams, 12, 1)[0] = velocityMode ? 1 : 0;
   const params = pool.buffer({
-    label: `constraint/shakeParams${velocityMode ? "Velocity" : "Position"}`,
+    label: "constraint/shakeParams",
     byteLength: 16,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   device.queue.writeBuffer(params, 0, new Uint8Array(shakeParams));
+  // The two entry points take their state from different bindings, so each
+  // gets only the ones it reaches: `layout: "auto"` derives a layout per entry
+  // point and rejects a bind group carrying anything else.
+  const common = [
+    { binding: 0, resource: { buffer: reference } },
+    { binding: 2, resource: { buffer: need("system/inverseMass") } },
+    { binding: 3, resource: { buffer: need("constraint/headers") } },
+    { binding: 4, resource: { buffer: need("constraint/atoms") } },
+    { binding: 5, resource: { buffer: need("constraint/constraints") } },
+    { binding: 6, resource: { buffer: params } },
+  ];
   await dispatch(device, {
     label: velocityMode ? "rattle" : "shake",
     code: SHAKE,
-    entryPoint: "shake_cluster",
-    bindings: [
-      { binding: 0, resource: { buffer: reference } },
-      { binding: 1, resource: { buffer: trial } },
-      { binding: 2, resource: { buffer: need("constraint/inverseMass") } },
-      { binding: 3, resource: { buffer: need("constraint/headers") } },
-      { binding: 4, resource: { buffer: need("constraint/atoms") } },
-      { binding: 5, resource: { buffer: need("constraint/constraints") } },
-      { binding: 6, resource: { buffer: params } },
-    ],
+    entryPoint: velocityMode ? "rattle_cluster" : "shake_cluster",
+    bindings: velocityMode
+      ? [...common, { binding: 7, resource: { buffer: trial } }]
+      : [...common, { binding: 1, resource: { buffer: trial } }],
     workgroups: [Math.ceil(tables.clusterCount / 64)],
   });
 }
