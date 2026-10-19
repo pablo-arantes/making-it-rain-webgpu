@@ -1,0 +1,22 @@
+# The oracle environment.  Everything the notebook's topology and analysis
+# cells need, minus the docking tools.
+name: mir-oracle
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - openmm>=8.2          # 8.2 is where LangevinIntegrator became LFMiddle
+  - openmmforcefields
+  - openff-toolkit
+  - pdbfixer
+  - parmed
+  - rdkit
+  - ambertools           # sqm, antechamber, parmchk2 -- needed for gaff-*
+  - pytraj
+  - mdanalysis
+  - prolif
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn

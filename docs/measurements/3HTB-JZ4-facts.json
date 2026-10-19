@@ -1,0 +1,156 @@
+{
+ "source": "3HTB.pdb",
+ "chains": [
+  "A"
+ ],
+ "options": {
+  "protein_ff": "ff14SB",
+  "water": "tip3p",
+  "padding_angstrom": 4.0,
+  "ions": "NaCl",
+  "concentration_molar": 0.15,
+  "pH": 7.4,
+  "ligand_ff": "gaff-2.11"
+ },
+ "receptor_records_after_cell7_filter": 1364,
+ "ligand_records": 10,
+ "pdbfixer": {
+  "atoms_as_read_by_openmm": 1300,
+  "missingResidues": {},
+  "missingAtoms": {},
+  "missingTerminals": {
+   "<Residue 162 (ASN) of chain 0>": [
+    "OXT"
+   ]
+  },
+  "atoms_after_addMissingAtoms": 1301,
+  "atoms_after_addMissingHydrogens": 2614
+ },
+ "forcefield_files": [
+  "amber14/protein.ff14SB.xml",
+  "amber14/tip3p.xml"
+ ],
+ "ligand": {
+  "ccd_code": "JZ4",
+  "ccd_smiles": "CCCc1ccccc1O",
+  "ccd_heavy_atoms": 10,
+  "pdb_fragment_heavy_atoms": 10,
+  "smiles_after_assignment": "CCCc1ccccc1O",
+  "atoms_with_hydrogens": 22,
+  "formal_charge": 0,
+  "template_generator": "GAFFTemplateGenerator",
+  "charge_seconds": 0.0
+ },
+ "atoms_before_addHydrogens": 2636,
+ "atoms_after_addHydrogens": 2636,
+ "atoms_total": 26078,
+ "residues_total": 8010,
+ "residue_counts": {
+  "MET": 4,
+  "ASN": 11,
+  "ILE": 10,
+  "PHE": 5,
+  "GLU": 8,
+  "LEU": 14,
+  "ARG": 13,
+  "ASP": 12,
+  "GLY": 11,
+  "LYS": 13,
+  "TYR": 6,
+  "THR": 11,
+  "HIS": 1,
+  "SER": 5,
+  "PRO": 3,
+  "ALA": 16,
+  "CYS": 2,
+  "VAL": 9,
+  "GLN": 6,
+  "TRP": 3,
+  "UNK": 1,
+  "HOH": 7798,
+  "NA": 21,
+  "CL": 27
+ },
+ "n_waters": 7798,
+ "n_positive_ions": 21,
+ "n_chloride": 27,
+ "box_nm": [
+  [
+   6.523932,
+   0,
+   0
+  ],
+  [
+   0,
+   6.523932,
+   0
+  ],
+  [
+   0,
+   0,
+   6.523932
+  ]
+ ],
+ "forces": [
+  {
+   "index": 0,
+   "class": "HarmonicBondForce",
+   "numBonds": 1331
+  },
+  {
+   "index": 1,
+   "class": "PeriodicTorsionForce",
+   "numTorsions": 8894
+  },
+  {
+   "index": 2,
+   "class": "NonbondedForce",
+   "numParticles": 26078,
+   "numExceptions": 37732,
+   "cutoff_nm": 1.0,
+   "ewaldErrorTolerance": 0.0005,
+   "useDispersionCorrection": true,
+   "useSwitchingFunction": false
+  },
+  {
+   "index": 3,
+   "class": "CMMotionRemover"
+  },
+  {
+   "index": 4,
+   "class": "HarmonicAngleForce",
+   "numAngles": 4788
+  }
+ ],
+ "constraints": 24719,
+ "pme": {
+  "alpha_per_nm": 2.628260884878466,
+  "grid_reference_platform": [
+   53,
+   53,
+   53
+  ]
+ },
+ "reference_energies_kJ_mol": {
+  "0:HarmonicBondForce": 1194.2021304602486,
+  "1:PeriodicTorsionForce": 14574.340074567275,
+  "2:NonbondedForce": 1563444.2152831473,
+  "3:CMMotionRemover": 0.0,
+  "4:HarmonicAngleForce": 15306.219755738277,
+  "5:NonbondedForce[reciprocal]": -1732547.546258145,
+  "total": -138028.56901423668
+ },
+ "reference_forces_kJ_mol_nm": {
+  "rms": 6849.1036510713,
+  "max_component": 207461.8418889021
+ },
+ "system_xml_bytes": 7340930,
+ "versions": {
+  "openmm": "8.4.0.dev-4768436",
+  "openmmforcefields": "0.15.1",
+  "openff.toolkit": "0.18.0",
+  "rdkit": "2025.09.5",
+  "parmed": "4.3.1",
+  "pdbfixer": "?"
+ }
+}

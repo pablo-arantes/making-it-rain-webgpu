@@ -1,0 +1,29 @@
+{
+ "host": {
+  "platform": "macOS-14.5-arm64-arm-64bit",
+  "machine": "arm64",
+  "processor": "arm"
+ },
+ "openmm": "8.4.0.dev-4768436",
+ "atoms": 26078,
+ "available_platforms": [
+  "Reference",
+  "CPU",
+  "OpenCL"
+ ],
+ "minimisation": {
+  "platform": "CPU",
+  "max_iterations": 10000,
+  "seconds": 57.9,
+  "energy_kJ_mol": -434654.5962246436
+ },
+ "ns_per_day": {
+  "OpenCL": "unavailable: No compatible OpenCL platform is available",
+  "CPU": {
+   "steps": 400,
+   "timestep_fs": 2,
+   "seconds": 4.2,
+   "ns_per_day": 16.4
+  }
+ }
+}

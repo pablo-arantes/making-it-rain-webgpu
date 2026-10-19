@@ -1,0 +1,13 @@
+node_modules/
+dist/
+fixtures/
+*.dcd
+*.rst
+*.prmtop
+*.inpcrd
+system.xml
+state.xml
+system.pdb
+__pycache__/
+.DS_Store
+.vite/

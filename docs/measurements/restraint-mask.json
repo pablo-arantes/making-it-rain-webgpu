@@ -1,0 +1,99 @@
+{
+ "topology": "<Topology: 26078 atoms, 8010 residues, 7871 mols, PBC with box type = cubic>",
+ "atoms": 26078,
+ "masks": {
+  "notebook_as_written": {
+   "mask": "!(:H*) & !(:HOH) & !(:NA) & !(:CL) & !(:K)",
+   "n_selected": 2619,
+   "n_hydrogens_selected": 1318,
+   "residue_names_covered": [
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "UNK",
+    "VAL"
+   ]
+  },
+  "heavy_atoms_as_intended": {
+   "mask": "!(@H*) & !(:HOH) & !(:NA) & !(:CL) & !(:K)",
+   "n_selected": 1311,
+   "n_hydrogens_selected": 0,
+   "residue_names_covered": [
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "UNK",
+    "VAL"
+   ]
+  },
+  "residues_named_H_star": {
+   "mask": ":H*",
+   "n_selected": 23411,
+   "n_hydrogens_selected": 15603,
+   "residue_names_covered": [
+    "HIS",
+    "HOH"
+   ]
+  },
+  "atoms_named_H_star": {
+   "mask": "@H*",
+   "n_selected": 16921,
+   "n_hydrogens_selected": 16921,
+   "residue_names_covered": [
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "HOH",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "UNK",
+    "VAL"
+   ]
+  }
+ }
+}

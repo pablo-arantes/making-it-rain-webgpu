@@ -1,0 +1,40 @@
+{
+ "addHydrogens_determinism": {
+  "trials": 3,
+  "atoms": [
+   2614,
+   2614,
+   2614
+  ],
+  "bounding_radius_nm": [
+   3.084629,
+   3.082956,
+   3.076976
+  ],
+  "box_at_padding_nm": [
+   6.569259,
+   6.565913,
+   6.553951
+  ],
+  "max_per_atom_displacement_vs_trial0_angstrom": [
+   2.3499,
+   2.3298
+  ]
+ },
+ "periodic_image": [
+  {
+   "file": "/tmp/mir_fixtures/1L2Y/system.pdb",
+   "solute_atoms": 304,
+   "box_nm": 3.1127,
+   "min_solute_to_image_nm": 0.957916,
+   "inside_1nm_cutoff": true
+  },
+  {
+   "file": "/tmp/mir_fixtures/3HTB/system.pdb",
+   "solute_atoms": 2636,
+   "box_nm": 6.5239,
+   "min_solute_to_image_nm": 1.822063,
+   "inside_1nm_cutoff": false
+  }
+ ]
+}
