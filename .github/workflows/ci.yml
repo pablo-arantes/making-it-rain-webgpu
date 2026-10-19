@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Typecheck, the unit and reference lanes, and the web build. No GPU
+      # needed, which is the point: this must stay runnable anywhere.
+      - run: npm run check
+
+  gpu:
+    # Dawn's Linux binary loads on the runner, so the GPU lane that cannot run
+    # on a macOS 14 developer machine does run here. It is allowed to fail
+    # because a hosted runner's software adapter is not a supported target --
+    # the signal is the differential result, not the hardware.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - run: npm run test:gpu
+
+  browser:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - run: sudo apt-get install -y mesa-vulkan-drivers
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: test-results/
+          retention-days: 7
+
+  oracle:
+    # The Python side: regenerate the committed fixtures and check that the
+    # numbers docs/ quotes are still the numbers OpenMM produces.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: tools/environment.yml
+          activate-environment: mir-oracle
+          miniforge-version: latest
+      - name: Rebuild the Trp-cage fixture and compare with the committed facts
+        shell: bash -el {0}
+        run: |
+          python tools/build_reference_system.py --pdb-id 1L2Y --out /tmp/fixtures
+          python - <<'PY'
+          import json
+          new = json.load(open("/tmp/fixtures/1L2Y/facts.json"))
+          old = json.load(open("docs/measurements/1L2Y-facts.json"))
+          # Atom counts and PME parameters are deterministic; hydrogen
+          # positions are not (see docs/NOTEBOOK_PARITY.md finding 2), so the
+          # box and water count are allowed to move a little.
+          assert new["pme"] == old["pme"], (new["pme"], old["pme"])
+          assert new["forces"][0]["numBonds"] == old["forces"][0]["numBonds"]
+          box_new, box_old = new["box_nm"][0][0], old["box_nm"][0][0]
+          assert abs(box_new - box_old) < 0.1, (box_new, box_old)
+          print("fixture agrees with the committed facts")
+          PY

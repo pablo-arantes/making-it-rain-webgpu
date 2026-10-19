@@ -1,0 +1,143 @@
+{
+ "adapter": {
+  "vendor": "apple",
+  "architecture": "metal-3",
+  "device": "",
+  "description": "",
+  "features": [
+   "atomic-vec2u-min-max",
+   "bgra8unorm-storage",
+   "chromium-experimental-subgroup-matrix",
+   "clip-distances",
+   "core-features-and-limits",
+   "depth-clip-control",
+   "depth32float-stencil8",
+   "dual-source-blending",
+   "float32-blendable",
+   "float32-filterable",
+   "indirect-first-instance",
+   "primitive-index",
+   "rg11b10ufloat-renderable",
+   "shader-f16",
+   "subgroup-size-control",
+   "subgroups",
+   "texture-component-swizzle",
+   "texture-compression-astc",
+   "texture-compression-astc-sliced-3d",
+   "texture-compression-bc",
+   "texture-compression-bc-sliced-3d",
+   "texture-compression-etc2",
+   "texture-compression-unaligned",
+   "texture-formats-tier1",
+   "texture-formats-tier2",
+   "timestamp-query"
+  ],
+  "limits": {
+   "maxBufferSize": 4294967292,
+   "maxStorageBufferBindingSize": 4294967292,
+   "maxComputeWorkgroupStorageSize": 32768,
+   "maxComputeInvocationsPerWorkgroup": 1024,
+   "maxComputeWorkgroupSizeX": 1024,
+   "maxComputeWorkgroupsPerDimension": 65535,
+   "maxStorageBuffersPerShaderStage": 10,
+   "maxUniformBufferBindingSize": 65536
+  },
+  "isFallback": false
+ },
+ "sizeEstimate": {
+  "bytesPerAtom": 1068,
+  "atomsAtBindingLimit": 139810,
+  "atomsAtBufferLimit": 251344,
+  "maxAtoms": 139810,
+  "limitedBy": "storage binding"
+ },
+ "checks": [
+  {
+   "name": "fixed-point accumulation is exact under contention",
+   "ok": true,
+   "claim": "65536 signed force contributions accumulated into 16 slots must equal the exact BigInt sum, with no tolerance, whatever order the GPU ran them in",
+   "detail": {
+    "values": 65536,
+    "slots": 16,
+    "contributionsPerSlot": 4096,
+    "mismatches": 0,
+    "firstMismatch": null,
+    "slot0SumKJPerMolNm": -10472.384289614856
+   }
+  },
+  {
+   "name": "the 64-bit carry emulation is correct",
+   "ok": true,
+   "claim": "16384 contributions with fractional parts near 1, both signs, into one slot: the emulated carry must reproduce exact 64-bit addition",
+   "detail": {
+    "values": 16384,
+    "lowWordWraps": 8206,
+    "want": "133878884352",
+    "got": "133878884352",
+    "differenceKJPerMolNm": 0
+   }
+  },
+  {
+   "name": "fixed-point positions move where f32 stagnates, without drifting",
+   "ok": true,
+   "claim": "200000 displacements of 1e-7 nm onto a 6.5 nm coordinate: both device accumulators must equal their references bit for bit, the compensated one must stay inside 1e-7 nm of the exact answer, and f32 must visibly fail",
+   "detail": {
+    "startNm": 6.5,
+    "displacements": 200000,
+    "displacementNm": 1e-7,
+    "f32UlpAtStartNm": 4.76837158203125e-7,
+    "exactNm": 6.520000000233722,
+    "plainNm": 6.519976869225502,
+    "plainErrorNm": 0.0000231310082199343,
+    "plainMatchesReference": true,
+    "compensatedNm": 6.520000000251457,
+    "compensatedErrorNm": 1.77351466845721e-11,
+    "compensatedMatchesReference": true,
+    "compensationFactor": 1304246.7948717948,
+    "outstandingResidualNm": -1.77351466845721e-11,
+    "f32Nm": 6.5,
+    "f32ErrorNm": 0.02000000023372195,
+    "f32MovedAtAll": false
+   }
+  },
+  {
+   "name": "fixed-point positions track a realistic displacement history",
+   "ok": true,
+   "claim": "200000 displacements of +/-5e-4 nm, the scale of a 2 fs step: both device accumulators must equal their references bit for bit",
+   "detail": {
+    "startNm": 6.5,
+    "steps": 200000,
+    "exactNm": 6.411309123348912,
+    "plainNm": 6.411309109069407,
+    "plainErrorNm": -1.4279504689795885e-8,
+    "plainMatchesReference": true,
+    "compensatedNm": 6.411309119546786,
+    "compensatedErrorNm": -3.802125725371752e-9,
+    "compensatedMatchesReference": true,
+    "outstandingResidualNm": -8.731149137020111e-11,
+    "f32Nm": 6.411228179931641,
+    "f32ErrorNm": -0.00008094341727105103
+   }
+  },
+  {
+   "name": "this device folds Dekker error-free arithmetic away (expected)",
+   "ok": true,
+   "claim": "a report, not a requirement: whether the backend preserves the rounding that double-single depends on. Positions use fixed-point integers either way",
+   "detail": {
+    "honoursErrorFreeArithmetic": false,
+    "deviceDekkerNm": 6.5,
+    "deviceDekkerHi": 6.5,
+    "deviceDekkerLo": 0,
+    "deviceDekkerErrorNm": 0.02000000023372195,
+    "hostDekkerNm": 6.5200000000047424,
+    "hostDekkerErrorNm": 2.2897950202604989e-10,
+    "hostF32Nm": 6.5,
+    "expectedNm": 6.520000000233722,
+    "note": "the low word stayed at zero, so `b - (s - a)` was folded to zero"
+   }
+  }
+ ],
+ "ok": true,
+ "consoleErrors": [],
+ "capturedAt": "2026-10-19T14:53:37.548Z"
+}

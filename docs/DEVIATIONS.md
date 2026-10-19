@@ -22,6 +22,7 @@ place.
 | 10 | GROMACS `top`/`gro` from ParmEd, built from a second constraint-free `System` | Best effort, Phase 5, labelled non-authoritative unless it round-trips | ParmEd's GROMACS writer has its own conventions and no step of this protocol reads the format | yes — the download is labelled |
 | 11 | Interaction network over at most 10 frames whatever the trajectory length | Every frame, with the frame count stated | A 0.3 frequency threshold over 10 frames is a coarser statement than it looks | yes — the frame count is on the figure |
 | 12 | Analysis parameters are retyped into each analysis cell | Everything read from `run.json` | A plot's time axis cannot then disagree with its trajectory | no — it can only remove a class of error |
+| 13 | OpenMM's mixed precision keeps positions in f64 and accumulates forces in 64-bit fixed point | Positions in 64-bit fixed point with residual feedback; forces in the same format. There is no f64 and no 64-bit atomic in WebGPU | Measured: 2.3e-10 nm resolution against the 1e-7 nm the constraint tolerance needs, and 1.8e-11 nm accumulated error over 400 ps. The force format is OpenMM's own | no — it is an implementation of the same precision class; `docs/PRECISION.md` has the numbers |
 
 ## Not deviations, but worth stating
 

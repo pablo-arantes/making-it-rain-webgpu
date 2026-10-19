@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A raindrop over a periodic box: the protocol, and the periodicity the
+       engine has to get right. -->
+  <rect width="32" height="32" rx="6" fill="#1f6feb"/>
+  <path d="M6 20.5h14v6M6 20.5l4-3.5h14M20 20.5l4-3.5v6l-4 3.5z"
+        fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.4"
+        stroke-linejoin="round"/>
+  <path d="M15 6c3.4 4.2 5.2 6.9 5.2 9.1a5.2 5.2 0 0 1-10.4 0C9.8 12.9 11.6 10.2 15 6z"
+        fill="#ffffff"/>
+</svg>

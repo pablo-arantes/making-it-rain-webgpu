@@ -1,0 +1,39 @@
+{
+  "name": "making-it-rain-webgpu",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Molecular dynamics in the browser on WebGPU, held to the Making it Rain OpenMM protocol",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:web": "vite build",
+    "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:gpu": "MIR_GPU_TESTS=1 vitest run test/*.gpu.test.ts",
+    "test:oracle": "MIR_ORACLE_TESTS=1 vitest run test/*.oracle.test.ts",
+    "test:browser": "playwright test",
+    "bench": "tsx tools/bench.ts",
+    "report:adapter": "tsx tools/report-adapter.ts",
+    "check": "npm run build && npm run test && npm run build:web"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "26.4.0",
+    "@webgpu/types": "0.1.72",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "webgpu": "0.6.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true,
+    "webgpu@0.6.0": true
+  }
+}

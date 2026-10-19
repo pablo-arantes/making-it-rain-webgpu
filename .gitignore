@@ -1,6 +1,9 @@
 node_modules/
 dist/
 fixtures/
+test-results/
+playwright-report/
+vendor/openmm-wasm/
 *.dcd
 *.rst
 *.prmtop

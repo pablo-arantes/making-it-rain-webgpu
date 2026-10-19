@@ -20,7 +20,7 @@ build, in what order, and how each piece is held to the notebook.
 | Ligand parameters | **`openff-2.3.0` (Sage 2.3.0) by default**, typed with RDKit WASM SMIRKS matching; GAFF kept as an option but **upload-only** | Verified: `GAFFTemplateGenerator` shells out to `antechamber` for **atom typing**, not just charging, and no GAFF SMIRNOFF port exists — see [§Ligand force field](#ligand-force-field-and-charges) |
 | Ligand charges | **OpenFF NAGL exported to ONNX**, run on ONNX Runtime Web; Gasteiger only as a labelled fallback | AM1-BCC needs `sqm`. NAGL is 0.016 e from OpenEye AM1-BCC where AmberTools itself is 0.034 e |
 | Force accumulation | **Fixed point**, with gather instead of atomics wherever a gather exists; emulated 64-bit (carry-propagating) atomics only where it does not | Fixed-point accumulation is *exact* and order-independent, which is what makes a 1.5-million-kJ/mol cancellation survivable and a run bit-reproducible |
-| Positions | **Double-single** (two f32, hi + lo) | A 1e-6 constraint tolerance on a 0.1 nm bond is 1e-7 nm; f32 at a 6.5 nm coordinate has a 3.9e-7 nm ulp, so the constraint cannot be satisfied in plain f32 |
+| Positions | **64-bit fixed point with residual feedback** | A 1e-6 constraint tolerance on a 0.1 nm bond is 1e-7 nm; f32 at a 6.5 nm coordinate has a 4.77e-7 nm ulp, so an f32 coordinate does not drift, it stops moving. Double-single was the first answer and is **abandoned**: Chrome/Metal folds Dekker's error term to zero. Measured in [PRECISION.md](PRECISION.md) |
 | Integrator | **LFMiddle** | `LangevinIntegrator` *is* `LangevinMiddleIntegrator` in OpenMM ≥ 8.2, so that is what the notebook runs |
 | Reproducibility | Every run seeds every RNG and records the seed; a build with the same seed is bit-identical | The notebook's own preparation is not reproducible (measured: 2.3 Å of hydrogen movement between identical runs) |
 
@@ -196,25 +196,49 @@ thread order and nothing is lost while accumulating.
    (a) gather per grid point over a cell-binned atom list — deterministic, no
    atomics; (b) carry-propagating 64-bit emulation — `atomicAdd` the low word,
    detect the wrap from the returned old value, `atomicAdd` 1 into the high
-   word. (a) is preferred because it keeps the determinism invariant whole.
+   word. (b) is **built and verified** as of Phase 0, including under heavy
+   contention. (a) is still preferred because it keeps the determinism invariant
+   whole, but Phase 0's benchmark weakens the performance argument for it: on an
+   Apple M3 Pro one accumulator slot runs *faster* than 65536, so contention is
+   not the cost — scattered memory is. Measure NVIDIA and an integrated adapter
+   before deciding.
 3. **Overflow is checked, not assumed.** The scale is chosen from a measured
    force bound with a recorded headroom factor, and a debug build traps on
    saturation. Pre-minimisation structures are the dangerous case: the
    unminimised 3HTB state has a maximum force component of 5.6e5 kJ/mol/nm.
 
-### Positions — double-single
+### Positions — fixed point with residual feedback
 
-Positions are two f32 words (hi + lo, Dekker-style), giving ~48 bits of
-mantissa. Velocities stay f32. All *differences* — bond vectors, pair vectors,
-grid offsets — are computed by subtracting in double-single and rounding to f32,
-where the magnitudes are at most the cutoff and f32 has ulp ~6e-8 nm.
+**Superseded by measurement during Phase 0; [PRECISION.md](PRECISION.md) is the
+current answer and has the numbers.** In summary:
 
-The reason is the constraints. The notebook sets
+Positions use the same 64-bit fixed-point format as the forces, and the
+integrator carries the part of each displacement that did not fit the format
+into the next step. Velocities stay f32. All *differences* — bond vectors, pair
+vectors, grid offsets — are taken in fixed point and then converted to f32,
+where the magnitudes are at most the cutoff and f32's ulp is ~6e-8 nm. An
+absolute coordinate is never converted to f32.
+
+The reason positions cannot be f32 is the constraints. The notebook sets
 `integrator.setConstraintTolerance(1e-6)`; on a 0.1 nm X–H bond that is 1e-7 nm,
-while f32 at a 6.5 nm coordinate has an ulp of 3.9e-7 nm. SETTLE and CCMA cannot
-converge to the notebook's tolerance in plain f32 absolute coordinates. This is
-also what OpenMM's "mixed" precision means: single-precision forces, higher
-precision positions and integration.
+while f32 at a 6.5 nm coordinate has an ulp of 4.77e-7 nm — so a displacement
+that small leaves the coordinate completely unchanged. Measured: 200000
+displacements of 1e-7 nm move an f32 coordinate not at all, losing 0.02 nm.
+
+The reason they are not double-single, which was the original plan and is the
+obvious way to get ~48 bits out of two f32 words: **Chrome/Metal folds Dekker's
+error-free arithmetic away.** With runtime inputs, `two_sum`'s error term comes
+back as exactly zero, because the backend simplifies `b - (s - a)` into `b - b`.
+Nothing warns, and the result is an f32-precision accumulator wearing a
+double-single type. Hence the invariant in `AGENTS.md`: no scheme may depend on
+an f32 rounding surviving the optimiser.
+
+Residual feedback matters as much as the format. Plain fixed-point accumulation
+drifts *linearly in the step count* when a displacement repeats, because the
+conversion error is then identical every step rather than random: 2.3e-5 nm over
+400 ps, which would be 0.06 nm at a microsecond. Carrying the residual bounds
+the outstanding error at one unit in the last place however long the run is —
+measured at 1.8e-11 nm over the same 400 ps.
 
 ### Determinism
 

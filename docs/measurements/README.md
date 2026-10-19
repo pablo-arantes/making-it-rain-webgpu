@@ -13,3 +13,5 @@ committed -- regenerate them with `tools/build_reference_system.py`.
 | `host-timings.json` | `tools/bench_reference_host.py` | Apple M3 Pro (12 CPU cores, 14 GPU cores), 18 GB |
 | `preparation-determinism.json` | `tools/probe_preparation_determinism.py` | same |
 | `calibration-M3Pro-opencl.json` | `tools/calibrate_thresholds.py` | same — **provisional**: this host has no mixed-precision GPU platform, so the basis is OpenCL single. Replaced by a Colab T4 run |
+| `device-M3Pro-chrome.json` | `npm run report:adapter` | Apple M3 Pro GPU through Chrome 155 headless, WebGPU/Metal |
+| `bench-M3Pro-chrome.json` | `npm run bench` | same |

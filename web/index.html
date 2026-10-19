@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Making it Rain on WebGPU</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Making it Rain <span class="on">on</span> WebGPU</h1>
+      <p class="lede">
+        Molecular dynamics in this tab, on your own GPU. Nothing is uploaded.
+      </p>
+      <p class="status" role="status">
+        <strong>Phase 0.</strong> The engine is not built yet. This page reports
+        your GPU and runs the precision checks the engine's design depends on.
+      </p>
+    </header>
+
+    <main>
+      <section id="gpu">
+        <h2>Your GPU</h2>
+        <div id="gpu-body" class="panel">Looking for a WebGPU adapter…</div>
+      </section>
+
+      <section id="checks">
+        <h2>Precision checks</h2>
+        <p class="note">
+          WebGPU has no f64 and no 64-bit atomics. The engine therefore
+          accumulates forces in 64-bit fixed point built from 32-bit atomics,
+          and keeps positions in two f32 words. These checks measure both on
+          your device against an independent reference.
+          <a href="https://github.com/pablo-arantes/making-it-rain-webgpu/blob/main/AGENTS.md">Why</a>.
+        </p>
+        <div id="checks-body" class="panel">Waiting for a device…</div>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        MIT. The protocol is
+        <a href="https://github.com/pablo-arantes/making-it-rain">Making it Rain</a>
+        (<a href="https://doi.org/10.1021/acs.jcim.1c00998">JCIM 2021</a>); the
+        engine is held to <a href="https://openmm.org">OpenMM</a>.
+      </p>
+    </footer>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+:root {
+  --bg: #fbfbfd;
+  --fg: #16181d;
+  --muted: #5d6470;
+  --line: #dfe2e8;
+  --panel: #ffffff;
+  --accent: #1f6feb;
+  --ok: #117a43;
+  --bad: #b22222;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1116;
+    --fg: #e8eaee;
+    --muted: #9aa3b2;
+    --line: #272b34;
+    --panel: #15181f;
+    --accent: #5b9bff;
+    --ok: #4cc38a;
+    --bad: #f07171;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto;
+  padding: 2.5rem 1rem 4rem;
+  max-width: 54rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -0.02em; }
+h1 .on { color: var(--muted); font-weight: 400; }
+h2 { font-size: 1.1rem; margin: 2.25rem 0 .6rem; }
+.lede { margin: 0 0 1rem; color: var(--muted); }
+.status, .note { font-size: .9rem; color: var(--muted); }
+.status {
+  border-left: 3px solid var(--accent);
+  padding: .5rem .85rem;
+  background: var(--panel);
+  margin: 1rem 0 0;
+}
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 1rem 1.15rem;
+}
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .3rem .5rem .3rem 0; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+td.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.check { border-top: 1px solid var(--line); padding: .8rem 0; }
+.check:first-child { border-top: 0; padding-top: 0; }
+.check h3 { font-size: .95rem; margin: 0 0 .2rem; display: flex; gap: .5rem; align-items: baseline; }
+.badge { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.badge.ok { color: var(--ok); }
+.badge.bad { color: var(--bad); }
+.claim { color: var(--muted); font-size: .85rem; margin: 0 0 .5rem; }
+details summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
+pre { font-family: var(--mono); font-size: .8rem; overflow-x: auto; margin: .5rem 0 0; }
+a { color: var(--accent); }
+footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; font-size: .85rem; color: var(--muted); }
+.bad-box { color: var(--bad); }

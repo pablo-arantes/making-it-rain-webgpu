@@ -1,0 +1,124 @@
+{
+ "adapter": {
+  "vendor": "apple",
+  "architecture": "metal-3",
+  "device": "",
+  "description": "",
+  "features": [
+   "atomic-vec2u-min-max",
+   "bgra8unorm-storage",
+   "chromium-experimental-subgroup-matrix",
+   "clip-distances",
+   "core-features-and-limits",
+   "depth-clip-control",
+   "depth32float-stencil8",
+   "dual-source-blending",
+   "float32-blendable",
+   "float32-filterable",
+   "indirect-first-instance",
+   "primitive-index",
+   "rg11b10ufloat-renderable",
+   "shader-f16",
+   "subgroup-size-control",
+   "subgroups",
+   "texture-component-swizzle",
+   "texture-compression-astc",
+   "texture-compression-astc-sliced-3d",
+   "texture-compression-bc",
+   "texture-compression-bc-sliced-3d",
+   "texture-compression-etc2",
+   "texture-compression-unaligned",
+   "texture-formats-tier1",
+   "texture-formats-tier2",
+   "timestamp-query"
+  ],
+  "limits": {
+   "maxBufferSize": 4294967292,
+   "maxStorageBufferBindingSize": 4294967292,
+   "maxComputeWorkgroupStorageSize": 32768,
+   "maxComputeInvocationsPerWorkgroup": 1024,
+   "maxComputeWorkgroupSizeX": 1024,
+   "maxComputeWorkgroupsPerDimension": 65535,
+   "maxStorageBuffersPerShaderStage": 10,
+   "maxUniformBufferBindingSize": 65536
+  },
+  "isFallback": false
+ },
+ "rows": [
+  {
+   "name": "fixed-point accumulate, 1 slot",
+   "unit": "million atomic adds per second",
+   "value": 374.5,
+   "detail": {
+    "contributions": 1048576,
+    "slots": 1,
+    "contributionsPerSlot": 1048576,
+    "medianMs": 2.799999952316284,
+    "bestMs": 2.5,
+    "timings": [
+     3,
+     3.2,
+     2.5,
+     2.6,
+     2.8
+    ]
+   }
+  },
+  {
+   "name": "fixed-point accumulate, 4096 slots",
+   "unit": "million atomic adds per second",
+   "value": 551.9,
+   "detail": {
+    "contributions": 1048576,
+    "slots": 4096,
+    "contributionsPerSlot": 256,
+    "medianMs": 1.8999998569488525,
+    "bestMs": 1.5999999046325684,
+    "timings": [
+     1.8,
+     1.6,
+     2,
+     1.9,
+     1.9
+    ]
+   }
+  },
+  {
+   "name": "fixed-point accumulate, 65536 slots",
+   "unit": "million atomic adds per second",
+   "value": 291.3,
+   "detail": {
+    "contributions": 1048576,
+    "slots": 65536,
+    "contributionsPerSlot": 16,
+    "medianMs": 3.6000001430511475,
+    "bestMs": 3.4000000953674316,
+    "timings": [
+     4.1,
+     3.6,
+     4.4,
+     3.5,
+     3.4
+    ]
+   }
+  },
+  {
+   "name": "position integrate, serial dependent chain",
+   "unit": "million steps per second",
+   "value": 6.8,
+   "detail": {
+    "steps": 1048576,
+    "medianMs": 153.89999985694885,
+    "bestMs": 152.40000009536743,
+    "timings": [
+     170.2,
+     167,
+     153.1,
+     153.9,
+     152.4
+    ]
+   }
+  }
+ ],
+ "capturedAt": "2026-10-19T14:53:39.816Z"
+}
