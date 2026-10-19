@@ -14,6 +14,7 @@ import { parseSystem, type OpenMMSystem } from "../engine/system.js";
 import { splitConstraints } from "../engine/constraint-clusters.js";
 import { constrainPositions } from "../reference/constraints.js";
 import { BufferPool } from "./allocator.js";
+import { readableStorageUsage } from "./usage.js";
 import { packConstraints, constrainOnDevice, uploadConstraintTables } from "./constrain.js";
 import { packPositions, unpackFixed } from "./forces.js";
 import { readBuffer } from "./compute.js";
@@ -49,9 +50,6 @@ function worstRelativeError(system: OpenMMSystem, positions: Float64Array): numb
   }
   return worst;
 }
-
-const STORAGE =
-  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 
 /**
  * Thresholds for the constraint kernels.
@@ -104,7 +102,7 @@ export async function validateConstraints(
     const referenceBuffer = pool.buffer({
       label: "reference",
       byteLength: referenceWords.byteLength,
-      usage: STORAGE,
+      usage: readableStorageUsage(),
     });
     device.queue.writeBuffer(
       referenceBuffer,
@@ -114,7 +112,7 @@ export async function validateConstraints(
     const trialBuffer = pool.buffer({
       label: "trial",
       byteLength: trialWords.byteLength,
-      usage: STORAGE,
+      usage: readableStorageUsage(),
     });
     device.queue.writeBuffer(trialBuffer, 0, trialWords as unknown as BufferSource);
 

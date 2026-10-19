@@ -24,7 +24,6 @@ import { dispatch, readBuffer } from "./compute.js";
 import { RANDOM_PROBE } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 
-const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
 
 export interface RandomComparison {
   readonly particles: number;
@@ -63,12 +62,12 @@ export async function validateRandom(
     const bits = pool.buffer({
       label: "random/bits",
       byteLength: particles * 4 * 4,
-      usage: STORAGE,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     const deviates = pool.buffer({
       label: "random/deviates",
       byteLength: particles * 3 * 4,
-      usage: STORAGE,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     const params = pool.buffer({
       label: "random/params",

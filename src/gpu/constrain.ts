@@ -9,11 +9,11 @@
 import { dispatch } from "./compute.js";
 import { SETTLE, SHAKE } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
+import { storageUsage } from "./usage.js";
 import { MAX_CONSTRAINT_ITERATIONS } from "../reference/constraints.js";
 import type { ConstraintSplit } from "../engine/constraint-clusters.js";
 import type { OpenMMSystem } from "../engine/system.js";
 
-const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
 
 /** Flat tables for the kernels, derived once from the system. */
 export interface ConstraintTables {
@@ -96,7 +96,7 @@ export function uploadConstraintTables(
   tables: ConstraintTables,
 ): void {
   const put = (label: string, data: ArrayBufferView): void => {
-    const buffer = pool.buffer({ label, byteLength: data.byteLength, usage: STORAGE });
+    const buffer = pool.buffer({ label, byteLength: data.byteLength, usage: storageUsage() });
     pool.device.queue.writeBuffer(buffer, 0, data as unknown as BufferSource);
   };
   put("constraint/settleAtoms", tables.settleAtoms);

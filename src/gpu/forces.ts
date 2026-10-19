@@ -1,13 +1,25 @@
 /**
  * Host side of the bonded force kernels.
  *
- * Uploads a parsed `System`'s bonded terms, runs one dispatch per term type,
- * and reads back the fixed-point forces and energy.  Phase 1 will keep the
- * buffers resident across steps; this evaluates one configuration, which is
- * what the differential tests need and what a single-point energy check is.
+ * Two layers, and the second is written in terms of the first so there is only
+ * ever one way these kernels get run.
+ *
+ * `prepareBonded` uploads a force's term tables into pool-owned buffers and
+ * `planBonded` builds the pass that evaluates them. The tables depend on the
+ * `System` and never on the coordinates, so a step loop does both once and then
+ * encodes the pass every step.
+ *
+ * `evaluateBondedForce` is the single-configuration path the differential tests
+ * use: make a pool, prepare, plan, submit, read back, drop the pool. It is six
+ * lines of orchestration over the same two functions, which is the point --
+ * a loop that evaluated forces differently from the tests would be a loop whose
+ * forces are untested.
  */
 
-import { dispatch, readBuffer, storageBuffer, uploadBuffer } from "./compute.js";
+import { readBuffer, pipelineCacheFor } from "./compute.js";
+import { submitPasses, type Pass, type PipelineCache } from "./pipeline.js";
+import { BufferPool } from "./allocator.js";
+import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import { BONDED } from "./kernels.js";
 import { fromFixed, fromWords, toFixed } from "../reference/fixed-point.js";
 import type {
@@ -46,7 +58,7 @@ export interface BondedResult {
   readonly forces: Float64Array;
 }
 
-type BondedForce = HarmonicBondForce | HarmonicAngleForce | PeriodicTorsionForce;
+export type BondedForce = HarmonicBondForce | HarmonicAngleForce | PeriodicTorsionForce;
 
 const ENTRY_POINT = {
   HarmonicBondForce: "harmonic_bond",
@@ -97,8 +109,79 @@ function packTerms(force: BondedForce): { atoms: Uint32Array; params: Float32Arr
   }
 }
 
+/** The buffers one bonded force needs, and how to dispatch it. */
+export interface ResidentBonded {
+  readonly type: BondedForce["type"];
+  readonly termCount: number;
+  readonly atoms: GPUBuffer;
+  readonly params: GPUBuffer;
+  readonly count: GPUBuffer;
+}
+
+
 /**
- * Evaluate one bonded force on the device.
+ * Upload one bonded force's term tables.
+ *
+ * `slot` distinguishes two forces of the same type, which an uploaded system
+ * may well have -- the pool is idempotent by label, so without it the second
+ * would silently reuse the first's buffers.
+ */
+export function prepareBonded(
+  pool: BufferPool,
+  force: BondedForce,
+  slot = 0,
+): ResidentBonded {
+  const { atoms, params } = packTerms(force);
+  const put = (name: string, data: ArrayBufferView, usage: number): GPUBuffer => {
+    const buffer = pool.buffer({
+      label: `bonded/${force.type}/${slot}/${name}`,
+      byteLength: Math.max(4, data.byteLength),
+      usage,
+    });
+    pool.device.queue.writeBuffer(buffer, 0, data as unknown as BufferSource);
+    return buffer;
+  };
+  return {
+    type: force.type,
+    termCount: force.count,
+    atoms: put("atoms", atoms, storageUsage()),
+    params: put("params", params, storageUsage()),
+    count: put("count", new Uint32Array([force.count]), uniformUsage()),
+  };
+}
+
+/** The pass that adds this force into the shared accumulators. */
+export function planBonded(
+  cache: PipelineCache,
+  resident: ResidentBonded,
+  accumulators: {
+    readonly positions: GPUBuffer;
+    readonly forces: GPUBuffer;
+    readonly energy: GPUBuffer;
+  },
+): Promise<Pass> {
+  return cache.pass(
+    {
+      label: `${resident.type} evaluate`,
+      code: BONDED,
+      entryPoint: ENTRY_POINT[resident.type],
+    },
+    // The indices accumulate.wgsl fixes: positions, forces, energy, then the
+    // kernel's own data, then its uniform.
+    [
+      { binding: 0, resource: { buffer: accumulators.positions } },
+      { binding: 1, resource: { buffer: accumulators.forces } },
+      { binding: 2, resource: { buffer: accumulators.energy } },
+      { binding: 3, resource: { buffer: resident.atoms } },
+      { binding: 4, resource: { buffer: resident.params } },
+      { binding: 5, resource: { buffer: resident.count } },
+    ],
+    [Math.max(1, Math.ceil(resident.termCount / 64))],
+  );
+}
+
+/**
+ * Evaluate one bonded force at one set of coordinates.
  *
  * `positionWords` comes from `packPositions`, so the caller can evaluate
  * several forces against one upload.
@@ -109,69 +192,52 @@ export async function evaluateBondedForce(
   positionWords: Uint32Array,
   particleCount: number,
 ): Promise<BondedResult> {
-  const { atoms, params } = packTerms(force);
-  const positionBuffer = uploadBuffer(device, {
-    label: "positions",
-    data: positionWords,
-    usage: GPUBufferUsage.STORAGE,
-  });
-  const atomBuffer = uploadBuffer(device, {
-    label: `${force.type} atoms`,
-    data: atoms,
-    usage: GPUBufferUsage.STORAGE,
-  });
-  const paramBuffer = uploadBuffer(device, {
-    label: `${force.type} params`,
-    data: params,
-    usage: GPUBufferUsage.STORAGE,
-  });
-  // Two words per component, and the buffer starts at zero.
-  const forceBytes = particleCount * 3 * 2 * 4;
-  const forceBuffer = storageBuffer(device, "forces", forceBytes);
-  device.queue.writeBuffer(forceBuffer, 0, new Uint32Array(particleCount * 3 * 2));
-  const energyBuffer = storageBuffer(device, "energy", 8);
-  device.queue.writeBuffer(energyBuffer, 0, new Uint32Array(2));
-  const countBuffer = uploadBuffer(device, {
-    label: `${force.type} count`,
-    data: new Uint32Array([force.count]),
-    usage: GPUBufferUsage.UNIFORM,
-  });
-
+  const pool = new BufferPool(device);
   try {
-    await dispatch(device, {
-      label: `${force.type} evaluate`,
-      code: BONDED,
-      entryPoint: ENTRY_POINT[force.type],
-      // The indices accumulate.wgsl fixes: positions, forces, energy, then the
-      // kernel's own data, then its uniform.
-      bindings: [
-        { binding: 0, resource: { buffer: positionBuffer } },
-        { binding: 1, resource: { buffer: forceBuffer } },
-        { binding: 2, resource: { buffer: energyBuffer } },
-        { binding: 3, resource: { buffer: atomBuffer } },
-        { binding: 4, resource: { buffer: paramBuffer } },
-        { binding: 5, resource: { buffer: countBuffer } },
-      ],
-      workgroups: [Math.max(1, Math.ceil(force.count / 64))],
-    });
-    const energyWords = new Uint32Array(await readBuffer(device, energyBuffer, 8));
-    const forceWords = new Uint32Array(await readBuffer(device, forceBuffer, forceBytes));
+    const components = particleCount * 3;
+    const accumulators = {
+      positions: pool.buffer({
+        label: "positions",
+        byteLength: positionWords.byteLength,
+        usage: storageUsage(),
+      }),
+      // Two words per component, and both accumulators start at zero.
+      forces: pool.buffer({
+        label: "forces",
+        byteLength: components * 2 * 4,
+        usage: readableStorageUsage(),
+      }),
+      energy: pool.buffer({
+        label: "energy",
+        byteLength: 8,
+        usage: readableStorageUsage(),
+      }),
+    };
+    device.queue.writeBuffer(
+      accumulators.positions,
+      0,
+      positionWords as unknown as BufferSource,
+    );
+    device.queue.writeBuffer(accumulators.forces, 0, new Uint32Array(components * 2));
+    device.queue.writeBuffer(accumulators.energy, 0, new Uint32Array(2));
+
+    const cache = pipelineCacheFor(device);
+    const pass = await planBonded(cache, prepareBonded(pool, force), accumulators);
+    await submitPasses(device, `${force.type} evaluate`, [pass]);
+
+    const energyWords = new Uint32Array(
+      await readBuffer(device, accumulators.energy, 8),
+    );
+    const forceWords = new Uint32Array(
+      await readBuffer(device, accumulators.forces, components * 2 * 4),
+    );
     return {
       energy: fromFixed(
         fromWords(energyWords[0] as number, (energyWords[1] as number) | 0),
       ),
-      forces: unpackFixed(forceWords, particleCount * 3),
+      forces: unpackFixed(forceWords, components),
     };
   } finally {
-    for (const b of [
-      positionBuffer,
-      atomBuffer,
-      paramBuffer,
-      forceBuffer,
-      energyBuffer,
-      countBuffer,
-    ]) {
-      b.destroy();
-    }
+    pool.destroy();
   }
 }

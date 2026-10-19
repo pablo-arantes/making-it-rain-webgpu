@@ -17,12 +17,11 @@
 import { dispatch, readBuffer } from "./compute.js";
 import { CELL_LIST } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
+import { readableStorageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
 import { CellListTooCoarse, MINIMUM_CELLS_PER_AXIS } from "./nonbonded.js";
 import type { Vec3 } from "../engine/system.js";
 
-const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-const UNIFORM = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
 
 /** The grid a box and a cutoff imply. Independent of the coordinates. */
 export interface CellGeometry {
@@ -101,9 +100,9 @@ export function prepareCellList(
   cutoff: number,
 ): CellListBuffers {
   const geometry = cellGeometry(box, cutoff);
-  const named = (label: string, byteLength: number, usage = STORAGE): GPUBuffer =>
+  const named = (label: string, byteLength: number, usage = readableStorageUsage()): GPUBuffer =>
     pool.buffer({ label, byteLength, usage });
-  const params = named("cell/params", 128, UNIFORM);
+  const params = named("cell/params", 128, uniformUsage());
   pool.device.queue.writeBuffer(
     params,
     0,

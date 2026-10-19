@@ -18,13 +18,12 @@
 import { dispatch, readBuffer } from "./compute.js";
 import { INTEGRATE, REDUCE } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
+import { readableStorageUsage, uniformUsage } from "./usage.js";
 import { constrainOnDevice, type ConstraintTables } from "./constrain.js";
 import { fromFixed, fromWords } from "../reference/fixed-point.js";
 import { BOLTZMANN_KJ_PER_MOL_K } from "../engine/units.js";
 import type { OpenMMSystem } from "../engine/system.js";
 
-const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-const UNIFORM = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
 
 /** Bit 0 of `StepParams.flags`. */
 const DRAW_NOISE = 1;
@@ -116,7 +115,7 @@ export function prepareIntegrator(
 ): IntegratorBuffers {
   const components = system.particleCount * 3;
   const named = (label: string, byteLength: number): GPUBuffer =>
-    pool.buffer({ label, byteLength, usage: STORAGE });
+    pool.buffer({ label, byteLength, usage: readableStorageUsage() });
   return {
     positions: named("integrate/positions", components * 8),
     velocities: named("integrate/velocities", components * 4),
@@ -179,7 +178,7 @@ function stepParams(
   const buffer = pool.buffer({
     label: "integrate/params",
     byteLength: 32,
-    usage: UNIFORM,
+    usage: uniformUsage(),
   });
   pool.device.queue.writeBuffer(buffer, 0, new Uint8Array(bytes));
   return buffer;
@@ -303,7 +302,7 @@ function reduceParams(pool: BufferPool, system: OpenMMSystem): GPUBuffer {
   const buffer = pool.buffer({
     label: "reduce/params",
     byteLength: 16,
-    usage: UNIFORM,
+    usage: uniformUsage(),
   });
   pool.device.queue.writeBuffer(buffer, 0, new Uint8Array(bytes));
   return buffer;

@@ -111,6 +111,15 @@ kernel at 2× the pair work. Do not act on this until it is measured on NVIDIA
 and on an integrated GPU; the determinism invariant is a separate argument for
 gather.
 
+🔴 **`GPUBufferUsage` at module scope breaks the no-GPU lane.** It is a global
+that exists only where WebGPU does, so `const STORAGE = GPUBufferUsage.STORAGE`
+at the top of a file throws when the *module loads* — not when a buffer is made.
+One constant added to `src/gpu/forces.ts` took out two unrelated test files,
+because `checks.ts` imports `pme.ts` imports `forces.ts`, and the error named the
+constant rather than the import that triggered it. Use the functions in
+`src/gpu/usage.ts`; `test/module-load.test.ts` imports every module under
+`src/gpu` in the no-GPU lane and is what keeps this from coming back.
+
 🔴 **A WGSL validation error is a console warning and a wrong answer**, which a
 differential test cannot distinguish from a bad kernel. `dispatch()` in
 `src/gpu/compute.ts` pushes an error scope and reads compilation messages for
