@@ -39,11 +39,21 @@ Done in Phase 1 so far:
 - **The nonbonded decomposition, measured and written down** in
   `docs/NONBONDED.md`. Three terms are not what a first reading suggests, and
   each is larger than the total energy or would have silently biased it.
+- **Constraints: SHAKE and RATTLE, reference only**, matching OpenMM's
+  algorithm including its simultaneous (Jacobi) delta application. Agrees with
+  `Context.applyConstraints` to 1.8e-7 nm on 1L2Y and 6.2e-7 on 3HTB, which is
+  the width of the tolerance band.
+- **Two deterministic trajectory oracles**, velocity Verlet and LFMiddle at
+  zero friction, with `tools/capture_constraints.py`. The integrator and
+  constraint algorithms, and four things a first reading gets wrong about them,
+  are in `docs/DYNAMICS.md`.
 
-Phase 1 steps still to do, in the plan's order: **constraints** (SETTLE for
-water, CCMA for bonds to hydrogen), the **LFMiddle integrator**, the
-**barostat**, and the **minimiser**. After those, Phase 1's gates: NVE drift at
-2 fs, and a measured ns/day.
+Phase 1 steps still to do: the **constraint kernel** (the reference is done,
+and the measured cluster shapes -- at most 4 atoms and 3 constraints -- mean one
+thread can hold a whole cluster), the **integrators** (LFMiddle for production
+and velocity Verlet for the NVE gate, both with reference implementations still
+to write), the **barostat**, and the **minimiser**. After those, Phase 1's
+gates: NVE drift at 2 fs, and a measured ns/day.
 
 ## Open, in the order they are worth doing
 
@@ -55,6 +65,15 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### The NVE gate cannot use the notebook's integrator
+LFMiddle at zero friction is symplectic Euler, so its naive total energy
+oscillates at O(dt) rather than drifting -- measured at ±0.02 kJ/mol an atom on
+1L2Y at 2 fs, against 3e-4 for velocity Verlet. The drift gate therefore runs
+velocity Verlet, which is what `tools/calibrate_thresholds.py` already used.
+That means the engine ships **two** integrators, and LFMiddle's own correctness
+is gated on step-by-step determinism rather than on energy conservation.
+`docs/DYNAMICS.md` has the numbers.
 
 ### The acceptance thresholds are provisional
 `AGENTS.md` quotes OpenCL **single** precision on an Apple M3 Pro, because this
