@@ -82,7 +82,7 @@ facts up for the tools.
 | `web/analyse.html` | a DCD and its topology in, the notebook's figures out |
 | `web/validate.html` | every differential check against OpenMM, development only |
 
-All three are named inputs in `vite.config.ts`. 🔴 Vite discovers only
+All five are named inputs in `vite.config.ts`. 🔴 Vite discovers only
 `index.html` by itself, so a new page that is not listed there builds in
 development and is **silently missing from a production build**.
 
@@ -190,14 +190,14 @@ exactly that reason. Do not add a dispatch path that skips it.
 ## Layout
 
 ```
-src/engine/      units and constants; Phase 1 adds System/State and the run loop
+src/engine/      units, constants, System/State, the run loop and the protocol
 src/gpu/         device, compute helper, kernel composition, checks, bench
 src/gpu/kernels/ WGSL; fixed64.wgsl is shared and prepended by composeKernel
 src/reference/   independent implementations the kernels are tested against;
                  never imports from src/gpu/
-src/prep/        empty until Phase 3
-src/analysis/    empty until Phase 3
-web/             the page
+src/prep/        PDB -> System: ffxml, templates, hydrogens, solvation, prmtop
+src/analysis/    DCD read/write, PDB read/write, NPY, logs, protein analyses
+web/             the five pages above
 test/            Vitest; *.gpu.test.ts is the Dawn lane, *.oracle.test.ts the
                  OpenMM one, both opt-in and both self-reporting when skipped
 test/browser/    Playwright

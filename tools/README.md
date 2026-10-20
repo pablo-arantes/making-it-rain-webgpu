@@ -145,6 +145,39 @@ The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
 `spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
 `THIRD_PARTY.md`.
 
+## Ligands (Phase 4)
+
+A PDB does not say what a ligand *is*: `HETATM` records carry an element, a name
+and coordinates, and no bonds. The chemistry comes from the RCSB Chemical
+Component Dictionary.
+
+```sh
+# the component definition and the ideal coordinates, per three-letter code
+curl -o fixtures/ligand/JZ4.cif https://files.rcsb.org/ligands/download/JZ4.cif
+
+# one ligand on its own, which is what RDKit needs
+python tools/extract_ligand.py --pdb fixtures/ligand/181L.pdb --code BNZ \
+    --out fixtures/ligand/BNZ_fragment.pdb
+
+# RDKit's perception, as the reference
+~/miniforge3/envs/parametrizani_env/bin/python tools/dump_ligand.py \
+    --cif fixtures/ligand/JZ4.cif --fragment fixtures/3HTB/ligand_fragment.pdb \
+    --ideal fixtures/3HTB/JZ4_ideal.sdf --out fixtures/ligand/JZ4.json
+```
+
+🔴 The claim being tested is that **transferring bond orders by atom name gives
+the same answer as RDKit's `AssignBondOrdersFromTemplate`**, which is a
+substructure match the browser cannot run. The names in a deposited `HETATM`
+record are the CCD's own `atom_id` values, so the correspondence is already in
+the file. Verified on both ligands the plan's gate names — JZ4 from 3HTB and
+benzene from 181L — bond for bond including aromatic flags, with hydrogen counts
+derived from valence matching RDKit exactly.
+
+Name-keyed transfer is also *safer* than a substructure match, not merely
+simpler: a match has to choose among symmetry-equivalent mappings, and benzene
+has six equally good ones. The orders come out right either way; which atom
+they attach to does not.
+
 ## Amber export
 
 ```sh
