@@ -108,6 +108,34 @@ positions, which makes candidate order reach the result.
 All three are regenerated, never committed; `test/prep-*.test.ts` skip
 themselves and say so when they are absent.
 
+## Trajectory readers
+
+```sh
+# a synthetic fixture, against the arrays it was built from
+python tools/check_dcd.py --dcd fixtures/dcd/ours.dcd --fixture fixtures/dcd
+
+# a trajectory a real run produced, cross-read between readers
+python tools/crossread_dcd.py --dcd fixtures/run-artefacts/equil.dcd \
+    --pdb fixtures/run-artefacts/equil.pdb
+```
+
+Two halves of one gate. `check_dcd.py` compares against known inputs, which
+needs a fixture. `crossread_dcd.py` asks whether independent readers agree about
+a file where there is no reference — which is the only question available for a
+real run, and the one the synthetic fixture cannot answer, because it is 37
+atoms and one frame per axis. Header fields that happen to be right for a small
+file stop being right at thousands of atoms over tens of frames.
+
+Measured on `fixtures/run-artefacts/equil.dcd`, written by `web/run.html` from a
+2373-particle 1L2Y run: MDAnalysis and MDTraj agree on 2373 atoms, the frame
+count, a 3.0806 nm box, and coordinates to **4.77e-07 nm** — f32 round-off, the
+file holding f32.
+
+🔴 **pytraj is not installed in any environment on this machine**, so the plan's
+gate is only partly met: `pytraj` is also what covers VMD, since cpptraj reads
+DCD through VMD's own `dcdplugin`. Until it is available, "opens in VMD" is
+unverified rather than passing.
+
 ## Probes
 
 ```sh

@@ -1,0 +1,37 @@
+{
+  "what": "The plan's Phase 2 gate: a 1 ns 1L2Y run end to end through web/run.html in a browser, under Playwright.",
+  "date": "2026-10-20",
+  "host": "Apple M3 Pro, macOS 14, Google Chrome 155",
+  "adapter": "apple · metal-3",
+  "command": "MIR_LONG_RUN=1 npx playwright test test/browser/run.spec.ts -g nanosecond",
+  "served_by": "vite preview, the production build",
+  "fixture": "1L2Y solvated, 2373 particles",
+  "settings": {
+    "timestep_fs": 2,
+    "temperature_k": 298,
+    "pressure_bar": 1,
+    "minimisation_steps": 10000,
+    "equilibration_ns": 0.1,
+    "stride_ns": 0.9,
+    "strides": 1,
+    "trajectory_every_ps": 10,
+    "log_every_ps": 10
+  },
+  "result": "passed",
+  "wall_clock_minutes": 43.4,
+  "reports": 100,
+  "artefacts": 9,
+  "artefact_bytes": 4089446,
+  "throughput": {
+    "steps_per_second": 208,
+    "ns_per_day": 36,
+    "note": "Measured separately by polling window.__mirRun and the progress element at 10 s intervals during an identical run: 30000 steps in the first 180 s including minimisation, then 5000-step reports every ~24 s. It predicted ~40 minutes against the 43.4 observed, and it is the signal to use -- renderer CPU sits near 1% during a healthy run and is indistinguishable from a stall."
+  },
+  "readers": {
+    "tool": "tools/crossread_dcd.py",
+    "file": "fixtures/run-artefacts/equil.dcd, 2373 particles, written by web/run.html",
+    "MDAnalysis_vs_MDTraj_max_dx_nm": 4.768e-7,
+    "pytraj": "not installed in any environment on this machine, so VMD coverage is unverified"
+  },
+  "history": "Two earlier attempts did not produce a result. The first timed out at the 90-minute budget for reasons never established; the explanation first offered (a Vite HMR reload) rested on a status line that was stale by construction and said nothing. The second was killed early on a misreading of renderer CPU as a progress signal. Neither is evidence about the engine."
+}
