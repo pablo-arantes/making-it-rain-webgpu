@@ -9,17 +9,20 @@
  * - **sigma and epsilon** come from `<NonbondedForce><Atom>`, keyed by type or
  *   by class; `parseForceField` has already expanded class-keyed rows onto
  *   their types, with a type-keyed row winning.
- * - **charge** comes from the *residue template*, not from the nonbonded table,
- *   because ff14SB's `<NonbondedForce>` carries
- *   `<UseAttributeFromResidue name="charge"/>`. This is not a detail: Amber
- *   gives the same atom type different charges in different residues -- a
- *   backbone `N` is -0.4157 in alanine and -0.5163 in the N-terminal variant --
- *   so reading charge from the type table would quietly flatten them and leave
- *   the total charge wrong.
+ * - **charge** comes from whichever of the two the force field says. ff14SB's
+ *   `<NonbondedForce>` carries `<UseAttributeFromResidue name="charge"/>`, so
+ *   the charge is on the *residue template*; ff99SB and ff99SB-ILDN put it on
+ *   the atom type instead. Both sources must be kept, because Amber gives the
+ *   same type different charges in different residues -- a backbone `N` is
+ *   -0.4157 in alanine and -0.5163 in the N-terminal variant -- so reading
+ *   ff14SB's charges from the type table would flatten them.
  *
- * `UseAttributeFromResidue` is checked rather than assumed, so a force field
- * that puts charge on the type is still handled correctly instead of silently
- * getting zeros.
+ * 🔴 The first version of this file read the flag and then fell back to **zero**
+ * when it was absent, with a comment claiming the other case was handled. It
+ * was not: under ff99SB-ILDN every charge came out zero while the masses,
+ * bonds, angles, torsions and template matches all still agreed with OpenMM.
+ * Nothing in a one-force-field test could see it. That is the whole argument
+ * for running the gate against a second file.
  */
 
 import type { PdbTopology } from "../analysis/pdb.js";
@@ -61,6 +64,26 @@ export class MissingParameters extends Error {
 }
 
 /**
+ * The charge a type carries, or a refusal.
+ *
+ * Defaulting to zero here is what hid the ff99SB-ILDN bug, so a force field
+ * that provides charge through neither route is an error rather than a
+ * neutral molecule. A silent zero charge is the worst case: the system runs,
+ * the energies look plausible, and the electrostatics are simply absent.
+ */
+function requireCharge(charge: number | null, type: string, atom: number): number {
+  if (charge === null) {
+    throw new MissingParameters(
+      "a charge -- the force field neither puts one on the atom type nor " +
+        'declares <UseAttributeFromResidue name="charge"/>',
+      type,
+      atom,
+    );
+  }
+  return charge;
+}
+
+/**
  * Match every residue and assign each atom its own parameters.
  *
  * Returns the matches alongside the atoms, because bonded assignment needs the
@@ -90,7 +113,9 @@ export function assignAtoms(
         type,
         className: entry.className,
         mass: entry.mass,
-        charge: chargeFromResidue ? (match.charges[position] as number) : 0,
+        charge: chargeFromResidue
+          ? (match.charges[position] as number)
+          : requireCharge(lj.charge, type, atom),
         sigma: lj.sigma,
         epsilon: lj.epsilon,
       };

@@ -44,6 +44,7 @@ const FIXTURES = [
   // NoCutoff, and the ångström-to-nanometre conversion has to agree to the
   // last bit for that comparison to pass.
   { name: "1L2Y-solv", fields: ["protein.ff14SB.xml", "amber14-tip3p.xml"] },
+  { name: "1L2Y-ildn", fields: ["amber99sbildn.xml"] },
 ] as const;
 const fieldPath = "vendor/ffxml/protein.ff14SB.xml";
 

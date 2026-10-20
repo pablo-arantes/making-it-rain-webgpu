@@ -77,6 +77,17 @@ const FIXTURES = [
     note: "1L2Y in 688 waters with 2 Na+ and 3 Cl-",
     fields: ["protein.ff14SB.xml", "amber14-tip3p.xml"],
   },
+  {
+    // A second force field through the same parser and the same matcher.
+    // ff99SB-ILDN is a different file in a different style -- its types are
+    // bare names like `N` and `CT` rather than ff14SB's `protein-N`, and it
+    // gives 938 torsions where ff14SB gives 1017 -- so it tests that nothing
+    // in the pipeline was fitted to one file's conventions.
+    name: "1L2Y-ildn",
+    atoms: 304,
+    note: "1L2Y under ff99SB-ILDN rather than ff14SB",
+    fields: ["amber99sbildn.xml"],
+  },
 ] as const;
 
 function loadFields(names: readonly string[]) {

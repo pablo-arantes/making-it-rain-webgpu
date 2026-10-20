@@ -93,6 +93,15 @@ export interface TorsionRow extends ParameterRow {
   readonly ordering: string;
 }
 
+export interface NonbondedRow {
+  /** nm. */
+  readonly sigma: number;
+  /** kJ/mol. */
+  readonly epsilon: number;
+  /** e, when the row carries one; `null` when charge comes from the residue. */
+  readonly charge: number | null;
+}
+
 export interface ForceField {
   readonly types: ReadonlyMap<string, AtomType>;
   /** Type names grouped by class, for class-keyed parameters. */
@@ -102,8 +111,15 @@ export interface ForceField {
   readonly angles: readonly ParameterRow[];
   readonly propers: readonly TorsionRow[];
   readonly impropers: readonly TorsionRow[];
-  /** sigma and epsilon per type name. */
-  readonly nonbonded: ReadonlyMap<string, { readonly sigma: number; readonly epsilon: number }>;
+  /**
+   * sigma, epsilon and -- in older files -- charge, per type name.
+   *
+   * `charge` is `null` when the row does not carry one, which is the case for
+   * any force field using `<UseAttributeFromResidue name="charge"/>`. ff14SB
+   * does; ff99SB and ff99SB-ILDN put the charge on the type instead, so both
+   * sources have to be kept and the choice made per force field.
+   */
+  readonly nonbonded: ReadonlyMap<string, NonbondedRow>;
   readonly coulomb14Scale: number;
   readonly lj14Scale: number;
   /** Attributes `<NonbondedForce>` takes from the residue template. */
@@ -199,7 +215,7 @@ export function parseForceField(xml: string): ForceField {
   const angles: ParameterRow[] = [];
   const propers: TorsionRow[] = [];
   const impropers: TorsionRow[] = [];
-  const nonbonded = new Map<string, { sigma: number; epsilon: number }>();
+  const nonbonded = new Map<string, NonbondedRow>();
   const fromResidue: string[] = [];
   let coulomb14Scale = 0.8333333333333334;
   let lj14Scale = 0.5;
@@ -288,9 +304,14 @@ export function parseForceField(xml: string): ForceField {
         } else if (section === "NonbondedForce") {
           const typeName = scanner.attr("type");
           const className = scanner.attr("class");
-          const entry = {
+          const entry: NonbondedRow = {
             sigma: scanner.num("sigma"),
             epsilon: scanner.num("epsilon"),
+            // 🔴 Older files carry the charge here rather than on the residue
+            // template. Dropping it made every charge zero under ff99SB-ILDN
+            // while bonds, angles, torsions and template matching all still
+            // matched -- the failure a single-force-field test cannot show.
+            charge: scanner.attr("charge") === undefined ? null : scanner.num("charge"),
           };
           if (typeName !== undefined) nonbonded.set(typeName, entry);
           else if (className !== undefined) {
@@ -413,7 +434,7 @@ export function parseForceField(xml: string): ForceField {
 export function mergeForceFields(fields: readonly ForceField[]): ForceField {
   if (fields.length === 0) throw new Error("no force field files were given");
   const types = new Map<string, AtomType>();
-  const nonbonded = new Map<string, { sigma: number; epsilon: number }>();
+  const nonbonded = new Map<string, NonbondedRow>();
   const templates: ResidueTemplate[] = [];
   const bonds: ParameterRow[] = [];
   const angles: ParameterRow[] = [];
