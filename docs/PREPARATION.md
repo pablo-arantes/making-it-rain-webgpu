@@ -1,0 +1,125 @@
+# Preparation: from a PDB to a System
+
+Phase 3's job is to build, in the browser, the same `System` the notebook
+builds in Python. The engine contract is OpenMM `System` XML, so "the same" is
+checkable rather than rhetorical: build one here, serialise one there, compare
+them field by field.
+
+This file records what that comparison currently says, and what is not built
+yet. Every number is produced by `test/prep-*.test.ts` against fixtures from
+`tools/dump_parameters.py` and `tools/dump_template_match.py`.
+
+## What runs
+
+```
+PDB text
+  -> readPdb              src/analysis/pdb.ts
+  -> inferBonds           src/prep/bonds.ts      standard + disulfide + CONECT
+  -> matchResidues        src/prep/template.ts   graph matching, not by name
+  -> assignAtoms          src/prep/assign.ts     mass, charge, sigma, epsilon
+  -> findAngles/Propers/Impropers + assign*      src/prep/bonded.ts
+  -> assignImpropers      src/prep/torsions.ts   ordering="amber"
+  -> findExceptions       src/prep/exceptions.ts 1-2, 1-3, scaled 1-4
+  -> buildSystem          src/prep/system.ts     an OpenMMSystem the engine runs
+```
+
+`prepareSystem` in `src/prep/prepare.ts` is the whole chain in one call.
+
+## Parity, measured
+
+Both fixtures are proteins with explicit hydrogens and no solvent, built by
+`tools/build_prep_fixture.py`. Against OpenMM 8.4 with
+`amber14/protein.ff14SB.xml`, `nonbondedMethod=NoCutoff`, `constraints=None`:
+
+| | 1L2Y | 3HTB receptor |
+| --- | --- | --- |
+| atoms | 304 | 2614 |
+| residues | 20 | 163 |
+| bonds | 310 | 2634 |
+| angles | 565 | 4751 |
+| torsions | 1017 | 8842 |
+| exceptions | 1687 | 14232 |
+| template choice and atom correspondence | identical | identical |
+| masses, charges, sigma, epsilon | identical | identical |
+| every force in the built `System` | identical, in index order | identical, in index order |
+| unmatched terms | 0 | 0 |
+| ambiguous parameter rows | 0 | 0 |
+
+"Identical, in index order" means `toEqual` on the typed arrays with no
+tolerance. That is affordable because both sides read the same decimal strings
+out of the same ffxml and do the same arithmetic on them.
+
+3HTB is there because 1L2Y cannot test what it does not contain: it is a
+20-residue peptide with no histidine, no cysteine and no sulfur. T4 lysozyme has
+all twenty standard residues, and its histidine comes out as **HID** — HID and
+HIE share an element signature and differ only in which ring nitrogen carries
+the proton, so that is the graph matcher choosing a protonation state.
+
+## The four findings worth keeping
+
+**Templates are matched by graph, not by name.** A PDB says `ALA` for every
+alanine; ff14SB has `ALA`, `NALA` and `CALA`. A name-based matcher gets 25 of
+1L2Y's 304 charges wrong, worst 0.5958 e. ff14SB has twelve element-signature
+groups holding two templates each, and 1L2Y hits three of them: ILE/LEU three
+times, decided *only* by the bond graph since both are mid-chain with identical
+external bond counts, plus TYR/CPHE and SER/CALA, decided by the external bond
+count.
+
+**Charge comes from the residue template, not the atom type.** ff14SB's
+`<NonbondedForce>` carries `<UseAttributeFromResidue name="charge"/>`, and the
+same type takes different charges in different residues — a backbone `N` is
+-0.4157 in `ALA` and -0.5163 in `NALA`. Reading charge from the type table
+flattens them and leaves the total charge wrong.
+
+**🔴 OpenMM caches improper matches by type signature and replays positions.**
+`ordering="amber"` breaks improper ties on residue index and *template* atom
+index, but `impr_cache` stores the positional permutation its rules chose and
+reuses it for every later candidate with the same type signature. So the rules
+effectively run once per signature, and the first candidate to carry it decides
+the atom order for all the rest. On 1L2Y this changes two of the 1017 torsions:
+tyrosine's `(49, 45, 50, 53)` caches positions `(1, 3, 0, 2)` and the later
+`(51, 47, 52, 53)` would freshly compute `(3, 1, 0, 2)`. Swapping a torsion's
+first two atoms flips the sign of its dihedral angle, so it is an energy
+difference. A test computes the uncached answer and asserts it still differs in
+exactly two torsions.
+
+Two hypotheses were wrong before that one was right, and both were killed by
+measurement rather than argument: that OpenMM's failure to re-read elements
+between the ordering swaps was responsible (the asymmetry is real, but fixing it
+changes none of the 1017), and that tyrosine's symmetric ring admitted a second
+valid isomorphism that we had picked (the template indices are identical to
+OpenMM's for all 304 atoms).
+
+**Bond order is part of the contract.** A `HarmonicBondForce` holds bonds in the
+order they were added. Every other force in the built `System` matched element
+for element on the first run; the bonds differed in index order only, because
+`inferBonds` sorted. It now follows `Topology.createStandardBonds` — chain by
+chain, residue by residue, the order the bonds appear in `residues.xml`, each in
+the direction the table names it, then disulfides, then CONECT. Order carries no
+physics; it carries comparability.
+
+A smaller one: a removed exception gets `sigma = 1.0`, not the pair's mean. It
+cannot reach the energy because epsilon is zero, but it is what the serialised
+`System` holds, and it differs on 875 of 1L2Y's 1687 exceptions.
+
+## Not built yet
+
+* **`addHydrogens`.** A PDB from the RCSB has none, so this blocks the "give a
+  PDB ID and run" path. *Which* hydrogens are added and their names and order
+  are deterministic and will be compared against OpenMM. Their **positions**
+  will not be: OpenMM places them approximately and then energy-minimises them,
+  so matching its positions means reproducing that minimisation. That belongs in
+  `docs/DEVIATIONS.md` when the code lands, since the user minimises afterwards
+  regardless.
+* **`addSolvent`** — padding, water models, ions, neutralisation. The gate is
+  the solvation statistics in the plan.
+* **Force fields beyond ff14SB.** ff99SB and ff99SB-ILDN are vendored and parse;
+  neither has been run through a parity comparison.
+* **Water and ion templates.** `tip3p.xml` and `spce.xml` parse but no solvated
+  system has been prepared in the browser, so `HOH` matching is untested.
+* **DHFR** as a third fixture, which the plan's gate names.
+* **`prmtop`/`inpcrd` export**, and the protein analyses (Cα RMSD, Rg, RMSF, 2D
+  RMSD, PCA, cross-correlation).
+* **Cross-fed energies** — prepare here, evaluate in OpenMM, and the reverse.
+  The `System` comparison is stronger term by term, but it does not prove the
+  two agree on an energy, and that is the gate the plan asks for.

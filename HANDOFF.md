@@ -393,7 +393,20 @@ recorded rather than blocking. It will resolve itself on a macOS upgrade.
 
 ## Next
 
-Phase 1, in the order the plan gives: `System`/`State` parser, then the
-TypeScript double-precision reference, then WGSL bonded → direct space with
-exceptions → PME reciprocal → constraints → integrator → barostat, each against
-the committed fixtures.
+Phase 3, continuing. The parameter-assignment spine is done and verified: a PDB
+with hydrogens becomes an `OpenMMSystem` whose every force matches OpenMM's
+serialised `System` element for element, on 1L2Y and on T4 lysozyme.
+`docs/PREPARATION.md` has the table and the findings.
+
+What it still needs, in the order that unblocks the user story:
+
+1. **`addHydrogens`**, which a PDB from the RCSB requires before anything else
+   works. Names and order can be matched exactly; positions cannot, because
+   OpenMM minimises them — that needs a `docs/DEVIATIONS.md` entry.
+2. **`addSolvent`**: padding, water model, ions, neutralisation.
+3. **Water and ion templates through the matcher.** `tip3p.xml` parses but no
+   solvated system has been prepared here, so `HOH` matching is untested.
+4. **Cross-fed energies**, which the plan names as a gate and the term-by-term
+   comparison does not replace.
+5. **DHFR** as a third fixture, and ff99SB/ff99SB-ILDN through the same parity.
+6. The **protein analyses** and `prmtop`/`inpcrd` export.
