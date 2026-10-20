@@ -25,6 +25,7 @@
 import { serialiseState, type OpenMMState } from "./state.js";
 import type { OpenMMSystem, Vec3 } from "./system.js";
 import { DcdWriter } from "../analysis/dcd.js";
+import { rewritePdb } from "../analysis/pdb.js";
 import { logHeader, logRow } from "../analysis/log.js";
 
 /** What the protocol needs from whatever is integrating. */
@@ -159,15 +160,28 @@ export const artefactNames = (
   readonly trajectory: string;
   readonly log: string;
   readonly checkpoint: string;
+  readonly finalFrame: string;
 } => ({
   trajectory: `${base}.dcd`,
   log: `${base}.log`,
   checkpoint: `${base}.rst`,
+  // The notebook's `Equilibrated_PDB`: a topology for the analysis stage, not a
+  // restart point. A PDB holds 0.001 A, which is a thousand times coarser than
+  // the constraint tolerance -- the `.rst` is the checkpoint.
+  finalFrame: `${base}.pdb`,
 });
 
 export interface StageOptions {
   /** Skip the stage when its checkpoint already exists. */
   readonly resume?: boolean;
+  /**
+   * The uploaded PDB, for the final frame.
+   *
+   * Left out, no PDB is written: the engine models no topology of its own, so
+   * there is nothing to generate one from, and inventing atom names would be
+   * worse than omitting the file.
+   */
+  readonly topologyPdb?: string;
   /** Called after every report, for a live view. */
   readonly onReport?: (row: {
     readonly step: number;
@@ -313,6 +327,16 @@ export async function runStage(
   };
   await outputs.write(names.checkpoint, serialiseState(checkpoint));
 
+  if (options.topologyPdb !== undefined) {
+    await outputs.write(
+      names.finalFrame,
+      rewritePdb(options.topologyPdb, checkpoint.positions, {
+        box: engine.boxLengths(),
+        remark: `FINAL FRAME OF ${base.toUpperCase()}, STEP ${engine.steps}`,
+      }),
+    );
+  }
+
   const elapsed = (performance.now() - began) / 1000;
   const nanoseconds = (totalSteps * settings.timeStep) / 1000;
   return {
@@ -340,6 +364,8 @@ export const stageNames = (
 });
 
 export interface ProtocolHooks {
+  /** The uploaded PDB, written as each stage's final frame. */
+  readonly topologyPdb?: string;
   /**
    * Prepare the engine for a stage.
    *
@@ -405,7 +431,10 @@ export async function runProtocol(
       outputs,
       names.equilibration,
       settings.equilibration,
-      { ...(hooks.onReport === undefined ? {} : { onReport: hooks.onReport }) },
+      {
+        ...(hooks.onReport === undefined ? {} : { onReport: hooks.onReport }),
+        ...(hooks.topologyPdb === undefined ? {} : { topologyPdb: hooks.topologyPdb }),
+      },
     );
     stages.push(result);
     hooks.onStage?.(result);
@@ -451,6 +480,7 @@ export async function runProtocol(
     const engine = await hooks.engineFor("production", carried);
     const result = await runStage(engine, outputs, base, settings.production, {
       ...(hooks.onReport === undefined ? {} : { onReport: hooks.onReport }),
+      ...(hooks.topologyPdb === undefined ? {} : { topologyPdb: hooks.topologyPdb }),
     });
     stages.push(result);
     hooks.onStage?.(result);

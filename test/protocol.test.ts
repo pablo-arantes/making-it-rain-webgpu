@@ -117,6 +117,16 @@ function stubEngine(particleCount: number, startStep = 0): ProtocolEngine & {
   };
 }
 
+/** Four atoms, fixed-width, enough for the rewriter to substitute into. */
+const topologyPdb = [
+  "CRYST1   30.000   30.000   30.000  90.00  90.00  90.00 P 1           1 ",
+  "ATOM      1  N   ASN A   1       1.000   2.000   3.000  1.00  0.00           N  ",
+  "ATOM      2  CA  ASN A   1       1.500   2.000   3.000  1.00  0.00           C  ",
+  "ATOM      3  C   ASN A   1       2.000   2.000   3.000  1.00  0.00           C  ",
+  "ATOM      4  O   ASN A   1       2.500   2.000   3.000  1.00  0.00           O  ",
+  "END",
+].join("\n");
+
 const stage = {
   nanoseconds: 0.02, // 10,000 steps at 2 fs
   timeStep: 0.002,
@@ -193,6 +203,21 @@ describe("runStage", () => {
     expect(view.getInt32(20, true)).toBe(10_000);
   });
 
+  it("writes a PDB of the final frame only when given a topology", async () => {
+    const outputs = memoryOutputs();
+    await runStage(stubEngine(4), outputs, "job_bare", stage);
+    // No topology, no PDB: the engine models none of its own, and inventing
+    // atom names would be worse than omitting the file.
+    expect(outputs.files.has("job_bare.pdb")).toBe(false);
+
+    await runStage(stubEngine(4), outputs, "job_equil", stage, { topologyPdb });
+    const pdb = (await outputs.read("job_equil.pdb")) as string;
+    expect(pdb.split("\n").filter((l) => l.startsWith("ATOM"))).toHaveLength(4);
+    expect(pdb).toContain("FINAL FRAME OF JOB_EQUIL, STEP 10000");
+    // The box the stage ended at, not the one the uploaded file carried.
+    expect(pdb).toContain("CRYST1   30.000   30.000   30.000");
+  });
+
   it("writes a checkpoint OpenMM's own format can carry", async () => {
     const engine = stubEngine(4);
     const outputs = memoryOutputs();
@@ -230,6 +255,7 @@ describe("runProtocol", () => {
   };
 
   const hooks = (engines: ProtocolEngine[]) => ({
+    topologyPdb,
     engineFor: async (
       which: "equilibration" | "production",
     ): Promise<ProtocolEngine> => {

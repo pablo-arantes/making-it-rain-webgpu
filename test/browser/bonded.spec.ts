@@ -27,6 +27,16 @@ for (const name of ["1L2Y", "3HTB"]) {
     await page.waitForFunction(() => window.__mirProtocol !== undefined, null, {
       timeout: 1_800_000,
     });
+    const persistence = await page.evaluate(() => window.__mirPersistence);
+    if (persistence !== undefined && "error" in persistence) {
+      throw new Error(persistence.error);
+    }
+    expect(persistence!.differing).toEqual([]);
+    expect(persistence!.missing).toEqual([]);
+    // The device really was destroyed, not merely assumed to have been.
+    expect(persistence!.deviceWasLost).toBe(true);
+    expect(persistence!.resumedSuccessfully).toBe(true);
+
     const pbc = await page.evaluate(() => window.__mirPbc);
     if (pbc !== undefined && "error" in pbc) throw new Error(pbc.error);
     expect(JSON.stringify(pbc!.invariances.filter((c) => !c.ok), null, 1)).toBe("[]");
@@ -248,6 +258,12 @@ for (const name of ["1L2Y", "3HTB"]) {
               `  force rel RMS ${c.forceRelativeRms.toExponential(2)}`,
           )
           .join("") +
+        `\n  opfs                   ${persistence!.artefacts.length} artefacts` +
+        `  ${(persistence!.artefacts.reduce((n, a) => n + a.bytes, 0) / 1024).toFixed(1)} kB` +
+        `  byte-identical to memory: ${persistence!.differing.length === 0}` +
+        `\n  device loss            lost ${persistence!.deviceWasLost}` +
+        `  skipped [${persistence!.skippedAfterLoss.join(" ")}]` +
+        `  redone [${persistence!.redoneAfterLoss.join(" ")}]` +
         `\n  pbc input              intact ${pbc!.inputIntact}` +
         `  longest bonded ${pbc!.inputWorstBondedSeparation.toFixed(3)} nm` +
         `  split costs x${pbc!.splitMoleculeEnergyRatio.toFixed(1)}` +

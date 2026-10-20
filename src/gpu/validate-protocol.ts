@@ -154,6 +154,85 @@ function withBarostat(
   return { ...system, forces: [...system.forces, barostat] };
 }
 
+/**
+ * The hooks `runProtocol` needs, for a given device.
+ *
+ * Exported so that the persistence check can build the same run against a
+ * *different* device after the first one is lost. The ensemble is decided here
+ * too, from the measured cell headroom, so both callers make the same choice.
+ */
+export async function protocolHooksFor(
+  device: GPUDevice,
+  texts: {
+    readonly systemXml: string;
+    readonly restrainedXml: string;
+    readonly stateXml: string;
+    readonly topologyPdb?: string;
+  },
+  settings: ProtocolSettings,
+): Promise<{
+  readonly hooks: Parameters<typeof runProtocol>[3];
+  readonly ensemble: "NPT" | "NVT";
+  readonly headroom: number;
+  readonly system: OpenMMSystem;
+  readonly loops: StepLoop[];
+}> {
+  const production = parseSystem(texts.systemXml);
+  const restrained = parseSystem(texts.restrainedXml);
+  const state = parseState(texts.stateXml);
+  const nonbonded = production.forces.find((f) => f.type === "NonbondedForce");
+  const cutoff =
+    nonbonded !== undefined && "cutoff" in nonbonded ? nonbonded.cutoff : 1;
+  const headroom = cellHeadroom(rectangularBox(state.boxVectors), cutoff);
+  const ensemble: "NPT" | "NVT" = headroom >= HEADROOM_FOR_NPT ? "NPT" : "NVT";
+  const loops: StepLoop[] = [];
+
+  const hooks: Parameters<typeof runProtocol>[3] = {
+    ...(texts.topologyPdb === undefined ? {} : { topologyPdb: texts.topologyPdb }),
+    engineFor: async (stage, carried) => {
+      const system =
+        stage === "equilibration"
+          ? withBarostat(
+              restrained,
+              settings.equilibration.temperature,
+              settings.equilibration.pressure,
+              ensemble === "NPT",
+            )
+          : withBarostat(
+              production,
+              settings.production.temperature,
+              settings.production.pressure,
+              ensemble === "NPT",
+            );
+      const start = carried === null ? state : { ...state, ...carried };
+      const loop = await StepLoop.fromParsed(device, system, start, {
+        timeStep: settings.equilibration.timeStep,
+        temperature:
+          stage === "equilibration"
+            ? settings.equilibration.temperature
+            : settings.production.temperature,
+        friction: 1,
+        constraintTolerance: 1e-6,
+        integrator: "lfmiddle",
+        cellListInterval: 1,
+        seed: settings.seed,
+      });
+      loops.push(loop);
+      if (carried !== null) loop.advanceStepCount(carried.stepCount);
+      return new LoopEngine(loop, system);
+    },
+    initialVelocities: async (engine) =>
+      velocitiesAtTemperature(restrained, {
+        temperature: settings.equilibration.temperature,
+        seed: settings.seed,
+        positions: await engine.positions(),
+        timeOffset: 0,
+        split: splitConstraints(restrained),
+      }),
+  };
+  return { hooks, ensemble, headroom, system: production, loops };
+}
+
 export async function validateProtocol(
   device: GPUDevice,
   texts: {

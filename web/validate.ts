@@ -6,6 +6,7 @@
  * no route to them, so the page says that rather than failing obscurely.
  */
 
+import { parseSystem } from "../src/engine/system.js";
 import { requestEngineAdapter, requestEngineDevice } from "../src/gpu/device.js";
 import { validateBonded, type ValidationReport } from "../src/gpu/validate.js";
 import {
@@ -39,6 +40,10 @@ import {
   type ProtocolComparison,
 } from "../src/gpu/validate-protocol.js";
 import { validatePbc, type PbcComparison } from "../src/gpu/validate-pbc.js";
+import {
+  validatePersistence,
+  type PersistenceComparison,
+} from "../src/gpu/validate-persistence.js";
 
 declare global {
   interface Window {
@@ -53,6 +58,7 @@ declare global {
     __mirBarostat?: BarostatComparison | { error: string };
     __mirProtocol?: ProtocolComparison | { error: string };
     __mirPbc?: PbcComparison | { error: string };
+    __mirPersistence?: PersistenceComparison | { error: string };
   }
 }
 
@@ -181,6 +187,35 @@ function renderIntegrators(report: IntegratorReport): string {
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
     </p>`;
+}
+
+function renderPersistence(p: PersistenceComparison): string {
+  const total = p.artefacts.reduce((sum, a) => sum + a.bytes, 0);
+  return `<h2>Artefacts and resume</h2><p class="note">
+      ${p.artefacts.length} artefacts in OPFS, ${(total / 1024).toFixed(1)} kB in
+      all, and every one identical to the same run written to memory — byte for
+      byte, except that a <code>.log</code> is compared without its ns/day
+      column and <code>run.json</code> not at all, since both record wall-clock
+      time. That is the test that catches the trap in
+      <code>FileSystemWritableFileStream</code>: opening a writable without
+      <code>keepExistingData</code> truncates, so patching a DCD header at the
+      end of a run would empty the trajectory instead of fixing two words.
+    </p>
+    <p class="note">
+      The device was then destroyed for real
+      (${p.deviceWasLost ? "confirmed lost" : "NOT LOST — the test did not do what it claims"}),
+      a new one acquired, and the protocol run again over the same directory. It
+      skipped <strong>${p.skippedAfterLoss.join(", ") || "nothing"}</strong> and
+      redid <strong>${p.redoneAfterLoss.join(", ") || "nothing"}</strong> —
+      stage granularity is the notebook's own, so a lost device costs at most
+      one stride.
+      <span class="badge ${p.ok ? "ok" : "bad"}">${p.ok ? "pass" : "fail"}</span>
+    </p>
+    ${
+      p.differing.length === 0 && p.missing.length === 0
+        ? ""
+        : `<p class="bad-box">differing: ${p.differing.join(", ")}; missing: ${p.missing.join(", ")}</p>`
+    }`;
 }
 
 function renderPbc(p: PbcComparison): string {
@@ -596,6 +631,53 @@ async function main(): Promise<void> {
 
       // From the captured equilibrated frame, for the reason in
       // `validateBarostat`: state.xml is un-minimised and NVE from it diverges.
+      // Artefacts in OPFS, and a run that survives losing the GPU. Done before
+      // the long checks so a failure here is seen early.
+      const { protocolHooksFor } = await import("../src/gpu/validate-protocol.js");
+      const shortRun = {
+        jobName: `${name}_persist`,
+        seed: 0x5eed,
+        equilibration: {
+          nanoseconds: 0.002,
+          timeStep: 0.002,
+          temperature: 298,
+          pressure: 1,
+          trajectoryInterval: 1,
+          logInterval: 1,
+          minimisationSteps: 20,
+          restraintForceConstant: 700,
+        },
+        production: {
+          nanoseconds: 0.002,
+          timeStep: 0.002,
+          temperature: 298,
+          pressure: 1,
+          trajectoryInterval: 1,
+          logInterval: 1,
+          strides: 2,
+        },
+      };
+      const restrainedForRun = restraintFacts.ok
+        ? await fetchText("system-restrained.xml")
+        : systemXml;
+      // It acquires and destroys its own devices: losing the page's would
+      // take out every check after it.
+      const persistence = await validatePersistence(
+        `mir-${name}`,
+        shortRun,
+        async (forDevice) =>
+          (
+            await protocolHooksFor(
+              forDevice,
+              { systemXml, restrainedXml: restrainedForRun, stateXml },
+              shortRun,
+            )
+          ).hooks,
+        parseSystem(systemXml),
+      );
+      if (body) body.innerHTML += renderPersistence(persistence);
+      window.__mirPersistence = persistence;
+
       const pbc = await validatePbc(device, { systemXml, stateXml });
       if (body) body.innerHTML += renderPbc(pbc);
       window.__mirPbc = pbc;
@@ -659,6 +741,7 @@ async function main(): Promise<void> {
     window.__mirBarostat = { error: message };
     window.__mirProtocol = { error: message };
     window.__mirPbc = { error: message };
+    window.__mirPersistence = { error: message };
   }
 }
 
