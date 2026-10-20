@@ -65,6 +65,24 @@ python tools/dump_template_match.py --pdb fixtures/prep/3HTB.pdb \
     --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/3HTB-match.json
 ```
 
+```sh
+# the configuration the notebook actually runs: protein, water and ions
+cp fixtures/1L2Y/system.pdb fixtures/prep/1L2Y-solv.pdb
+python tools/dump_parameters.py --pdb fixtures/prep/1L2Y-solv.pdb \
+    --forcefield amber14/protein.ff14SB.xml amber14/tip3p.xml \
+    --out fixtures/prep/1L2Y-solv-params.json \
+    --system-out fixtures/prep/1L2Y-solv-system.xml
+python tools/dump_template_match.py --pdb fixtures/prep/1L2Y-solv.pdb \
+    --forcefield amber14/protein.ff14SB.xml amber14/tip3p.xml \
+    --out fixtures/prep/1L2Y-solv-match.json
+```
+
+The solvated case is the only one that exercises `mergeForceFields`, the `HOH`
+template and the monovalent ion templates — and it is what caught the wrong
+`tip3p.xml` being vendored: OpenMM's top-level `tip3p.xml` holds water alone,
+while `amber14/tip3p.xml` carries the ions, so a system with two Na+ and three
+Cl- could not be prepared at all.
+
 Pass `--system-out fixtures/prep/<name>-system.xml` to `dump_parameters.py` as
 well, which serialises the `System` itself. That file is what
 `test/prep-system.test.ts` compares against, and it is a stronger test than the

@@ -32,12 +32,26 @@ import {
   type PeriodicTorsionForce,
 } from "../src/engine/system.js";
 import { parseStandardBonds } from "../src/prep/bonds.js";
-import { parseForceField } from "../src/prep/ffxml.js";
+import { mergeForceFields, parseForceField } from "../src/prep/ffxml.js";
 import { prepareSystem } from "../src/prep/prepare.js";
 import { buildSystem } from "../src/prep/system.js";
 
-const FIXTURES = ["1L2Y", "3HTB"] as const;
+const FIXTURES = [
+  { name: "1L2Y", fields: ["protein.ff14SB.xml"] },
+  { name: "3HTB", fields: ["protein.ff14SB.xml"] },
+  // The solvated case carries a real box, which is what makes it worth having
+  // here as well: OpenMM sets the box whenever the topology has one, even with
+  // NoCutoff, and the ångström-to-nanometre conversion has to agree to the
+  // last bit for that comparison to pass.
+  { name: "1L2Y-solv", fields: ["protein.ff14SB.xml", "amber14-tip3p.xml"] },
+] as const;
 const fieldPath = "vendor/ffxml/protein.ff14SB.xml";
+
+function loadFields(names: readonly string[]) {
+  return mergeForceFields(
+    names.map((name) => parseForceField(readFileSync(`vendor/ffxml/${name}`, "utf8"))),
+  );
+}
 
 function force<T extends { type: string }>(system: OpenMMSystem, type: string): T {
   const found = system.forces.find((f) => f.type === type);
@@ -45,18 +59,21 @@ function force<T extends { type: string }>(system: OpenMMSystem, type: string): 
   return found as unknown as T;
 }
 
-for (const name of FIXTURES) {
+for (const fixture of FIXTURES) {
+  const name = fixture.name;
   const pdbPath = `fixtures/prep/${name}.pdb`;
   const systemPath = `fixtures/prep/${name}-system.xml`;
   const present =
-    existsSync(pdbPath) && existsSync(systemPath) && existsSync(fieldPath);
+    existsSync(pdbPath) &&
+    existsSync(systemPath) &&
+    fixture.fields.every((f) => existsSync(`vendor/ffxml/${f}`));
 
   describe.skipIf(!present)(`the System built for ${name}`, () => {
     const ours = present
       ? buildSystem(
           prepareSystem(
             readPdb(readFileSync(pdbPath, "utf8")),
-            parseForceField(readFileSync(fieldPath, "utf8")),
+            loadFields(fixture.fields),
             parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
           ),
         )
@@ -68,8 +85,10 @@ for (const name of FIXTURES) {
     it("has the same particles, masses and box", () => {
       expect(ours!.particleCount).toBe(theirs!.particleCount);
       expect([...ours!.masses]).toEqual([...theirs!.masses]);
-      // 2 nm cube: OpenMM's default for a System with no periodic box, which
-      // this fixture has because it is unsolvated.
+      // Exactly equal, to the last bit. For the unsolvated fixtures that is
+      // OpenMM's default 2 nm cube; for the solvated one it is the real box,
+      // and getting it right needed the ångström conversion to be a multiply
+      // by 0.1 rather than a divide by 10 -- different doubles, one ulp apart.
       expect(ours!.boxVectors).toEqual(theirs!.boxVectors);
     });
 

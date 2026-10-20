@@ -27,7 +27,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { readPdb } from "../src/analysis/pdb.js";
 import { parseStandardBonds } from "../src/prep/bonds.js";
-import { parseForceField } from "../src/prep/ffxml.js";
+import { mergeForceFields, parseForceField } from "../src/prep/ffxml.js";
 import { prepareSystem } from "../src/prep/prepare.js";
 
 interface Dump {
@@ -50,14 +50,40 @@ interface Capture {
   readonly bondedToAtom: readonly (readonly number[])[];
 }
 
-const fieldPath = "vendor/ffxml/protein.ff14SB.xml";
 const residuesPath = "vendor/ffxml/residues.xml";
 
 /** The fixtures, with what each one is here to cover. */
 const FIXTURES = [
-  { name: "1L2Y", atoms: 304, note: "a 20-residue peptide, both chain termini" },
-  { name: "3HTB", atoms: 2614, note: "T4 lysozyme, all twenty residues, HID and CYS" },
+  {
+    name: "1L2Y",
+    atoms: 304,
+    note: "a 20-residue peptide, both chain termini",
+    fields: ["protein.ff14SB.xml"],
+  },
+  {
+    name: "3HTB",
+    atoms: 2614,
+    note: "T4 lysozyme, all twenty residues, HID and CYS",
+    fields: ["protein.ff14SB.xml"],
+  },
+  {
+    // The configuration the notebook actually runs: protein, water and ions.
+    // It is the only fixture that exercises `mergeForceFields`, the HOH
+    // template, and the monovalent ion templates -- and vendoring the wrong
+    // tip3p.xml made it fail outright, because OpenMM's top-level tip3p.xml
+    // holds only water while `amber14/tip3p.xml` carries the ions.
+    name: "1L2Y-solv",
+    atoms: 2373,
+    note: "1L2Y in 688 waters with 2 Na+ and 3 Cl-",
+    fields: ["protein.ff14SB.xml", "amber14-tip3p.xml"],
+  },
 ] as const;
+
+function loadFields(names: readonly string[]) {
+  return mergeForceFields(
+    names.map((name) => parseForceField(readFileSync(`vendor/ffxml/${name}`, "utf8"))),
+  );
+}
 
 for (const fixture of FIXTURES) {
   const pdbPath = `fixtures/prep/${fixture.name}.pdb`;
@@ -67,13 +93,13 @@ for (const fixture of FIXTURES) {
     existsSync(pdbPath) &&
     existsSync(dumpPath) &&
     existsSync(matchPath) &&
-    existsSync(fieldPath);
+    fixture.fields.every((name) => existsSync(`vendor/ffxml/${name}`));
 
   describe.skipIf(!present)(`parameter parity: ${fixture.name} (${fixture.note})`, () => {
     const prepared = present
       ? prepareSystem(
           readPdb(readFileSync(pdbPath, "utf8")),
-          parseForceField(readFileSync(fieldPath, "utf8")),
+          loadFields(fixture.fields),
           parseStandardBonds(readFileSync(residuesPath, "utf8")),
         )
       : undefined;

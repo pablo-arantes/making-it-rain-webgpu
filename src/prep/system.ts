@@ -77,12 +77,6 @@ export function buildSystem(
 
   const atoms = prepared.assignment.atoms;
   const count = atoms.length;
-  const periodic =
-    nonbondedMethod === NonbondedMethod.CutoffPeriodic ||
-    nonbondedMethod === NonbondedMethod.Ewald ||
-    nonbondedMethod === NonbondedMethod.PME ||
-    nonbondedMethod === NonbondedMethod.LJPME;
-
   // --- Constraints, which remove the matching bonded terms ----------------
   //
   // 🔴 A constrained bond is not simply also a constraint: OpenMM *drops* the
@@ -184,7 +178,13 @@ export function buildSystem(
 
   return {
     openmmVersion,
-    boxVectors: periodic ? boxVectors : UNIT_BOX,
+    // 🔴 The box comes from the topology whenever it has one, regardless of the
+    // nonbonded method. `createSystem` calls `setDefaultPeriodicBoxVectors`
+    // whenever the topology carries vectors and only *refuses* when a periodic
+    // method is asked for without them, so a solvated system built with
+    // NoCutoff still serialises its real box. Tying the box to periodicity
+    // instead leaves a 2 nm cube in a file whose contents say otherwise.
+    boxVectors,
     particleCount: count,
     masses: Float64Array.from(atoms, (a) => a.mass),
     constraintCount: constrained.length,

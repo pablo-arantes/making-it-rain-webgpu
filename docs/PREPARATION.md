@@ -31,19 +31,24 @@ Both fixtures are proteins with explicit hydrogens and no solvent, built by
 `tools/build_prep_fixture.py`. Against OpenMM 8.4 with
 `amber14/protein.ff14SB.xml`, `nonbondedMethod=NoCutoff`, `constraints=None`:
 
-| | 1L2Y | 3HTB receptor |
-| --- | --- | --- |
-| atoms | 304 | 2614 |
-| residues | 20 | 163 |
-| bonds | 310 | 2634 |
-| angles | 565 | 4751 |
-| torsions | 1017 | 8842 |
-| exceptions | 1687 | 14232 |
-| template choice and atom correspondence | identical | identical |
-| masses, charges, sigma, epsilon | identical | identical |
-| every force in the built `System` | identical, in index order | identical, in index order |
-| unmatched terms | 0 | 0 |
-| ambiguous parameter rows | 0 | 0 |
+| | 1L2Y | 3HTB receptor | 1L2Y solvated |
+| --- | --- | --- | --- |
+| atoms | 304 | 2614 | 2373 |
+| residues | 20 | 163 | 713 |
+| bonds | 310 | 2634 | 1686 |
+| angles | 565 | 4751 | 1253 |
+| torsions | 1017 | 8842 | 1017 |
+| exceptions | 1687 | 14232 | 3751 |
+| template choice and atom correspondence | identical | identical | identical |
+| masses, charges, sigma, epsilon | identical | identical | identical |
+| every force in the built `System` | identical, in index order | identical, in index order | identical, in index order |
+| unmatched terms | 0 | 0 | 0 |
+| ambiguous parameter rows | 0 | 0 | 0 |
+
+The third column is the notebook's actual configuration — 1L2Y in 688 TIP3P
+waters with 2 Na+ and 3 Cl-, under `protein.ff14SB.xml` plus
+`amber14/tip3p.xml`. It is the only fixture that exercises `mergeForceFields`,
+the `HOH` template and the ion templates.
 
 "Identical, in index order" means `toEqual` on the typed arrays with no
 tolerance. That is affordable because both sides read the same decimal strings
@@ -98,6 +103,15 @@ chain, residue by residue, the order the bonds appear in `residues.xml`, each in
 the direction the table names it, then disulfides, then CONECT. Order carries no
 physics; it carries comparability.
 
+**Two unit conversions that are one ulp apart.** OpenMM converts ångström to
+nanometres by *multiplying by 0.1*; `30.806 / 10` and `30.806 * 0.1` are
+different doubles, 4.4e-16 nm apart. That is far below anything physical and
+exactly enough to fail an exact box comparison for a reason that looks like
+nothing at all. `readPdb` multiplies, so the two agree bit for bit and the
+`System` comparison can run with no tolerance. Relatedly, `createSystem` sets
+the box whenever the topology has one — even with `NoCutoff` — so `buildSystem`
+must not tie the box to whether the method is periodic.
+
 A smaller one: a removed exception gets `sigma = 1.0`, not the pair's mean. It
 cannot reach the energy because epsilon is zero, but it is what the serialised
 `System` holds, and it differs on 875 of 1L2Y's 1687 exceptions.
@@ -115,8 +129,6 @@ cannot reach the energy because epsilon is zero, but it is what the serialised
   the solvation statistics in the plan.
 * **Force fields beyond ff14SB.** ff99SB and ff99SB-ILDN are vendored and parse;
   neither has been run through a parity comparison.
-* **Water and ion templates.** `tip3p.xml` and `spce.xml` parse but no solvated
-  system has been prepared in the browser, so `HOH` matching is untested.
 * **DHFR** as a third fixture, which the plan's gate names.
 * **`prmtop`/`inpcrd` export**, and the protein analyses (Cα RMSD, Rg, RMSF, 2D
   RMSD, PCA, cross-correlation).

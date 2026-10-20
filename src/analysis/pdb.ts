@@ -27,6 +27,22 @@ import type { Vec3 } from "../engine/system.js";
 /** Nanometres to ångström, which is what a PDB holds. */
 const TO_ANGSTROM = 10;
 
+/**
+ * Ångström to nanometres, on the way in.
+ *
+ * 🔴 Multiplying by 0.1 and dividing by 10 are **different doubles**, and this
+ * is the one that matches OpenMM. Its unit system converts by multiplying by
+ * the factor 0.1, so a `CRYST1` of 30.806 Å becomes 3.0806000000000004 nm,
+ * while `30.806 / 10` is 3.0806000000000000. One ulp, 4.4e-16 nm, far below
+ * anything physical -- and exactly enough to make a box comparison against a
+ * serialised `System` fail for a reason that looks like nothing.
+ *
+ * Keeping the two conversions bit-identical is what lets
+ * test/prep-system.test.ts compare with no tolerance at all, which is where
+ * its value comes from.
+ */
+const FROM_ANGSTROM = 0.1;
+
 export class PdbAtomCountMismatch extends Error {
   constructor(readonly inFile: number, readonly inSystem: number) {
     super(
@@ -218,9 +234,9 @@ export function readPdb(text: string): PdbTopology {
     lineNumber++;
     if (line.startsWith("CRYST1")) {
       box = [
-        Number(line.slice(6, 15)) / TO_ANGSTROM,
-        Number(line.slice(15, 24)) / TO_ANGSTROM,
-        Number(line.slice(24, 33)) / TO_ANGSTROM,
+        Number(line.slice(6, 15)) * FROM_ANGSTROM,
+        Number(line.slice(15, 24)) * FROM_ANGSTROM,
+        Number(line.slice(24, 33)) * FROM_ANGSTROM,
       ];
       continue;
     }
@@ -256,9 +272,9 @@ export function readPdb(text: string): PdbTopology {
     const elementField = padded.slice(76, 78).trim();
     const serial = Number(padded.slice(6, 11));
     const position: [number, number, number] = [
-      Number(padded.slice(30, 38)) / TO_ANGSTROM,
-      Number(padded.slice(38, 46)) / TO_ANGSTROM,
-      Number(padded.slice(46, 54)) / TO_ANGSTROM,
+      Number(padded.slice(30, 38)) * FROM_ANGSTROM,
+      Number(padded.slice(38, 46)) * FROM_ANGSTROM,
+      Number(padded.slice(46, 54)) * FROM_ANGSTROM,
     ];
     if (position.some((value) => !Number.isFinite(value))) {
       throw new PdbParseError(`unreadable coordinates in "${line.trim()}"`, lineNumber);
