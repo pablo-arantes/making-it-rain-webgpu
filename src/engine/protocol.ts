@@ -22,7 +22,7 @@
  *   the model this keeps.
  */
 
-import { serialiseState, type OpenMMState } from "./state.js";
+import { parseState, serialiseState, type OpenMMState } from "./state.js";
 import type { OpenMMSystem, Vec3 } from "./system.js";
 import { DcdWriter } from "../analysis/dcd.js";
 import { rewritePdb } from "../analysis/pdb.js";
@@ -474,7 +474,6 @@ export async function runProtocol(
             "them out of order is not supported.",
         );
       }
-      const { parseState } = await import("./state.js");
       carried = parseState(text);
     }
     const engine = await hooks.engineFor("production", carried);

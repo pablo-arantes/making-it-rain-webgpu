@@ -55,6 +55,17 @@ export default defineConfig({
     emptyOutDir: true,
     target: "es2023",
     assetsInlineLimit: 0,
+    // Three pages, each its own entry: the landing page with the GPU and
+    // precision checks, the run page, and the validation page. Vite only
+    // discovers `index.html` by itself, so the other two have to be named or
+    // they are silently left out of a production build.
+    rollupOptions: {
+      input: {
+        index: resolve(import.meta.dirname ?? ".", "web/index.html"),
+        run: resolve(import.meta.dirname ?? ".", "web/run.html"),
+        validate: resolve(import.meta.dirname ?? ".", "web/validate.html"),
+      },
+    },
   },
   server: { port: 4173, strictPort: true },
   preview: { port: 4173, strictPort: true },

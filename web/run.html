@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Run a system — Making it Rain on WebGPU</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Run a system</h1>
+      <p class="lede">
+        Upload an OpenMM <code>System</code> and <code>State</code>, check them
+        against the double-precision reference, and run. Your files never leave
+        this tab.
+      </p>
+      <p id="run-status" class="status" role="status">Looking for a GPU…</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Upload</h2>
+        <p class="note">
+          The engine's contract is OpenMM's own serialisation, so anything
+          <code>XmlSerializer</code> writes is readable here. The restrained
+          system is the one with the equilibration
+          <code>CustomExternalForce</code> added; without it, equilibration runs
+          unrestrained. The PDB is used only as a topology for the final-frame
+          files — coordinates come from the <code>State</code>.
+        </p>
+        <div class="panel">
+          <p>
+            <label for="file-system">system.xml</label>
+            <input id="file-system" type="file" accept=".xml" />
+          </p>
+          <p>
+            <label for="file-state">state.xml</label>
+            <input id="file-state" type="file" accept=".xml" />
+          </p>
+          <p>
+            <label for="file-restrained">system-restrained.xml <span class="faint">(optional)</span></label>
+            <input id="file-restrained" type="file" accept=".xml" />
+          </p>
+          <p>
+            <label for="file-pdb">topology.pdb <span class="faint">(optional)</span></label>
+            <input id="file-pdb" type="file" accept=".pdb" />
+          </p>
+        </div>
+        <div id="upload-summary"></div>
+      </section>
+
+      <section>
+        <h2>2. Verify this system</h2>
+        <p class="note">
+          Evaluates the whole force field twice: once with the WGSL kernels and
+          once in double precision on the CPU. It also says whether the box can
+          take a barostat, and whether any molecule is split across the periodic
+          boundary — which bonded forces would read as a bond a box long. Slow,
+          and run once rather than per step.
+        </p>
+        <p><button id="verify" type="button">Verify this system</button></p>
+        <div id="verify-body" class="panel">Not checked yet.</div>
+      </section>
+
+      <section>
+        <h2>3. Settings</h2>
+        <p class="note">
+          The notebook's fields, with its defaults. The force constant is in
+          kJ/mol/nm² — the notebook's own label says kJ/mol, which is the wrong
+          unit for a term multiplying a squared distance.
+        </p>
+        <div class="panel grid">
+          <p><label for="job">Job name</label><input id="job" type="text" value="run" /></p>
+          <p><label for="seed">Seed</label><input id="seed" type="number" value="24301" /></p>
+          <p><label for="dt">Timestep (fs)</label><input id="dt" type="number" value="2" step="0.5" min="0.5" max="4" /></p>
+          <p><label for="temperature">Temperature (K)</label><input id="temperature" type="number" value="298" /></p>
+          <p><label for="pressure">Pressure (bar)</label><input id="pressure" type="number" value="1" /></p>
+          <p><label for="min-steps">Minimisation steps</label><input id="min-steps" type="number" value="10000" /></p>
+          <p><label for="restraint-k">Restraint k (kJ/mol/nm²)</label><input id="restraint-k" type="number" value="700" step="100" /></p>
+          <p><label for="equil-ns">Equilibration (ns)</label><input id="equil-ns" type="number" value="0.5" step="0.1" /></p>
+          <p><label for="stride-ns">Stride (ns)</label><input id="stride-ns" type="number" value="1" step="0.1" /></p>
+          <p><label for="strides">Strides</label><input id="strides" type="number" value="1" min="1" /></p>
+          <p><label for="traj-interval">Trajectory every (ps)</label><input id="traj-interval" type="number" value="10" /></p>
+          <p><label for="log-interval">Log every (ps)</label><input id="log-interval" type="number" value="10" /></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Run</h2>
+        <p><button id="start" type="button">Start</button></p>
+        <p>
+          <progress id="run-progress" value="0" max="1"></progress>
+          <span id="run-progress-text" class="faint">not started</span>
+        </p>
+        <div class="plots">
+          <canvas id="plot-energy" class="plot" height="150"></canvas>
+          <canvas id="plot-temperature" class="plot" height="150"></canvas>
+        </div>
+        <p class="note">
+          A run keeps the screen awake and re-takes the wake lock when the tab
+          comes back, since the browser drops it while hidden. If the GPU is
+          lost it is re-acquired and the run continues from the last completed
+          stage — the same granularity the notebook resumes a Colab session at.
+        </p>
+      </section>
+
+      <section>
+        <h2>5. Artefacts</h2>
+        <p class="note">
+          Written to the Origin Private File System as the run goes, so they
+          survive the tab closing. One trajectory, log, checkpoint and final
+          frame per stage, plus <code>run.json</code>. The <code>.rst</code> is
+          the restart point; the <code>.pdb</code> is a topology, and holds only
+          0.001 Å.
+        </p>
+        <div id="artefact-body" class="panel">Nothing written yet.</div>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        MIT, and experimental. The protocol is
+        <a href="https://github.com/pablo-arantes/making-it-rain">Making it Rain</a>
+        (<a href="https://doi.org/10.1021/acs.jcim.1c00998">JCIM 2021</a>); the
+        engine is held to <a href="https://openmm.org">OpenMM</a>, force by force.
+        <a href="./index.html">GPU and precision checks</a>.
+      </p>
+    </footer>
+
+    <script type="module" src="./run.ts"></script>
+  </body>
+</html>

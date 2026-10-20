@@ -36,6 +36,7 @@ import {
   type BarostatComparison,
 } from "../src/gpu/validate-barostat.js";
 import {
+  protocolHooksFor,
   validateProtocol,
   type ProtocolComparison,
 } from "../src/gpu/validate-protocol.js";
@@ -633,7 +634,6 @@ async function main(): Promise<void> {
       // `validateBarostat`: state.xml is un-minimised and NVE from it diverges.
       // Artefacts in OPFS, and a run that survives losing the GPU. Done before
       // the long checks so a failure here is seen early.
-      const { protocolHooksFor } = await import("../src/gpu/validate-protocol.js");
       const shortRun = {
         jobName: `${name}_persist`,
         seed: 0x5eed,

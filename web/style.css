@@ -63,3 +63,79 @@ pre { font-family: var(--mono); font-size: .8rem; overflow-x: auto; margin: .5re
 a { color: var(--accent); }
 footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; font-size: .85rem; color: var(--muted); }
 .bad-box { color: var(--bad); }
+
+/* The run page: a settings grid, plots, and file rows. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0 1.5rem;
+}
+.grid p,
+.panel p {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0.35rem 0;
+}
+.grid label,
+.panel label {
+  flex: 1 1 auto;
+}
+.grid input,
+.panel input[type="file"] {
+  flex: 0 1 9rem;
+}
+.panel input[type="file"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+input[type="number"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--fg);
+}
+button {
+  font: inherit;
+  padding: 0.3rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--fg);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.plots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+}
+.plot {
+  width: 100%;
+  height: 150px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+}
+progress {
+  width: min(28rem, 60%);
+  vertical-align: middle;
+}
+.faint {
+  color: var(--muted);
+}
+.status.ok {
+  border-left-color: var(--ok);
+}
+.status.bad {
+  border-left-color: var(--bad);
+}
