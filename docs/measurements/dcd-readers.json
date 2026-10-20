@@ -1,0 +1,24 @@
+{
+ "mdtraj": {
+  "frames": 5,
+  "atoms": 37,
+  "worst_coordinate_error_nm": 3.809016266842491e-07,
+  "worst_box_error_nm": 2.6702880884243996e-07
+ },
+ "pytraj": {
+  "frames": 5,
+  "atoms": 37,
+  "worst_coordinate_error_nm": 1.90569451774536e-07,
+  "worst_box_error_nm": 0.0
+ },
+ "parmed": {
+  "unsupported": "ParmEd provides no DCD reader (parmed.formats has no DCD entry)"
+ },
+ "note": "Merged across interpreters; run once per environment. VMD is covered through pytraj, which reads DCD with VMD's own dcdplugin.",
+ "MDAnalysis 2.9.0": {
+  "frames": 5,
+  "atoms": 37,
+  "worst_coordinate_error_nm": 3.809016266842491e-07,
+  "worst_box_error_nm": 2.6702880884243996e-07
+ }
+}
