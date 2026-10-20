@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prepare a system — Making it Rain on WebGPU</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Prepare a system</h1>
+      <p class="lede">
+        Give a PDB ID or upload a structure, and this builds the OpenMM
+        <code>System</code> the notebook would: hydrogens, a water box, ions.
+        A structure you upload never leaves this tab; a PDB ID is fetched from
+        the RCSB, which means asking them for it.
+      </p>
+      <p id="prepare-status" class="status" role="status">Ready.</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Structure</h2>
+        <p class="note">
+          Heavy atoms are enough — hydrogens in the file are replaced, because
+          a depositor's hydrogen names are not always the force field's. Water
+          already in the file is removed and rebuilt.
+        </p>
+        <p>
+          <label for="pdb-id">PDB ID</label>
+          <input id="pdb-id" type="text" placeholder="1L2Y" size="6" />
+          <button id="fetch" type="button">Fetch from RCSB</button>
+        </p>
+        <p>
+          <label for="file-pdb">…or upload a <code>.pdb</code></label>
+          <input id="file-pdb" type="file" accept=".pdb,.ent,.txt" />
+        </p>
+        <div id="structure-summary" class="panel">Nothing loaded yet.</div>
+      </section>
+
+      <section>
+        <h2>2. Settings</h2>
+        <p class="note">
+          The notebook's fields, with its defaults. Padding is the distance
+          from the solute's bounding sphere to the box face, and the ionic
+          strength excludes whatever is needed to neutralise the solute.
+        </p>
+        <div class="grid">
+          <p>
+            <label for="forcefield">Protein force field</label>
+            <select id="forcefield">
+              <option value="protein.ff14SB.xml" selected>ff14SB</option>
+              <option value="amber99sbildn.xml">ff99SB-ILDN</option>
+              <option value="amber99sb.xml">ff99SB</option>
+            </select>
+          </p>
+          <p>
+            <label for="water">Water model</label>
+            <select id="water">
+              <option value="tip3p" selected>TIP3P</option>
+              <option value="spce">SPC/E</option>
+            </select>
+          </p>
+          <p>
+            <label for="ph">pH</label>
+            <input id="ph" type="number" value="7" step="0.1" min="0" max="14" />
+          </p>
+          <p>
+            <label for="padding">Padding (Å)</label>
+            <input id="padding" type="number" value="4" step="1" min="0" />
+          </p>
+          <p>
+            <label for="concentration">Ionic strength (M)</label>
+            <input id="concentration" type="number" value="0.15" step="0.01" min="0" />
+          </p>
+          <p>
+            <label for="positive-ion">Positive ion</label>
+            <select id="positive-ion">
+              <option value="Na+" selected>Na+</option>
+              <option value="K+">K+</option>
+            </select>
+          </p>
+          <p>
+            <label for="prep-seed">Seed</label>
+            <input id="prep-seed" type="number" value="24301" />
+          </p>
+        </div>
+        <p><button id="prepare" type="button" disabled>Prepare</button></p>
+      </section>
+
+      <section>
+        <h2>3. What was built</h2>
+        <div id="report" class="panel">Not prepared yet.</div>
+      </section>
+
+      <section>
+        <h2>4. Where this differs from the notebook</h2>
+        <p class="note">
+          Every deviation that applies to what was just built, listed rather
+          than buried. <code>docs/DEVIATIONS.md</code> has the full set and the
+          reasoning.
+        </p>
+        <div id="deviations" class="panel">Nothing prepared yet.</div>
+      </section>
+
+      <section>
+        <h2>5. Take it away</h2>
+        <p class="note">
+          <code>system.xml</code> and <code>state.xml</code> are OpenMM's own
+          serialisation, so the same files run here, in the notebook, or on a
+          cluster. The PDB is the topology the box was built with.
+        </p>
+        <div id="downloads" class="panel">Nothing to download yet.</div>
+      </section>
+    </main>
+
+    <footer>
+      <p class="note">
+        <a href="./index.html">GPU and precision checks</a> ·
+        <a href="./run.html">Run a system</a>
+      </p>
+    </footer>
+    <script type="module" src="./prepare.ts"></script>
+  </body>
+</html>

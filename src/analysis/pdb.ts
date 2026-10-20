@@ -328,3 +328,118 @@ export function readPdb(text: string): PdbTopology {
 
   return { atoms, residues, chains, box, conect: resolved, positions };
 }
+
+/**
+ * Write a PDB from a topology, for a structure that never had a file.
+ *
+ * `rewritePdb` substitutes coordinates into an existing file, which is right
+ * for a trajectory frame and useless for a system the browser built: a
+ * solvated box has thousands of atoms no input file ever mentioned. This emits
+ * the records from scratch.
+ *
+ * Column positions are the format's, not a guess: serial 7-11, name 13-16,
+ * residue name 18-20, chain 22, residue sequence 23-26, coordinates 31-54 in
+ * ångström, element 77-78. The atom name is left-padded by one space when it
+ * is short enough, which is the convention that distinguishes a carbon alpha
+ * `CA` from a calcium `CA` — the reader in this file relies on it, so the
+ * writer has to produce it.
+ *
+ * `TER` goes after the last residue of each chain, and chains are written in
+ * topology order so the file reads back as the same topology.
+ */
+export function writePdb(
+  topology: PdbTopology,
+  options: { readonly remark?: string } = {},
+): string {
+  const out: string[] = [];
+  if (options.remark !== undefined) {
+    out.push(`REMARK   1 ${options.remark}`.padEnd(80, " ").slice(0, 80));
+  }
+  if (topology.box !== null) {
+    const [a, b, c] = topology.box;
+    out.push(
+      "CRYST1" +
+        fixed(a * TO_ANGSTROM, 9, 3) +
+        fixed(b * TO_ANGSTROM, 9, 3) +
+        fixed(c * TO_ANGSTROM, 9, 3) +
+        fixed(90, 7, 2) +
+        fixed(90, 7, 2) +
+        fixed(90, 7, 2) +
+        " P 1           1",
+    );
+  }
+
+  let serial = 1;
+  for (const chain of topology.chains) {
+    let last: { name: string; id: string } | undefined;
+    for (const residueIndex of chain.residues) {
+      const residue = topology.residues[residueIndex] as PdbResidue;
+      for (const atom of residue.atoms) {
+        const entry = topology.atoms[atom] as PdbAtom;
+        // 🔴 Columns 13-14 hold the element symbol, right-justified, and that
+        // is what decides where the name starts. A single-letter element gets
+        // a leading space -- ` CA ` is a carbon alpha -- while a two-letter one
+        // starts in column 13, so `NA  ` is a sodium. Transcribed from
+        // `PDBFile.writeFile`: prepend a space only when the name is short, it
+        // begins with a letter, *and* the element symbol is one character.
+        //
+        // Getting this wrong is the same ambiguity `readPdb` keeps `rawName`
+        // for, seen from the writing side: a round trip turned a sodium `Na  `
+        // into ` Na `, which reads back as the element N.
+        const shift =
+          entry.name.length < 4 &&
+          /^[A-Za-z]/.test(entry.name) &&
+          entry.element.length < 2;
+        const name = shift
+          ? ` ${entry.name}`.padEnd(4, " ")
+          : entry.name.padEnd(4, " ").slice(0, 4);
+        const x = fixed((topology.positions[atom * 3] as number) * TO_ANGSTROM, 8, 3);
+        const y = fixed(
+          (topology.positions[atom * 3 + 1] as number) * TO_ANGSTROM,
+          8,
+          3,
+        );
+        const z = fixed(
+          (topology.positions[atom * 3 + 2] as number) * TO_ANGSTROM,
+          8,
+          3,
+        );
+        out.push(
+          (entry.hetatm ? "HETATM" : "ATOM  ") +
+            String(serial % 100000).padStart(5, " ") +
+            " " +
+            name +
+            " " +
+            residue.name.padStart(3, " ").slice(0, 3) +
+            " " +
+            (chain.id === "" ? " " : chain.id.slice(0, 1)) +
+            residue.id.padStart(4, " ").slice(0, 5) +
+            "    " +
+            x +
+            y +
+            z +
+            "  1.00  0.00          " +
+            // As the topology holds it: OpenMM writes `Na`, not `NA`, and the
+            // reader is case-insensitive, so preserving it round-trips.
+            entry.element.padStart(2, " "),
+        );
+        serial++;
+      }
+      last = { name: residue.name, id: residue.id };
+    }
+    if (last !== undefined) {
+      out.push(
+        "TER   " +
+          String(serial % 100000).padStart(5, " ") +
+          "      " +
+          last.name.padStart(3, " ").slice(0, 3) +
+          " " +
+          (chain.id === "" ? " " : chain.id.slice(0, 1)) +
+          last.id.padStart(4, " ").slice(0, 5),
+      );
+      serial++;
+    }
+  }
+  out.push("END");
+  return out.join("\n") + "\n";
+}

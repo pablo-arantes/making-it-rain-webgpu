@@ -11,6 +11,10 @@ yet. Every number is produced by `test/prep-*.test.ts` against fixtures from
 
 ## What runs
 
+`web/prepare.html` drives all of this: a PDB ID or an upload in, and
+`system.xml`, `state.xml` and `system.pdb` out, with the deviations that applied
+listed on the page.
+
 ```
 PDB text
   -> readPdb              src/analysis/pdb.ts
@@ -24,7 +28,16 @@ PDB text
   -> assignImpropers      src/prep/torsions.ts   ordering="amber"
   -> findExceptions       src/prep/exceptions.ts 1-2, 1-3, scaled 1-4
   -> buildSystem          src/prep/system.ts     an OpenMMSystem the engine runs
+  -> serialiseSystem      src/engine/system.ts   back out as OpenMM System XML
 ```
+
+Writing `System` XML was the missing half of the contract: it could be read but
+not produced, which is fine while every system comes from the notebook and not
+fine once the browser makes one, because the user then has no artefact.
+`test/system-serialise.test.ts` takes four files OpenMM wrote, writes each back
+out, and requires the re-parse to be identical — OpenMM's file is the fixed
+point, since a writer and reader wrong in the same way would round-trip
+perfectly.
 
 `prepareSystem` in `src/prep/prepare.ts` is the whole chain in one call.
 

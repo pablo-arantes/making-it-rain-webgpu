@@ -226,12 +226,8 @@ function squaredPeriodicDistance(
  * box itself — so the width is the sphere's diameter plus the padding, and at
  * least twice the padding so that no atom is within the padding of two images.
  */
-export function boxWidthForPadding(
-  positions: Float64Array,
-  count: number,
-  padding: number,
-): number {
-  if (count === 0) return 2 * padding;
+export function boundingSphereRadius(positions: Float64Array, count: number): number {
+  if (count === 0) return 0;
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   for (let atom = 0; atom < count; atom++) {
@@ -253,6 +249,16 @@ export function boxWidthForPadding(
     const dz = (positions[atom * 3 + 2] as number) - centre[2];
     radius = Math.max(radius, Math.hypot(dx, dy, dz));
   }
+  return radius;
+}
+
+export function boxWidthForPadding(
+  positions: Float64Array,
+  count: number,
+  padding: number,
+): number {
+  if (count === 0) return 2 * padding;
+  const radius = boundingSphereRadius(positions, count);
   return Math.max(2 * radius + padding, 2 * padding);
 }
 

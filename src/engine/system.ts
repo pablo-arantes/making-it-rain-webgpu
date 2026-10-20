@@ -595,3 +595,191 @@ export function parseSystem(xml: string): OpenMMSystem {
     forces,
   };
 }
+
+/**
+ * Write an `OpenMMSystem` back out as OpenMM `System` XML.
+ *
+ * The engine's contract is this file format, and until now it was read-only:
+ * a system could be loaded but never produced. That is fine while every system
+ * comes from the notebook, and not fine once the browser prepares one, because
+ * the user then has no artefact — nothing to keep, nothing to re-run, and
+ * nothing to check against OpenMM. A prepared system that cannot be serialised
+ * is a result you have to take on trust.
+ *
+ * Written to be read by OpenMM's own `XmlSerializer`, which means the element
+ * names, the attribute names and the `version` attribute on each force all
+ * have to match what it expects. They are taken from a file OpenMM wrote.
+ *
+ * Numbers are written with `toString()`, so `0.1522` comes out as `0.1522`
+ * where OpenMM writes `.1522`. Both parse to the same double; this is not a
+ * byte-for-byte reproduction of OpenMM's writer and does not try to be. What
+ * `test/system-serialise.test.ts` does assert is that parsing our output gives
+ * back exactly the system we wrote.
+ */
+export function serialiseSystem(system: OpenMMSystem): string {
+  const lines: string[] = [];
+  const escape = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  const n = (value: number): string => String(value);
+
+  lines.push('<?xml version="1.0" ?>');
+  lines.push(
+    `<System openmmVersion="${escape(system.openmmVersion)}" type="System" version="1">`,
+  );
+
+  lines.push("\t<PeriodicBoxVectors>");
+  for (const [index, label] of ["A", "B", "C"].entries()) {
+    const vector = system.boxVectors[index] as Vec3;
+    lines.push(
+      `\t\t<${label} x="${n(vector[0])}" y="${n(vector[1])}" z="${n(vector[2])}"/>`,
+    );
+  }
+  lines.push("\t</PeriodicBoxVectors>");
+
+  lines.push("\t<Particles>");
+  for (const mass of system.masses) lines.push(`\t\t<Particle mass="${n(mass)}"/>`);
+  lines.push("\t</Particles>");
+
+  if (system.constraintCount === 0) {
+    lines.push("\t<Constraints/>");
+  } else {
+    lines.push("\t<Constraints>");
+    for (let i = 0; i < system.constraintCount; i++) {
+      lines.push(
+        `\t\t<Constraint d="${n(system.constraintDistance[i] as number)}" ` +
+          `p1="${system.constraintP1[i]}" p2="${system.constraintP2[i]}"/>`,
+      );
+    }
+    lines.push("\t</Constraints>");
+  }
+
+  lines.push("\t<Forces>");
+  for (const force of system.forces) {
+    const common =
+      `forceGroup="${force.forceGroup}" name="${escape(force.name)}"`;
+    switch (force.type) {
+      case "HarmonicBondForce":
+        lines.push(
+          `\t\t<Force ${common} type="HarmonicBondForce" ` +
+            `usesPeriodic="${force.usesPeriodic ? 1 : 0}" version="2">`,
+        );
+        lines.push("\t\t\t<Bonds>");
+        for (let i = 0; i < force.count; i++) {
+          lines.push(
+            `\t\t\t\t<Bond d="${n(force.length[i] as number)}" ` +
+              `k="${n(force.k[i] as number)}" p1="${force.p1[i]}" p2="${force.p2[i]}"/>`,
+          );
+        }
+        lines.push("\t\t\t</Bonds>");
+        lines.push("\t\t</Force>");
+        break;
+
+      case "HarmonicAngleForce":
+        lines.push(
+          `\t\t<Force ${common} type="HarmonicAngleForce" ` +
+            `usesPeriodic="${force.usesPeriodic ? 1 : 0}" version="2">`,
+        );
+        lines.push("\t\t\t<Angles>");
+        for (let i = 0; i < force.count; i++) {
+          lines.push(
+            `\t\t\t\t<Angle a="${n(force.angle[i] as number)}" ` +
+              `k="${n(force.k[i] as number)}" p1="${force.p1[i]}" ` +
+              `p2="${force.p2[i]}" p3="${force.p3[i]}"/>`,
+          );
+        }
+        lines.push("\t\t\t</Angles>");
+        lines.push("\t\t</Force>");
+        break;
+
+      case "PeriodicTorsionForce":
+        lines.push(
+          `\t\t<Force ${common} type="PeriodicTorsionForce" ` +
+            `usesPeriodic="${force.usesPeriodic ? 1 : 0}" version="2">`,
+        );
+        lines.push("\t\t\t<Torsions>");
+        for (let i = 0; i < force.count; i++) {
+          lines.push(
+            `\t\t\t\t<Torsion k="${n(force.k[i] as number)}" p1="${force.p1[i]}" ` +
+              `p2="${force.p2[i]}" p3="${force.p3[i]}" p4="${force.p4[i]}" ` +
+              `periodicity="${force.periodicity[i]}" ` +
+              `phase="${n(force.phase[i] as number)}"/>`,
+          );
+        }
+        lines.push("\t\t\t</Torsions>");
+        lines.push("\t\t</Force>");
+        break;
+
+      case "NonbondedForce":
+        // `rfDielectric` and the LJPME fields are written because OpenMM's
+        // reader expects the full attribute set for version 4, even though
+        // nothing here uses them.
+        lines.push(
+          `\t\t<Force alpha="${n(force.alpha)}" cutoff="${n(force.cutoff)}" ` +
+            `dispersionCorrection="${force.useDispersionCorrection ? 1 : 0}" ` +
+            `ewaldTolerance="${n(force.ewaldTolerance)}" ` +
+            `exceptionsUsePeriodic="${force.exceptionsUsePeriodic ? 1 : 0}" ` +
+            `${common} includeDirectSpace="${force.includeDirectSpace ? 1 : 0}" ` +
+            `ljAlpha="0" ljnx="0" ljny="0" ljnz="0" method="${force.method}" ` +
+            `nx="${force.grid[0]}" ny="${force.grid[1]}" nz="${force.grid[2]}" ` +
+            `recipForceGroup="${force.recipForceGroup}" rfDielectric="78.3" ` +
+            `switchingDistance="${n(force.switchingDistance)}" type="NonbondedForce" ` +
+            `useSwitchingFunction="${force.useSwitchingFunction ? 1 : 0}" version="4">`,
+        );
+        lines.push("\t\t\t<GlobalParameters/>");
+        lines.push("\t\t\t<ParticleOffsets/>");
+        lines.push("\t\t\t<ExceptionOffsets/>");
+        lines.push("\t\t\t<Particles>");
+        for (let i = 0; i < force.particleCount; i++) {
+          lines.push(
+            `\t\t\t\t<Particle eps="${n(force.epsilon[i] as number)}" ` +
+              `q="${n(force.charge[i] as number)}" ` +
+              `sig="${n(force.sigma[i] as number)}"/>`,
+          );
+        }
+        lines.push("\t\t\t</Particles>");
+        if (force.exceptionCount === 0) {
+          lines.push("\t\t\t<Exceptions/>");
+        } else {
+          lines.push("\t\t\t<Exceptions>");
+          for (let i = 0; i < force.exceptionCount; i++) {
+            lines.push(
+              `\t\t\t\t<Exception eps="${n(force.exceptionEpsilon[i] as number)}" ` +
+                `p1="${force.exceptionP1[i]}" p2="${force.exceptionP2[i]}" ` +
+                `q="${n(force.exceptionChargeProd[i] as number)}" ` +
+                `sig="${n(force.exceptionSigma[i] as number)}"/>`,
+            );
+          }
+          lines.push("\t\t\t</Exceptions>");
+        }
+        lines.push("\t\t</Force>");
+        break;
+
+      case "CMMotionRemover":
+        lines.push(
+          `\t\t<Force ${common} frequency="${force.frequency}" ` +
+            'type="CMMotionRemover" version="1"/>',
+        );
+        break;
+
+      case "MonteCarloBarostat":
+        lines.push(
+          `\t\t<Force defaultPressure="${n(force.defaultPressure)}" ` +
+            `defaultTemperature="${n(force.defaultTemperature)}" ${common} ` +
+            `frequency="${force.frequency}" randomNumberSeed="${force.randomSeed}" ` +
+            'type="MonteCarloBarostat" version="1"/>',
+        );
+        break;
+
+      default:
+        // A force we can hold but not write would produce a file that silently
+        // lost a term, which is worse than refusing.
+        throw new UnsupportedForce(
+          (force as { type: string }).type,
+          "it cannot be serialised, so writing this system would drop it",
+        );
+    }
+  }
+  lines.push("\t</Forces>");
+  lines.push("</System>");
+  return lines.join("\n") + "\n";
+}

@@ -81,6 +81,10 @@ export default defineConfig({
       input: {
         index: resolve(import.meta.dirname ?? ".", "web/index.html"),
         run: resolve(import.meta.dirname ?? ".", "web/run.html"),
+        // 🔴 Every page has to be listed here. Vite discovers only
+        // index.html, so a page that is missing builds in development and is
+        // silently absent from a production build -- which has happened twice.
+        prepare: resolve(import.meta.dirname ?? ".", "web/prepare.html"),
         validate: resolve(import.meta.dirname ?? ".", "web/validate.html"),
       },
     },

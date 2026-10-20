@@ -77,6 +77,7 @@ facts up for the tools.
 | Page | What it is |
 | --- | --- |
 | `web/index.html` | the GPU panel and the precision checks |
+| `web/prepare.html` | a PDB ID or an upload in, an OpenMM `System` out |
 | `web/run.html` | upload a system, verify it, run it, download the artefacts |
 | `web/validate.html` | every differential check against OpenMM, development only |
 
