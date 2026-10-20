@@ -150,3 +150,86 @@ export function parseState(xml: string): OpenMMState {
       : { kineticEnergy }),
   };
 }
+
+/**
+ * Serialise a `State` the way OpenMM's `XmlSerializer` does.
+ *
+ * This is what the protocol writes as its `.rst` after every stage and stride,
+ * and what a resumed run reads back -- the notebook's own checkpoint mechanism,
+ * which is how a 12-hour Colab session survives being disconnected. It has to
+ * be readable by OpenMM, so that a run started here can be continued in Python
+ * and the other way round; `tools/check_state.py` holds it to that.
+ *
+ * Numbers are written with JavaScript's default `toString`, which produces the
+ * shortest decimal that reads back to the same double. OpenMM's own writer
+ * emits a different shortest form -- it drops the leading zero, writing `.006`
+ * for 0.006 -- and neither is more correct: both parse to the same bits, which
+ * is the only property that matters here. Trying to match its formatting
+ * character for character would be matching a detail of its float printer.
+ *
+ * 🔴 Velocities are written when present and omitted when not, and that is not
+ * cosmetic. A `State` with no velocities means "set them yourself", and a
+ * reader that found zeros instead would start a run at absolute zero without
+ * saying so.
+ */
+
+export interface SerialiseStateOptions {
+  /** Written into the root element; OpenMM writes its own version here. */
+  readonly openmmVersion?: string;
+  /** Include forces, which a checkpoint does not need and a fixture may want. */
+  readonly includeForces?: boolean;
+}
+
+const vectorElement = (name: string, x: number, y: number, z: number): string =>
+  `\t\t<${name} x="${x}" y="${y}" z="${z}"/>\n`;
+
+function vectorList(
+  container: string,
+  element: string,
+  values: Float64Array,
+): string {
+  let out = `\t<${container}>\n`;
+  for (let i = 0; i < values.length; i += 3) {
+    out += vectorElement(
+      element,
+      values[i] as number,
+      values[i + 1] as number,
+      values[i + 2] as number,
+    );
+  }
+  return `${out}\t</${container}>\n`;
+}
+
+export function serialiseState(
+  state: OpenMMState,
+  options: SerialiseStateOptions = {},
+): string {
+  const version = options.openmmVersion ?? state.openmmVersion ?? "8.4";
+  let xml = '<?xml version="1.0" ?>\n';
+  xml +=
+    `<State openmmVersion="${version}" stepCount="${state.stepCount}" ` +
+    `time="${state.time}" type="State" version="1">\n`;
+  xml += "\t<PeriodicBoxVectors>\n";
+  for (const [name, vector] of [
+    ["A", state.boxVectors[0]],
+    ["B", state.boxVectors[1]],
+    ["C", state.boxVectors[2]],
+  ] as const) {
+    xml += vectorElement(
+      name,
+      vector[0] as number,
+      vector[1] as number,
+      vector[2] as number,
+    );
+  }
+  xml += "\t</PeriodicBoxVectors>\n";
+  xml += vectorList("Positions", "Position", state.positions);
+  if (state.velocities !== undefined) {
+    xml += vectorList("Velocities", "Velocity", state.velocities);
+  }
+  if (options.includeForces === true && state.forces !== undefined) {
+    xml += vectorList("Forces", "Force", state.forces);
+  }
+  xml += "</State>\n";
+  return xml;
+}
