@@ -25,10 +25,38 @@ export default defineConfig({
     channel: "chrome",
     launchOptions: { args: ["--enable-unsafe-webgpu"] },
   },
-  webServer: {
-    command: "npm run dev",
-    url: "http://localhost:4173",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // 🔴 The long gate runs against the **built** page, not the dev server, and
+  // this is not a preference.
+  //
+  // The dev server watches `src/`, and the run page imports the engine straight
+  // out of it. Editing any file in that graph while a run is in flight -- which
+  // during a 90-minute gate is likely -- invalidates the module, and with no
+  // HMR handlers Vite falls back to a full page reload. That wipes the uploaded
+  // files and the form, so the run simply stops, `__mirRun.state` never reaches
+  // `done`, and the gate times out with a page snapshot showing default form
+  // values and "Nothing is uploaded". It looks like the engine hung. It is the
+  // page having been reloaded underneath it.
+  //
+  // That happened. `vite preview` serves static files with no watcher, so it
+  // cannot happen again, and it has the side benefit of testing the artefact
+  // users actually get -- which CLAUDE.md notes is a distinct thing, since a
+  // page missing from `vite.config.ts` builds in development and vanishes from
+  // a production build.
+  //
+  // `reuseExistingServer` is off for the gate too: attaching to a dev server
+  // someone left running would silently undo all of this.
+  webServer:
+    process.env["MIR_LONG_RUN"] === "1"
+      ? {
+          command: "npm run build:web && npm run preview",
+          url: "http://localhost:4173",
+          reuseExistingServer: false,
+          timeout: 300_000,
+        }
+      : {
+          command: "npm run dev",
+          url: "http://localhost:4173",
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
 });

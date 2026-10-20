@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "build:web": "vite build",
     "dev": "vite",
+    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:gpu": "MIR_GPU_TESTS=1 vitest run test/*.gpu.test.ts",

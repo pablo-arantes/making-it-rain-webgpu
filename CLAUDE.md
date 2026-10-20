@@ -87,6 +87,21 @@ development and is **silently missing from a production build**.
 `MIR_LONG_RUN=1 npx playwright test -g nanosecond` runs the plan's 1 ns gate,
 about 38 minutes at the measured 38 ns/day. It is skipped otherwise.
 
+🔴 **The long gate runs against the built page, and editing `src/` during any
+browser run kills it.** The dev server watches `src/`, and `web/run.ts` imports
+the engine straight out of it — `run.ts` → `engine/protocol.ts` →
+`analysis/pdb.ts`, for one real example. Touch anything in that graph while a
+run is in flight and Vite invalidates the module; with no HMR handlers it falls
+back to a **full page reload**, which wipes the uploaded files and the form. The
+run stops, `__mirRun.state` never reaches `done`, and the gate times out 90
+minutes later with a snapshot showing default form values and "Nothing is
+uploaded" — which reads exactly like the engine hanging.
+
+This cost one 90-minute gate. `playwright.config.ts` now serves the gate from
+`vite preview`, which has no watcher, so it cannot recur there. The ordinary
+`npm run test:browser` lane still uses the dev server, so **do not edit `src/`
+while it is running** either.
+
 ## Capturing measurements
 
 ```sh
