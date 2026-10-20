@@ -80,6 +80,17 @@ export interface TorsionRow extends ParameterRow {
     readonly periodicity: number;
     readonly phase: number;
   }[];
+  /**
+   * `amber`, `charmm`, `smirnoff` or `default`, from the enclosing
+   * `<PeriodicTorsionForce ordering=...>`.
+   *
+   * Carried per row rather than per force field, which is how OpenMM does it:
+   * `registerImproperTorsion` stamps the section's ordering onto each row. It
+   * matters as soon as two files are merged -- ff14SB declares `amber` and
+   * tip3p declares nothing -- because a single field-wide value would apply
+   * one file's tie-breaking rules to the other file's impropers.
+   */
+  readonly ordering: string;
 }
 
 export interface ForceField {
@@ -337,7 +348,13 @@ export function parseForceField(xml: string): ForceField {
       case "Proper":
       case "Improper": {
         const { keys, byClass } = readKeys(scanner, TORSION_SLOTS.length);
-        const row: TorsionRow = { keys, byClass, values: {}, terms: readTerms(scanner) };
+        const row: TorsionRow = {
+          keys,
+          byClass,
+          values: {},
+          terms: readTerms(scanner),
+          ordering: torsionOrdering,
+        };
         if (name === "Proper") propers.push(row);
         else impropers.push(row);
         break;

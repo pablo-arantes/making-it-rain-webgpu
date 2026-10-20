@@ -38,6 +38,36 @@ the ligand taken from a HETATM residue of the PDB entry, with bond orders from
 the RCSB Chemical Component Dictionary. That is the route the browser takes, so
 the two are comparable by construction.
 
+## Parameter parity fixtures
+
+Phase 3 reimplements OpenMM's parameter assignment, and the gate is term-by-term
+parity rather than an energy — an energy is a sum, and a wrong torsion and a
+wrong charge can cancel inside a tolerance.
+
+```sh
+# a small protein with its hydrogens, as OpenMM's own PDB reader sees it
+python tools/build_prep_fixture.py --pdb-id 1L2Y --out fixtures/prep/
+
+# every parameter OpenMM assigned: masses, charges, bonds, angles, torsions
+python tools/dump_parameters.py --pdb fixtures/prep/1L2Y.pdb \
+    --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/1L2Y-params.json
+
+# which template each residue matched, and the atom correspondence inside it
+python tools/dump_template_match.py --pdb fixtures/prep/1L2Y.pdb \
+    --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/1L2Y-match.json
+```
+
+The second dump exists because charges cannot distinguish two valid graph
+isomorphisms of a symmetric residue — tyrosine's CD1 and CD2 carry identical
+charges — while `ordering="amber"` breaks improper torsion ties on the atom's
+index *inside its template*. So the choice is invisible in the charges and
+visible in the energy. It also records `bondedToAtom` in OpenMM's own order,
+because the improper match cache is keyed by type signature and replays
+positions, which makes candidate order reach the result.
+
+All three are regenerated, never committed; `test/prep-*.test.ts` skip
+themselves and say so when they are absent.
+
 ## Probes
 
 ```sh

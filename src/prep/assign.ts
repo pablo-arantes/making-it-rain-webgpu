@@ -23,6 +23,7 @@
  */
 
 import type { PdbTopology } from "../analysis/pdb.js";
+import type { AtomContext } from "./torsions.js";
 import type { ForceField } from "./ffxml.js";
 import { matchResidues, prepareTemplates, type ResidueMatch } from "./template.js";
 
@@ -111,6 +112,39 @@ export function assignAtoms(
     matches,
     classes: assigned.map((atom) => atom.className),
   };
+}
+
+/**
+ * Per-atom context for the improper ordering rules.
+ *
+ * Built here because the template index is only available while the match is
+ * in hand: it is the atom's position *inside the template it matched*, which
+ * no later pass can recover. `ordering="amber"` breaks ties on it, so an
+ * improper's atom order -- and therefore the sign of its dihedral angle --
+ * depends on getting it from the match rather than from the file.
+ */
+export function atomContexts(
+  topology: PdbTopology,
+  assignment: Assignment,
+): readonly AtomContext[] {
+  const contexts: (AtomContext | undefined)[] = assignment.atoms.map(() => undefined);
+  for (const match of assignment.matches) {
+    const residue = topology.residues[match.residue] as { atoms: readonly number[] };
+    for (const [position, atom] of residue.atoms.entries()) {
+      const assigned = assignment.atoms[atom] as AssignedAtom;
+      contexts[atom] = {
+        type: assigned.type,
+        element: (topology.atoms[atom] as { element: string }).element,
+        mass: assigned.mass,
+        residue: match.residue,
+        templateIndex: match.atomMatches[position] as number,
+      };
+    }
+  }
+  return contexts.map((context, index) => {
+    if (context === undefined) throw new Error(`atom ${index} belongs to no residue`);
+    return context;
+  });
 }
 
 /** Total charge, which should be an integer to within round-off. */
