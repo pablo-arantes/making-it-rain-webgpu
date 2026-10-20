@@ -15,7 +15,7 @@
  */
 
 import { expect, test } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
 const fixture = "1L2Y";
 const present = existsSync(`fixtures/${fixture}/system.xml`);
@@ -111,6 +111,25 @@ test.describe("the run page", () => {
       await page.locator("#artefact-body button[data-download]").count(),
     ).toBe(artefacts.length);
 
+    // --- Take the artefacts away ------------------------------------------
+    // Downloading through the real button, and saving where
+    // `tools/check_dcd.py` can be pointed at it: the plan's gate is that the
+    // trajectories open in MDAnalysis, MDTraj, pytraj and VMD, and a 2,373-atom
+    // DCD from an actual run is a much better subject for that than the
+    // 37-atom synthetic one the writer's unit test uses.
+    const saved = "fixtures/run-artefacts";
+    mkdirSync(saved, { recursive: true });
+    for (const suffix of ["dcd", "pdb", "rst", "log"]) {
+      const name = `${unique}_equil.${suffix}`;
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        page.locator(`#artefact-body button[data-download="${name}"]`).click(),
+      ]);
+      expect(download.suggestedFilename()).toBe(name);
+      await download.saveAs(`${saved}/equil.${suffix}`);
+    }
+    expect(existsSync(`${saved}/equil.dcd`)).toBe(true);
+
     expect(consoleErrors.filter((m) => !m.includes("404"))).toEqual([]);
     console.log(
       `\n  run page: ${verify!.particleCount} particles, verify ` +
@@ -118,7 +137,8 @@ test.describe("the run page", () => {
         `${verify!.forceRelativeRms.toExponential(2)} force in ` +
         `${verify!.elapsed.toFixed(1)} s, NPT ${verify!.canRunNpt}` +
         `\n  ${artefacts.length} artefacts, ${run?.reports} reports, ` +
-        `${((run?.artefacts ?? []).reduce((n, a) => n + a.bytes, 0) / 1024).toFixed(1)} kB`,
+        `${((run?.artefacts ?? []).reduce((n, a) => n + a.bytes, 0) / 1024).toFixed(1)} kB` +
+        `\n  downloaded equil.{dcd,pdb,rst,log} to fixtures/run-artefacts/`,
     );
   });
 

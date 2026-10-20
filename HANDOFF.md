@@ -97,7 +97,7 @@ keeps a log lining up with its trajectory. A second pass over the same outputs
 skips every stage.
 
 🔴 **1L2Y cannot run NPT at a 1 nm cutoff**, and that is not a bug in the
-barostat. Its box is 3.0806 nm -- 3.08 cutoffs -- so cells start at 1.0269 nm
+barostat. The run page now says so before starting rather than failing during. Its box is 3.0806 nm -- 3.08 cutoffs -- so cells start at 1.0269 nm
 and **2.6% of compression** takes them below the cutoff, after which the 27-cell
 scan stops finding every pair. Fewer cells do not help: below three per axis the
 scan visits the same cell twice. This is finding 4 in docs/NOTEBOOK_PARITY.md
@@ -106,10 +106,28 @@ turning into a hard limit -- that fixture's solute already sees its own image at
 assuming, and an **all-pairs fallback for tight boxes is the next thing the
 engine needs**.
 
-What is left in Phase 2: the **UI** (upload, panels, live plots, remaining time,
-the "verify this system" button), **OPFS** behind `RunOutputs` and resume after
-a deliberate `device.lost`, a **PDB rewriter** for the final frame of each
-stage, and a **wake lock**. Then the gate: a 1 ns 1L2Y run under Playwright.
+**Phase 2 is built.** `web/run.html` takes an OpenMM `System` and `State`,
+checks them, runs the protocol and hands back the artefacts; nothing leaves the
+tab. Driven end to end under Playwright through the real file inputs:
+
+| | measured |
+| --- | --- |
+| verify, 2,373 particles | 5.0e-7 energy, 1.2e-6 force relative, 0.7 s |
+| a three-stage run | 13 artefacts, 1.9 MB, 6 reports |
+| OPFS vs memory | byte-identical (1.3 MB and 15 MB) |
+| device lost and resumed | skipped the two finished stages, redid one |
+| DCD readers | mdtraj, pytraj, MDAnalysis 2.9.0 all within f32 round-off |
+
+**"Verify this system"** compares the kernels against `src/reference/` rather
+than against OpenMM, because a stranger's upload has no captured energies. That
+is weaker and it catches what a fixture cannot: parameters outside the tested
+range, a box that defeats the cell list, molecules split across the boundary. It
+also answers, *before* a run rather than forty minutes into one, whether the box
+can take a barostat.
+
+What remains for Phase 2's release: deploy to GitHub Pages marked experimental,
+and the plan's remaining gate items beyond the 1 ns run — a **prmtop/inpcrd**
+reader, so a user with Amber files does not have to go through OpenMM first.
 
 The barostat is host-driven, which is where OpenMM's API drives it too: read the
 energy, rescale the box and the molecules, read it again, accept or reject. At

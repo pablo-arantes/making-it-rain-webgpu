@@ -72,6 +72,21 @@ bundled Chromium does not expose WebGPU at all**; the config uses
 `channel: "chrome"`, the installed Google Chrome. `tools/chrome.ts` wraps both
 facts up for the tools.
 
+## The pages
+
+| Page | What it is |
+| --- | --- |
+| `web/index.html` | the GPU panel and the precision checks |
+| `web/run.html` | upload a system, verify it, run it, download the artefacts |
+| `web/validate.html` | every differential check against OpenMM, development only |
+
+All three are named inputs in `vite.config.ts`. 🔴 Vite discovers only
+`index.html` by itself, so a new page that is not listed there builds in
+development and is **silently missing from a production build**.
+
+`MIR_LONG_RUN=1 npx playwright test -g nanosecond` runs the plan's 1 ns gate,
+about 38 minutes at the measured 38 ns/day. It is skipped otherwise.
+
 ## Capturing measurements
 
 ```sh
