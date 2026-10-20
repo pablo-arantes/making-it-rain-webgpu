@@ -72,3 +72,25 @@ Polêto, Pedebos and Ligabue-Braun,
 [JCIM 2021](https://doi.org/10.1021/acs.jcim.1c00998)) and
 [Cloud-Bind](https://github.com/pablo-arantes/Cloud-Bind). `reference/Uni_Dock+MD.ipynb`
 is included as the specification the port is held to.
+
+## `vendor/ffxml/`
+
+OpenMM's own force field data files, copied unmodified so that the preparation
+path can run in a browser with no network. 1.1 MB in all.
+
+| File | What it is |
+| --- | --- |
+| `protein.ff14SB.xml`, `amber99sb.xml`, `amber99sbildn.xml` | the three protein force fields the notebook offers |
+| `tip3p.xml`, `spce.xml` (and the `amber14` variants) | the two water models it offers |
+| `residues.xml` | the standard bonds a PDB implies, which the format itself does not state |
+
+From [OpenMM](https://openmm.org), MIT, Stanford University and the Authors. The
+parameters they encode are the Amber force fields', whose own terms are
+permissive; the files are OpenMM's transcription of them.
+
+🔴 Copied rather than reimplemented on purpose. `residues.xml` could be derived
+from chemistry and `protein.ff14SB.xml` from the Amber distribution, and both
+would then be a second source of truth for something already settled -- and the
+place a parity failure would hide. Phase 3's gate is term-by-term parameter
+parity against OpenMM, which is only meaningful if both sides read the same
+numbers.

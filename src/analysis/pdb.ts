@@ -126,3 +126,189 @@ export function rewritePdb(
   }
   return out.join("\n");
 }
+
+/**
+ * Reading a PDB into a topology.
+ *
+ * Fixed-width, not whitespace-delimited: the atom name occupies columns 13-16
+ * and *where in that field the text starts carries meaning*. A one- or
+ * two-letter element is right-justified from column 14, so ` CA ` is an alpha
+ * carbon and `CA  ` is a calcium ion. Splitting on spaces loses that
+ * distinction and silently turns an ion into a backbone atom.
+ */
+
+export interface PdbAtom {
+  readonly serial: number;
+  /** Trimmed, but see `rawName` -- the untrimmed field is what disambiguates. */
+  readonly name: string;
+  readonly rawName: string;
+  readonly altLoc: string;
+  readonly residueName: string;
+  readonly chainId: string;
+  /** The residue sequence number and insertion code, as written. */
+  readonly residueId: string;
+  /** nm, converted from the file's ångström. */
+  readonly position: readonly [number, number, number];
+  /** From columns 77-78 when present, else inferred from the name. */
+  readonly element: string;
+  readonly hetatm: boolean;
+}
+
+export interface PdbResidue {
+  readonly name: string;
+  readonly id: string;
+  readonly chainId: string;
+  /** Indices into the topology's atom list. */
+  readonly atoms: readonly number[];
+}
+
+export interface PdbTopology {
+  readonly atoms: readonly PdbAtom[];
+  readonly residues: readonly PdbResidue[];
+  /** One entry per chain, holding indices into `residues`. */
+  readonly chains: readonly { readonly id: string; readonly residues: readonly number[] }[];
+  /** nm, from CRYST1, when the file has one. */
+  readonly box: readonly [number, number, number] | null;
+  /** Bonds the file asserted with CONECT, as atom index pairs. */
+  readonly conect: readonly (readonly [number, number])[];
+  /** Positions, nm, xyz interleaved, in atom order. */
+  readonly positions: Float64Array;
+}
+
+/**
+ * Guess an element from an atom name when the file omits columns 77-78.
+ *
+ * Old files do omit them. The rule is OpenMM's: the first alphabetic character
+ * of the *left-justified* name, except that a leading digit means a hydrogen
+ * (`1HB`), which is the convention PDB files use for hydrogens attached to a
+ * carbon with several of them.
+ */
+function guessElement(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (trimmed.length === 0) return "";
+  if (/^[0-9]/.test(trimmed)) return "H";
+  // A two-letter element is left-justified in the four-column field, so a name
+  // starting in column 13 rather than 14 is a clue -- but names are not always
+  // written that carefully, and the element column is the reliable source.
+  return (trimmed[0] as string).toUpperCase();
+}
+
+export class PdbParseError extends Error {
+  constructor(message: string, readonly line: number) {
+    super(`${message} (line ${line})`);
+    this.name = "PdbParseError";
+  }
+}
+
+export function readPdb(text: string): PdbTopology {
+  const atoms: PdbAtom[] = [];
+  // Mutable while building, and the result type is read-only: appending through
+  // a cast to the read-only shape is what TypeScript objects to, correctly.
+  const residues: { name: string; id: string; chainId: string; atoms: number[] }[] = [];
+  const chains: { id: string; residues: number[] }[] = [];
+  const conect: [number, number][] = [];
+  const bySerial = new Map<number, number>();
+  let box: [number, number, number] | null = null;
+
+  let currentResidue: { key: string; index: number } | null = null;
+  let currentChain: { id: string; index: number } | null = null;
+  let lineNumber = 0;
+
+  for (const line of text.split("\n")) {
+    lineNumber++;
+    if (line.startsWith("CRYST1")) {
+      box = [
+        Number(line.slice(6, 15)) / TO_ANGSTROM,
+        Number(line.slice(15, 24)) / TO_ANGSTROM,
+        Number(line.slice(24, 33)) / TO_ANGSTROM,
+      ];
+      continue;
+    }
+    if (line.startsWith("CONECT")) {
+      // Columns 7-11 then four more fields of five, one-based.
+      const first = Number(line.slice(6, 11));
+      for (const start of [11, 16, 21, 26]) {
+        const field = line.slice(start, start + 5).trim();
+        if (field === "") continue;
+        conect.push([first, Number(field)]);
+      }
+      continue;
+    }
+    if (line.startsWith("TER")) {
+      // A chain break: the next residue starts a new chain even if the chain id
+      // is unchanged, which happens in files with two copies of one chain.
+      currentChain = null;
+      currentResidue = null;
+      continue;
+    }
+    if (!isAtomRecord(line)) continue;
+
+    const padded = line.padEnd(80, " ");
+    const rawName = padded.slice(12, 16);
+    const altLoc = padded.slice(16, 17).trim();
+    // 🔴 Alternate locations: keeping more than one would double up atoms and
+    // break every template match. The first is kept, which is what OpenMM does.
+    if (altLoc !== "" && altLoc !== "A") continue;
+
+    const residueName = padded.slice(17, 20).trim();
+    const chainId = padded.slice(21, 22).trim();
+    const residueId = padded.slice(22, 27).trim();
+    const elementField = padded.slice(76, 78).trim();
+    const serial = Number(padded.slice(6, 11));
+    const position: [number, number, number] = [
+      Number(padded.slice(30, 38)) / TO_ANGSTROM,
+      Number(padded.slice(38, 46)) / TO_ANGSTROM,
+      Number(padded.slice(46, 54)) / TO_ANGSTROM,
+    ];
+    if (position.some((value) => !Number.isFinite(value))) {
+      throw new PdbParseError(`unreadable coordinates in "${line.trim()}"`, lineNumber);
+    }
+
+    const chainKey = chainId;
+    if (currentChain === null || currentChain.id !== chainKey) {
+      currentChain = { id: chainKey, index: chains.length };
+      chains.push({ id: chainKey, residues: [] });
+    }
+    const residueKey = `${chainKey}|${residueId}|${residueName}`;
+    if (currentResidue === null || currentResidue.key !== residueKey) {
+      currentResidue = { key: residueKey, index: residues.length };
+      residues.push({ name: residueName, id: residueId, chainId, atoms: [] });
+      (chains[currentChain.index] as { residues: number[] }).residues.push(
+        currentResidue.index,
+      );
+    }
+
+    bySerial.set(serial, atoms.length);
+    (residues[currentResidue.index] as { atoms: number[] }).atoms.push(atoms.length);
+    atoms.push({
+      serial,
+      name: rawName.trim(),
+      rawName,
+      altLoc,
+      residueName,
+      chainId,
+      residueId,
+      position,
+      element: elementField === "" ? guessElement(rawName) : elementField,
+      hetatm: line.startsWith("HETATM"),
+    });
+  }
+
+  const positions = new Float64Array(atoms.length * 3);
+  for (const [index, atom] of atoms.entries()) {
+    positions[index * 3] = atom.position[0];
+    positions[index * 3 + 1] = atom.position[1];
+    positions[index * 3 + 2] = atom.position[2];
+  }
+
+  // CONECT records name serial numbers, which are not indices.
+  const resolved: [number, number][] = [];
+  for (const [a, b] of conect) {
+    const first = bySerial.get(a);
+    const second = bySerial.get(b);
+    if (first === undefined || second === undefined) continue;
+    if (first < second) resolved.push([first, second]);
+  }
+
+  return { atoms, residues, chains, box, conect: resolved, positions };
+}
