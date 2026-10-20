@@ -98,6 +98,17 @@ form. `playwright.config.ts` serves the long gate from `vite preview` instead,
 which has no watcher; the ordinary `npm run test:browser` lane still uses the
 dev server.
 
+🔴 **Kill stray browsers before running `npm test`.** Playwright's
+`reuseExistingServer` leaves `npm run dev` behind, and an interrupted browser
+lane leaves Chrome behind with it. With 63 of those processes alive, the three
+3HTB cases in `test/nonbonded-reference.test.ts` — 4.4 s each on an idle
+machine, against a 60 s budget — took the file past 112 s and one of them
+timed out. The report names the test, which is a numerical parity check against
+OpenMM, so it reads as a physics regression rather than as contention: nothing
+in the output says "timeout" unless you look for the absence of an
+`AssertionError`. `pkill -f "Google Chrome"; pkill -f vite` first, and suspect
+this whenever a test that is deterministic by construction fails once.
+
 🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
 about 1% renderer CPU and accumulates a few seconds over many minutes — the work
 is on the GPU and the loop batches steps per submission. A stalled page looks
