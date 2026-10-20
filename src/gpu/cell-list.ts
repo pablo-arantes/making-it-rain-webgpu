@@ -38,13 +38,39 @@ export class BoxTooSmallForCells extends Error {
       `the box has shrunk until a cell is ${extent.toFixed(4)} nm across, below ` +
         `the ${cutoff} nm cutoff. The 27-cell scan only finds every pair inside ` +
         "the cutoff while a cell is at least that wide, so the forces would be " +
-        "silently missing pairs. The cell divisions are fixed for the life of a " +
-        "run -- changing them would resize the buffer the pair kernel indexes -- " +
-        "so a barostat that compresses this far needs the run restarted at the " +
-        "smaller box.",
+        "silently missing pairs, and stopping is the only safe answer.\n\n" +
+        "The divisions are fixed for a run's life -- the cell count sizes the " +
+        "buffer the pair kernel indexes -- but raising them would not help " +
+        "either: fewer, larger cells is what a smaller box needs, and below " +
+        `${MINIMUM_CELLS_PER_AXIS} per axis the 27-cell scan visits the same ` +
+        "cell twice. A box narrower than three cutoffs cannot use this " +
+        "structure at all.\n\n" +
+        "That is usually the box's fault rather than the barostat's. 1L2Y at " +
+        "the notebook's default padding is 3.08 nm wide against a 1 nm cutoff " +
+        "-- 3.08 cutoffs, so 2.6% of compression exhausts it -- and its " +
+        "minimum solute-to-own-image distance is already 0.958 nm, below the " +
+        "cutoff (docs/NOTEBOOK_PARITY.md finding 4). Either solvate with more " +
+        "padding or shorten the cutoff; an all-pairs fallback for tight boxes " +
+        "is not built yet.",
     );
     this.name = "BoxTooSmallForCells";
   }
+}
+
+/**
+ * How much the box can shrink before the cell list stops being usable.
+ *
+ * Returned as a fraction: 0.026 means 2.6% of compression exhausts it. A caller
+ * running NPT wants to know this *before* starting, because the alternative is
+ * finding out partway through a trajectory.
+ */
+export function cellHeadroom(box: Vec3, cutoff: number): number {
+  const geometry = cellGeometry(box, cutoff);
+  let worst = Number.POSITIVE_INFINITY;
+  for (const extent of geometry.extent) {
+    worst = Math.min(worst, ((extent as number) - cutoff) / (extent as number));
+  }
+  return worst;
 }
 
 /**

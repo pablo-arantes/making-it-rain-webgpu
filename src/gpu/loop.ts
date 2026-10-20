@@ -514,6 +514,24 @@ export class StepLoop {
     return this.stepCount;
   }
 
+  /**
+   * Continue the step counter from a checkpoint.
+   *
+   * 🔴 Not cosmetic. Reports land on steps that are multiples of the interval
+   * measured on the absolute counter, so a stride that restarted from zero
+   * would restart the cadence and its log steps would stop lining up with the
+   * previous stride's. The notebook assigns `simulation.currentStep` by hand
+   * for exactly this reason. It also seeds the thermostat's generator, so
+   * resuming at the right step is what keeps a resumed run from re-drawing the
+   * noise it already used.
+   */
+  advanceStepCount(step: number): void {
+    if (!Number.isInteger(step) || step < 0) {
+      throw new Error(`a step count must be a non-negative integer, got ${step}`);
+    }
+    this.stepCount = step;
+  }
+
   /** The barostat's accepted and attempted counts, when there is one. */
   get barostatStatistics(): {
     readonly attempts: number;
@@ -742,6 +760,28 @@ export class StepLoop {
       packPositions(positions) as unknown as BufferSource,
     );
     this.device.queue.writeBuffer(this.buffers.residual, 0, new Float32Array(components));
+  }
+
+  /**
+   * Replace the velocities.
+   *
+   * Separate from `setPositions` because the two are set at different points: a
+   * run draws velocities once, after minimisation, while positions are replaced
+   * on every line-search trial and every rejected barostat move.
+   */
+  setVelocities(velocities: Float64Array): void {
+    const components = this.system.particleCount * 3;
+    if (velocities.length !== components) {
+      throw new Error(
+        `expected ${components} velocity components for ` +
+          `${this.system.particleCount} particles, got ${velocities.length}`,
+      );
+    }
+    this.device.queue.writeBuffer(
+      this.buffers.velocities,
+      0,
+      Float32Array.from(velocities) as unknown as BufferSource,
+    );
   }
 
   /**

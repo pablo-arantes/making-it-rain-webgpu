@@ -34,6 +34,10 @@ import {
   validateBarostat,
   type BarostatComparison,
 } from "../src/gpu/validate-barostat.js";
+import {
+  validateProtocol,
+  type ProtocolComparison,
+} from "../src/gpu/validate-protocol.js";
 
 declare global {
   interface Window {
@@ -46,6 +50,7 @@ declare global {
     __mirMinimise?: MinimiseComparison | { error: string };
     __mirRestraint?: RestraintComparison | { error: string };
     __mirBarostat?: BarostatComparison | { error: string };
+    __mirProtocol?: ProtocolComparison | { error: string };
   }
 }
 
@@ -173,6 +178,58 @@ function renderIntegrators(report: IntegratorReport): string {
         r.kineticEnergyRelativeError,
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
+    </p>`;
+}
+
+function renderProtocol(p: ProtocolComparison): string {
+  return `<h2>A whole run</h2><p class="note">
+      Minimise with the restraints on, draw velocities, equilibrate under NPT,
+      then produce by strides -- a trajectory, a log and a checkpoint for each,
+      and <code>run.json</code> for the lot. Short, because a test lane has to
+      afford it; the plan's 1 ns gate is this code with bigger numbers.
+    </p>
+    <p class="note">
+      Ensemble <strong>${p.ensemble}</strong>, chosen from the measured cell
+      headroom of ${(p.cellHeadroom * 100).toFixed(1)}%: a box narrower than
+      three cutoffs cannot use a 27-cell scan, and 1L2Y at the notebook's
+      default padding is 3.08 cutoffs wide, so 2.6% of compression exhausts it.
+      That is finding 4 in <code>docs/NOTEBOOK_PARITY.md</code> as a hard limit
+      rather than a warning.
+    </p>
+    <table>
+      <tr><th>Stage</th><th>Steps</th><th>Frames</th><th>Log rows</th>
+          <th>Log steps</th><th>Temperature (K)</th><th>ns/day</th><th></th></tr>
+      ${p.stages
+        .map(
+          (s) => `<tr>
+            <td>${s.name}</td>
+            <td class="num">${s.steps}</td>
+            <td class="num">${s.frames}</td>
+            <td class="num">${s.logRows}</td>
+            <td class="num">${s.firstLogStep ?? "—"}–${s.lastLogStep ?? "—"}</td>
+            <td class="num">${
+              s.temperatureRange === null
+                ? "—"
+                : `${s.temperatureRange[0].toFixed(1)}–${s.temperatureRange[1].toFixed(1)}`
+            }</td>
+            <td class="num">${s.nsPerDay.toFixed(2)}</td>
+            <td><span class="badge ${s.ok ? "ok" : "bad"}">${s.ok ? "pass" : "fail"}</span></td>
+          </tr>`,
+        )
+        .join("")}
+    </table>
+    <p class="note">
+      ${p.artefacts.length} artefacts:
+      ${p.artefacts
+        .map(
+          (a) =>
+            `<code>${a.name}</code> ${(a.bytes / 1024).toFixed(1)} kB` +
+            (a.frames === null ? "" : ` (${a.frames} frames${a.sizeConsistent ? "" : ", SIZE MISMATCH"})`),
+        )
+        .join(", ")}.
+      A second pass over the same outputs
+      ${p.resumeSkippedEverything ? "skipped every stage" : "did NOT skip everything"}.
+      <span class="badge ${p.ok ? "ok" : "bad"}">${p.ok ? "pass" : "fail"}</span>
     </p>`;
 }
 
@@ -502,6 +559,40 @@ async function main(): Promise<void> {
 
       // From the captured equilibrated frame, for the reason in
       // `validateBarostat`: state.xml is un-minimised and NVE from it diverges.
+      // A whole run, on the restrained fixture, at a length the lane affords.
+      if (restraintFacts.ok) {
+        const restrainedXml = await fetchText("system-restrained.xml");
+        const protocolResult = await validateProtocol(
+          device,
+          { systemXml, restrainedXml, stateXml },
+          {
+            jobName: name,
+            seed: 0x5eed,
+            equilibration: {
+              nanoseconds: 0.004,
+              timeStep: 0.002,
+              temperature: 298,
+              pressure: 1,
+              trajectoryInterval: 2,
+              logInterval: 1,
+              minimisationSteps: 50,
+              restraintForceConstant: 700,
+            },
+            production: {
+              nanoseconds: 0.004,
+              timeStep: 0.002,
+              temperature: 298,
+              pressure: 1,
+              trajectoryInterval: 2,
+              logInterval: 1,
+              strides: 2,
+            },
+          },
+        );
+        if (body) body.innerHTML += renderProtocol(protocolResult);
+        window.__mirProtocol = protocolResult;
+      }
+
       const barostatResult = await validateBarostat(
         device,
         { systemXml, stateXml },
@@ -525,6 +616,7 @@ async function main(): Promise<void> {
     window.__mirMinimise = { error: message };
     window.__mirRestraint = { error: message };
     window.__mirBarostat = { error: message };
+    window.__mirProtocol = { error: message };
   }
 }
 

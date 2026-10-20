@@ -24,6 +24,9 @@ for (const name of ["1L2Y", "3HTB"]) {
     await page.waitForFunction(() => window.__mirBarostat !== undefined, null, {
       timeout: 1_800_000,
     });
+    await page.waitForFunction(() => window.__mirProtocol !== undefined, null, {
+      timeout: 1_800_000,
+    });
     const report = await page.evaluate(() => window.__mirValidation);
     if (report !== undefined && "error" in report) throw new Error(report.error);
     const checked = report!;
@@ -126,6 +129,12 @@ for (const name of ["1L2Y", "3HTB"]) {
     expect(barostat!.attempts).toBe(4);
     expect(barostat!.finite).toBe(true);
 
+    const protocol = await page.evaluate(() => window.__mirProtocol);
+    if (protocol !== undefined && "error" in protocol) throw new Error(protocol.error);
+    expect(JSON.stringify(protocol!.stages.filter((s) => !s.ok), null, 1)).toBe("[]");
+    expect(protocol!.resumeSkippedEverything).toBe(true);
+    expect(protocol!.ok).toBe(true);
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -214,6 +223,22 @@ for (const name of ["1L2Y", "3HTB"]) {
             `  reference ${restraint!.assembled.referenceEnergy.toFixed(2)}` +
             `  rel ${restraint!.assembled.relativeError.toExponential(2)}` +
             `  restraint share ${restraint!.assembled.restraintEnergy.toFixed(0)}`) +
+        protocol!.stages
+          .map(
+            (s) =>
+              `\n  run ${s.name.padEnd(18)}` +
+              `${s.steps.toString().padStart(6)} steps` +
+              `  ${s.frames} frames  ${s.logRows} rows` +
+              `  steps ${s.firstLogStep}-${s.lastLogStep}` +
+              (s.temperatureRange === null
+                ? ""
+                : `  T ${s.temperatureRange[0].toFixed(0)}-${s.temperatureRange[1].toFixed(0)} K`) +
+              `  ${s.nsPerDay.toFixed(1)} ns/day`,
+          )
+          .join("") +
+        `\n  run ensemble           ${protocol!.ensemble}` +
+        `  cell headroom ${(protocol!.cellHeadroom * 100).toFixed(1)}%` +
+        `\n  artefacts              ${protocol!.artefacts.length} files, resume skipped all: ${protocol!.resumeSkippedEverything}` +
         barostat!.changes
           .map(
             (c) =>

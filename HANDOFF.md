@@ -81,10 +81,35 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-**Phase 1 is complete.** A whole NPT step runs on the GPU -- forces,
-constraints, both integrators, the thermostat, centre-of-mass removal,
-restraints, the barostat, the minimiser -- and every piece is differentially
-tested against OpenMM. What is left is Phase 2: a user interface over this.
+**Phase 1 is complete**, and Phase 2 has its engine side working: **a whole run
+goes end to end in a browser.** Minimise with the restraints on, draw
+velocities, equilibrate, then produce by strides -- writing a DCD, a log and a
+checkpoint for each, plus `run.json`:
+
+| | ensemble | stages | log steps | temperature | ns/day | artefacts |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| 1L2Y | NVT | equil + 2 strides | 500–2000, 2500–4000, 4500–6000 | 291–314 K | 38 | 10 |
+| 3HTB | NPT | equil + 2 strides | same | 295–316 K | 9.3 | 10 |
+
+The step numbers continuing across strides is the thing to notice: reports land
+on multiples of the interval measured on the *absolute* counter, which is what
+keeps a log lining up with its trajectory. A second pass over the same outputs
+skips every stage.
+
+🔴 **1L2Y cannot run NPT at a 1 nm cutoff**, and that is not a bug in the
+barostat. Its box is 3.0806 nm -- 3.08 cutoffs -- so cells start at 1.0269 nm
+and **2.6% of compression** takes them below the cutoff, after which the 27-cell
+scan stops finding every pair. Fewer cells do not help: below three per axis the
+scan visits the same cell twice. This is finding 4 in docs/NOTEBOOK_PARITY.md
+turning into a hard limit -- that fixture's solute already sees its own image at
+0.958 nm. The validator measures the headroom and picks the ensemble rather than
+assuming, and an **all-pairs fallback for tight boxes is the next thing the
+engine needs**.
+
+What is left in Phase 2: the **UI** (upload, panels, live plots, remaining time,
+the "verify this system" button), **OPFS** behind `RunOutputs` and resume after
+a deliberate `device.lost`, a **PDB rewriter** for the final frame of each
+stage, and a **wake lock**. Then the gate: a 1 ns 1L2Y run under Playwright.
 
 The barostat is host-driven, which is where OpenMM's API drives it too: read the
 energy, rescale the box and the molecules, read it again, accept or reject. At
