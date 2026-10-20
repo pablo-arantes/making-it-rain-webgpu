@@ -391,6 +391,19 @@ recorded rather than blocking. It will resolve itself on a macOS upgrade.
   none has been run on a hosted runner yet. Tighten each as it proves itself;
   leaving them permanently soft would make them decorative.
 
+## Phase 2's gates
+
+The 1 ns run passes: 43.4 minutes for 1L2Y through `web/run.html`, 100 reports,
+9 artefacts, served from the production build.
+`docs/measurements/gate-1ns-m3pro.json` has the numbers.
+
+🔴 **The trajectory gate is only partly met.** MDAnalysis and MDTraj agree to
+f32 round-off on a real 2373-particle DCD, but **pytraj is not installed in any
+environment on this machine**, and pytraj is what also covers VMD — cpptraj
+reads DCD through VMD's own `dcdplugin`. So "opens in pytraj and VMD" is
+unverified, not passing. Installing pytraj, or running
+`tools/crossread_dcd.py` somewhere that has it, closes this.
+
 ## Next
 
 Phase 3, continuing. The parameter-assignment spine is done and verified: a PDB
