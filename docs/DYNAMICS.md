@@ -372,3 +372,58 @@ kernel indexes; the extents move instead, which is correct while a cell stays at
 least a cutoff wide. `BoxTooSmallForCells` is thrown rather than silently
 returning a list that misses pairs, and the headroom is whatever the box leaves
 -- 8.7% for 3HTB's 6.52 nm box at a 1 nm cutoff.
+
+## 🔴 Initial velocities are shifted half a step, for both integrators
+
+`setVelocitiesToTemperature` is not a Maxwell-Boltzmann draw. It draws, then
+**subtracts `(offset/m) F`** where `offset` is the integrator's velocity time
+offset, and then projects onto the constraint surface with a tolerance of
+**1e-5** that has nothing to do with `setConstraintTolerance(1e-6)`.
+
+The offset is `dt/2` for `VerletIntegrator` as much as for
+`LangevinIntegrator`. That is the same fact as Verlet *reporting* a
+half-step-shifted kinetic energy, recorded further up this file: OpenMM's Verlet
+is leapfrog internally and stores its velocities at `t - dt/2`, so a draw meant
+to be at `t` has to be shifted back to where they live.
+
+### How the evidence misleads
+
+The two integrators produce **identical** statistics — 306.83 K and 0.7090
+variance per kT on 1L2Y, to every digit. That looks like neither of them
+shifting, and it is what I first concluded. They are identical because *both*
+shift by the same amount.
+
+What settles it is the variance of the draw with the constraints stripped out,
+where the shift is the only thing acting:
+
+    mean(m v²)/kT  =  1 + (dt/2)² mean(F²/m)/kT
+
+| | measured | predicted | correlation with `-(dt/2)F/m` |
+| --- | --- | --- | --- |
+| 1L2Y | 1.0890 | 1.0551 | +0.27 |
+| 3HTB | **1.4189** | **1.4173** | **+0.52** |
+
+Unshifted it would be 1.0 and uncorrelated. The agreement on 3HTB is to four
+figures; 1L2Y is a smaller system with weaker forces and one seed, so its cross
+term has not averaged out.
+
+### Why the composite number hides both mistakes
+
+The variance after everything is 0.709 on 1L2Y and 0.936 on 3HTB, and each of
+the two steps moves it in the opposite direction:
+
+* **drop the projection** and the figure rises toward 1.0 — which is exactly
+  what a correct Maxwell-Boltzmann draw should give, so it looks *more* right;
+* **drop the shift** and it falls to about 0.68 — which is what the constraint
+  count predicts, so that looks right too.
+
+Only both together land on OpenMM's number. `tools/capture_velocities.py`
+therefore records the unconstrained variance and the forces separately, so the
+two effects can be checked one at a time instead of through their product.
+
+The deviates themselves cannot be matched: OpenMM draws from SFMT by the
+Marsaglia polar method, consuming them only for moving particles, and that
+stream is not reproducible from outside. Ours come from the counter-based
+generator on its own domain and the seed is recorded — the same position as the
+thermostat noise (deviation 15). The notebook calls
+`setVelocitiesToTemperature(T)` with no seed at all.

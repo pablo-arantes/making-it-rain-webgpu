@@ -145,6 +145,30 @@ export const THERMOSTAT_DOMAIN = 0x9e3779b9;
 export const BAROSTAT_DOMAIN = 0x6a09e667;
 
 /**
+ * The domain for initial velocities.
+ *
+ * A third constant, for the same reason as the second: the Maxwell-Boltzmann
+ * draw that starts a run must not share a stream with the thermostat that
+ * continues it. 2^32 times the fractional part of sqrt(3).
+ */
+export const VELOCITY_DOMAIN = 0xbb67ae85;
+
+/** A standard normal for one particle and axis, on a given domain. */
+export function domainNormal(
+  domain: number,
+  seed: number,
+  particle: number,
+  axis: number,
+): number {
+  const half = axis >> 1;
+  const pair = normalPair(
+    [(particle * 2 + half) >>> 0, seed >>> 0],
+    [seed >>> 0, domain],
+  );
+  return pair[axis & 1] as number;
+}
+
+/**
  * The deviate the thermostat uses for one particle, axis and step.
  *
  * Two counters per particle give four deviates, of which three are used. The
