@@ -217,6 +217,70 @@ export function writeFixedBox(words: Uint32Array, offset: number, box: Vec3): vo
   }
 }
 
+/**
+ * 160 bytes. Five u32 word offsets fill 0..19; `cells` takes its 16-byte
+ * boundary at 32 and the cutoff follows at 44; the f32 box takes the next one
+ * at 48 with alpha at 60; then the fixed-point box at 64 and half the box at
+ * 112, three `vec4<u32>` each at WGSL's 16-byte array stride.
+ */
+export const PAIR_PARAMS_BYTES = 160;
+
+/** 32 bytes of struct, then the fixed-point box and half box to 128. */
+export const EXCEPTION_PARAMS_BYTES = 128;
+
+/**
+ * Pack the pair kernel's uniform.
+ *
+ * A function rather than inline code because the barostat rewrites it: the box
+ * is no longer a constant of the run. The cell *divisions* stay fixed -- see
+ * `StepLoop.setBox` for why -- so only the extents implied by them change.
+ */
+export function packPairParams(
+  force: NonbondedForce,
+  sections: ListSections,
+  divisions: Vec3,
+  box: Vec3,
+  alpha: number,
+): Uint8Array {
+  const bytes = new ArrayBuffer(PAIR_PARAMS_BYTES);
+  const u32 = new Uint32Array(bytes);
+  const f32 = new Float32Array(bytes);
+  u32[0] = force.particleCount;
+  u32[1] = sections.order / 4;
+  u32[2] = sections.exclusionStarts / 4;
+  u32[3] = sections.exclusionList / 4;
+  u32[4] = sections.cellOf / 4;
+  u32[8] = divisions[0] as number;
+  u32[9] = divisions[1] as number;
+  u32[10] = divisions[2] as number;
+  f32[11] = force.cutoff;
+  f32[12] = box[0] as number;
+  f32[13] = box[1] as number;
+  f32[14] = box[2] as number;
+  f32[15] = alpha;
+  writeFixedBox(u32, 16, box);
+  return new Uint8Array(bytes);
+}
+
+/** Pack the exception kernel's uniform. */
+export function packExceptionParams(
+  force: NonbondedForce,
+  box: Vec3,
+  alpha: number,
+): Uint8Array {
+  const bytes = new ArrayBuffer(EXCEPTION_PARAMS_BYTES);
+  const u32 = new Uint32Array(bytes);
+  const f32 = new Float32Array(bytes);
+  u32[0] = force.exceptionCount;
+  f32[1] = alpha;
+  f32[4] = box[0] as number;
+  f32[5] = box[1] as number;
+  f32[6] = box[2] as number;
+  u32[7] = force.exceptionCount;
+  writeFixedBox(u32, 8, box);
+  return new Uint8Array(bytes);
+}
+
 /** Everything the direct-space kernels need that the coordinates do not change. */
 export interface ResidentDirect {
   readonly force: NonbondedForce;
@@ -294,33 +358,22 @@ export function prepareDirect(
   });
   device.queue.writeBuffer(particle, 0, particleData as unknown as BufferSource);
 
-  // 160 bytes. Five u32 word offsets fill 0..19; `cells` takes its 16-byte
-  // boundary at 32 and the cutoff follows it at 44; the f32 box takes the next
-  // one at 48 with alpha at 60; then the fixed-point box at 64 and half the box
-  // at 112, three `vec4<u32>` each at WGSL's 16-byte array stride.
-  const pairBytes = new ArrayBuffer(160);
-  const pairU32 = new Uint32Array(pairBytes);
-  const pairF32 = new Float32Array(pairBytes);
-  pairU32[0] = n;
-  pairU32[1] = sections.order / 4;
-  pairU32[2] = sections.exclusionStarts / 4;
-  pairU32[3] = sections.exclusionList / 4;
-  pairU32[4] = sections.cellOf / 4;
-  pairU32[8] = probe.geometry.divisions[0] as number;
-  pairU32[9] = probe.geometry.divisions[1] as number;
-  pairU32[10] = probe.geometry.divisions[2] as number;
-  pairF32[11] = force.cutoff;
-  pairF32[12] = box[0] as number;
-  pairF32[13] = box[1] as number;
-  pairF32[14] = box[2] as number;
-  pairF32[15] = alpha;
-  writeFixedBox(pairU32, 16, box);
   const pairParams = pool.buffer({
     label: "nonbonded/pairParams",
-    byteLength: pairBytes.byteLength,
+    byteLength: PAIR_PARAMS_BYTES,
     usage: uniformUsage(),
   });
-  device.queue.writeBuffer(pairParams, 0, new Uint8Array(pairBytes));
+  device.queue.writeBuffer(
+    pairParams,
+    0,
+    packPairParams(
+      force,
+      sections,
+      probe.geometry.divisions,
+      box,
+      alpha,
+    ) as unknown as BufferSource,
+  );
 
   // Exceptions: a header vec4 per exception holding the two atom indices as raw
   // bits plus chargeProd, then a parameter vec4 per exception.
@@ -345,24 +398,16 @@ export function prepareDirect(
     exceptionData as unknown as BufferSource,
   );
 
-  // struct Params { u32 count; f32 alpha; vec3<f32> box; u32 offset } fills 32,
-  // then the fixed-point box and half box take it to 128.
-  const exceptionBytes = new ArrayBuffer(128);
-  const exceptionU32 = new Uint32Array(exceptionBytes);
-  const exceptionF32 = new Float32Array(exceptionBytes);
-  exceptionU32[0] = force.exceptionCount;
-  exceptionF32[1] = alpha;
-  exceptionF32[4] = box[0] as number;
-  exceptionF32[5] = box[1] as number;
-  exceptionF32[6] = box[2] as number;
-  exceptionU32[7] = force.exceptionCount;
-  writeFixedBox(exceptionU32, 8, box);
   const exceptionParams = pool.buffer({
     label: "nonbonded/exceptionParams",
-    byteLength: exceptionBytes.byteLength,
+    byteLength: EXCEPTION_PARAMS_BYTES,
     usage: uniformUsage(),
   });
-  device.queue.writeBuffer(exceptionParams, 0, new Uint8Array(exceptionBytes));
+  device.queue.writeBuffer(
+    exceptionParams,
+    0,
+    packExceptionParams(force, box, alpha) as unknown as BufferSource,
+  );
 
   return {
     force,

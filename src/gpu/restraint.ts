@@ -27,6 +27,23 @@ import { rectangularBox } from "../reference/forces/nonbonded.js";
 import type { Pass, PipelineCache } from "./pipeline.js";
 import type { PositionRestraintForce, Vec3 } from "../engine/system.js";
 
+/**
+ * 112 bytes, and the arithmetic is worth writing out because getting it wrong
+ * cost a round trip: a `count` and three pads fill the first 16, then `box` is
+ * three `vec4<u32>` at a 16-byte stride (16..63) and `half_box` is three more
+ * (64..111). The first version allocated 64 bytes and wrote `half_box` at
+ * offset 48, overlapping the box -- which WebGPU rejects as a binding smaller
+ * than the struct, not as the overlap it actually was.
+ *
+ * A function because the barostat rewrites it.
+ */
+export function packRestraintParams(count: number, box: Vec3): Uint32Array {
+  const params = new Uint32Array(28);
+  params[0] = count;
+  writeFixedBox(params, 4, box);
+  return params;
+}
+
 export interface ResidentRestraint {
   readonly count: number;
   readonly terms: GPUBuffer;
@@ -62,15 +79,6 @@ export function prepareRestraint(
     }
   }
 
-  // 112 bytes, and the arithmetic is worth writing out because getting it
-  // wrong cost a round trip: a `count` and three pads fill the first 16, then
-  // `box` is three `vec4<u32>` at a 16-byte stride (16..63) and `half_box` is
-  // three more (64..111). The first version allocated 64 bytes and wrote
-  // `half_box` at offset 48, overlapping the box -- which WebGPU rejects as a
-  // binding smaller than the struct, not as the overlap it actually was.
-  const params = new Uint32Array(28);
-  params[0] = force.count;
-  writeFixedBox(params, 4, box);
 
   const put = (name: string, data: Uint32Array, usage: number): GPUBuffer => {
     const buffer = pool.buffer({
@@ -85,7 +93,7 @@ export function prepareRestraint(
     count: force.count,
     terms: put("terms", terms, storageUsage()),
     reference: put("reference", reference, storageUsage()),
-    params: put("params", params, uniformUsage()),
+    params: put("params", packRestraintParams(force.count, box), uniformUsage()),
   };
 }
 

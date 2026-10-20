@@ -21,8 +21,8 @@ for (const name of ["1L2Y", "3HTB"]) {
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
     await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirRestraint !== undefined, null, {
-      timeout: 1_200_000,
+    await page.waitForFunction(() => window.__mirBarostat !== undefined, null, {
+      timeout: 1_800_000,
     });
     const report = await page.evaluate(() => window.__mirValidation);
     if (report !== undefined && "error" in report) throw new Error(report.error);
@@ -118,6 +118,14 @@ for (const name of ["1L2Y", "3HTB"]) {
     // The force is right; this is that it is actually encoded into a step.
     expect(JSON.stringify(restraint!.assembled, null, 1)).toContain('"ok": true');
 
+    const barostat = await page.evaluate(() => window.__mirBarostat);
+    if (barostat !== undefined && "error" in barostat) throw new Error(barostat.error);
+    expect(JSON.stringify(barostat!.changes.filter((c) => !c.ok), null, 1)).toBe("[]");
+    // Four attempts in a hundred steps at frequency 25: fewer means the
+    // barostat is not wired into the loop at all.
+    expect(barostat!.attempts).toBe(4);
+    expect(barostat!.finite).toBe(true);
+
     console.log(
       `\n${name}: ${checked.particleCount} particles\n` +
         checked.comparisons
@@ -205,7 +213,20 @@ for (const name of ["1L2Y", "3HTB"]) {
           : `\n  assembled potential  device ${restraint!.assembled.deviceEnergy.toFixed(2)}` +
             `  reference ${restraint!.assembled.referenceEnergy.toFixed(2)}` +
             `  rel ${restraint!.assembled.relativeError.toExponential(2)}` +
-            `  restraint share ${restraint!.assembled.restraintEnergy.toFixed(0)}`),
+            `  restraint share ${restraint!.assembled.restraintEnergy.toFixed(0)}`) +
+        barostat!.changes
+          .map(
+            (c) =>
+              `\n  barostat box x${c.lengthScale}` +
+              `  setBox ${c.afterSetBox.toFixed(4).padStart(15)}` +
+              `  constructed ${c.afterConstruction.toFixed(4).padStart(15)}` +
+              `  difference ${c.difference}` +
+              `  constraint change ${c.constraintErrorChange.toExponential(2)}`,
+          )
+          .join("") +
+        `\n  barostat run           ${barostat!.molecules} molecules` +
+        `  ${barostat!.accepted}/${barostat!.attempts} accepted` +
+        `  volume ${barostat!.startVolume.toFixed(2)} → ${barostat!.finalVolume.toFixed(2)} nm³`,
     );
   });
 }

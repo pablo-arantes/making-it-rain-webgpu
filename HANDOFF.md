@@ -81,11 +81,37 @@ Done in Phase 1 so far:
 - **The dynamics algorithms written down** in `docs/DYNAMICS.md`, with five
   things a first reading gets wrong.
 
-Phase 1 has one step left: the **barostat** (`MonteCarloBarostat`, isotropic,
-frequency 25, molecule-wise scaling). It makes the box dynamic, and the open
-item on `delta_periodic` below needs the box in fixed point in the same four
-kernels' uniforms, so those are one job rather than two.
-`src/gpu/kernels/restraint.wgsl` is a worked example of that fix.
+**Phase 1 is complete.** A whole NPT step runs on the GPU -- forces,
+constraints, both integrators, the thermostat, centre-of-mass removal,
+restraints, the barostat, the minimiser -- and every piece is differentially
+tested against OpenMM. What is left is Phase 2: a user interface over this.
+
+The barostat is host-driven, which is where OpenMM's API drives it too: read the
+energy, rescale the box and the molecules, read it again, accept or reject. At
+frequency 25 the position round trip is about 1 ms against 125 ms of stepping,
+so it is not where the time goes -- the two force evaluations are.
+
+| | molecules | setBox vs construction | constraint change | accepted | volume |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1L2Y | 694 | **0** | **0** | 3/4 | 29.24 → 28.59 nm³ |
+| 3HTB | 8073 | **0** | **0** | 1/4 | 285.29 → 283.23 nm³ |
+
+The box is now dynamic, which is the part that needed care: changing it rewrites
+the pair and exception kernels' boxes in f32 *and* fixed point, three
+reciprocal-space blocks whose `prefactor` carries 1/volume, the cell geometry,
+each restraint's wrap, and the two host-side energy terms that depend on volume.
+Missing one of those is not a crash; it is an energy slightly wrong in a way
+that looks like ordinary single-precision disagreement. So `setBox` is checked
+against a loop *constructed* at that box -- the two reach every uniform by
+different routes -- and asserted **exactly equal**, which needs no tolerance and
+costs nothing. It used to compare against the f64 reference at the new box,
+which was both weaker and minutes slower per fixture.
+
+Two things deliberately do not change with the box. The **PME mesh** stays as
+the starting box chose it, which is what OpenMM does. And the **cell divisions**
+stay, because the number of cells sizes the buffer the pair kernel indexes;
+the extents move instead, and `BoxTooSmallForCells` is thrown rather than
+quietly returning a list that misses pairs. The headroom is 8.7% for 3HTB.
 
 Restraints are done: `k*periodicdistance(x,y,z,x0,y0,z0)^2`, implemented
 directly rather than through an expression parser. Against OpenMM's own force
@@ -153,6 +179,32 @@ power-of-two sizes are the obvious next step, and the differential test in
 `src/gpu/checks.ts` is what they would be held to. **Measure before writing
 them**: the per-step cost of PME against everything else is not known yet,
 because there is no step loop to measure.
+
+### 🔴 Three mistakes the barostat made, all of the same kind
+Each was a quantity measured against the wrong baseline, and each produced a
+plausible-looking number rather than an error.
+
+**Running from `state.xml`.** It is un-minimised -- 5.6e5 kJ/mol/nm on 3HTB --
+so a hundred steps of NVE from it diverges. The symptom was "2.15e9 is outside
+the fixed-point range" for a *position*: a blown-up simulation, reported as a
+format limit. Dynamics tests start from the captured equilibrated frame. This is
+the second time this caught me, after the restraint drift check below.
+
+**Measuring the constraint error instead of its change.** The fixture violates
+its own constraints by 25% before anything runs, so an absolute bound measures
+the fixture. What rigid-molecule scaling claims is that internal geometry is
+untouched, so the violation must come out exactly as it went in -- which it
+does, to 0.
+
+**Advancing the barostat counter by one per batch.** `barostatActsNow` is
+OpenMM's per-step form, and a step loop encodes many steps into one command
+buffer, so the host reaches the barostat once per batch. It gave zero attempts
+in a hundred steps at frequency 25. `barostatActsAfterSteps` advances by the
+batch and carries any overshoot.
+
+And one diagnostic that lied: `fixedWords` named "kJ/mol/nm" in its range error
+while also converting positions, forces, energies and box lengths. It now names
+none of them.
 
 ### A rigid translation isolates one force inside a total
 Checking that the restraint pass is actually *encoded into a step* -- rather

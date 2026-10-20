@@ -69,6 +69,29 @@ export function initialBarostatState(boxVectors: readonly [Vec3, Vec3, Vec3]): B
   };
 }
 
+/**
+ * A rectangular box's three vectors from its three edge lengths.
+ *
+ * The diagonal, which is easy to get wrong in a way that reads as a plausible
+ * matrix: `lengths.map((l) => [l, 0, 0])` gives three *parallel* vectors, and
+ * `boxVolume` then multiplies `[0][0] * [1][1] * [2][2]` to get zero. That cost
+ * a round trip, and the error it produced was a cell list complaining the box
+ * had shrunk to nothing rather than anything pointing at the matrix.
+ */
+export const diagonalBox = (lengths: Vec3): [Vec3, Vec3, Vec3] => [
+  [lengths[0] as number, 0, 0],
+  [0, lengths[1] as number, 0],
+  [0, 0, lengths[2] as number],
+];
+
+/** The three edge lengths of a rectangular box. */
+export const boxLengths = (boxVectors: readonly [Vec3, Vec3, Vec3]): Vec3 =>
+  [
+    boxVectors[0][0] as number,
+    boxVectors[1][1] as number,
+    boxVectors[2][2] as number,
+  ] as unknown as Vec3;
+
 /** The volume of a rectangular box. */
 export const boxVolume = (boxVectors: readonly [Vec3, Vec3, Vec3]): number =>
   (boxVectors[0][0] as number) *
@@ -80,12 +103,38 @@ export const boxVolume = (boxVectors: readonly [Vec3, Vec3, Vec3]): number =>
  *
  * Mutates, like OpenMM's `++step`, because the counter is part of the move's
  * state and a caller that forgot to advance it would attempt every step.
+ *
+ * This is the per-step form, called once for every step as
+ * `updateContextState` is. A GPU loop encodes many steps into one command
+ * buffer and never sees them individually, so it uses
+ * `barostatActsAfterSteps` instead.
  */
 export function barostatActsNow(state: BarostatState, frequency: number): boolean {
+  return barostatActsAfterSteps(state, frequency, 1);
+}
+
+/**
+ * The same, for a batch of steps that has already run.
+ *
+ * 🔴 A step loop cannot call the per-step form. Its steps are encoded into a
+ * command buffer and submitted together, so the host reaches the barostat once
+ * per batch rather than once per step -- and calling `barostatActsNow` there
+ * advances the counter by one instead of by however many steps ran. Measured as
+ * zero attempts in a hundred steps at frequency 25.
+ *
+ * Any overshoot carries over rather than being dropped, so a batch that is not
+ * a multiple of the frequency loses no attempts; the loop chunks to the
+ * boundary anyway, which keeps the attempt on the same step OpenMM puts it on.
+ */
+export function barostatActsAfterSteps(
+  state: BarostatState,
+  frequency: number,
+  steps: number,
+): boolean {
   if (frequency === 0) return false;
-  state.step++;
+  state.step += steps;
   if (state.step < frequency) return false;
-  state.step = 0;
+  state.step -= frequency;
   return true;
 }
 

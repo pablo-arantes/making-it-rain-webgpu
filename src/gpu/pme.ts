@@ -153,6 +153,86 @@ export async function transform3d(
   }
 }
 
+/**
+ * The three reciprocal-space uniforms, packed.
+ *
+ * Functions rather than inline code because the barostat rewrites them: both
+ * the box and the `prefactor`, which carries 1/volume, change with the box. The
+ * **mesh does not** -- OpenMM fixes it at context creation and changes only the
+ * box, so the grid spacing moves with the volume, and matching that is what
+ * keeps the comparison meaningful.
+ */
+export const reciprocalPrefactor = (box: Vec3): number =>
+  (ONE_4PI_EPS0 * 2 * Math.PI) /
+  ((box[0] as number) * (box[1] as number) * (box[2] as number));
+
+/**
+ * `struct Pme { u32 count; vec3<u32> grid; vec3<f32> box; f32 alpha; f32 prefactor }`
+ * -- vec3 aligns to 16, so grid is at 16, box at 32, alpha at 44, prefactor 48.
+ */
+export function packPmeParams(
+  particleCount: number,
+  grid: Vec3,
+  box: Vec3,
+  alpha: number,
+): Uint8Array {
+  const bytes = new ArrayBuffer(64);
+  const u32 = new Uint32Array(bytes);
+  const f32 = new Float32Array(bytes);
+  u32[0] = particleCount;
+  u32[4] = grid[0] as number;
+  u32[5] = grid[1] as number;
+  u32[6] = grid[2] as number;
+  f32[8] = box[0] as number;
+  f32[9] = box[1] as number;
+  f32[10] = box[2] as number;
+  f32[11] = alpha;
+  f32[12] = reciprocalPrefactor(box);
+  return new Uint8Array(bytes);
+}
+
+/**
+ * `struct Convolution { vec3<u32> grid; vec2<u32> offsets; vec3<f32> box;
+ * f32 alpha; f32 prefactor }` -- grid 0, offsets 16, box 32, alpha 44,
+ * prefactor 48.
+ */
+export function packConvolveParams(grid: Vec3, box: Vec3, alpha: number): Uint8Array {
+  const bytes = new ArrayBuffer(64);
+  const u32 = new Uint32Array(bytes);
+  const f32 = new Float32Array(bytes);
+  const [nx, ny, nz] = grid as unknown as [number, number, number];
+  u32[0] = nx;
+  u32[1] = ny;
+  u32[2] = nz;
+  u32[4] = nx; // where the y moduli begin
+  u32[5] = nx + ny; // where the z moduli begin
+  f32[8] = box[0] as number;
+  f32[9] = box[1] as number;
+  f32[10] = box[2] as number;
+  f32[11] = alpha;
+  f32[12] = reciprocalPrefactor(box);
+  return new Uint8Array(bytes);
+}
+
+/** `struct Pme { u32 count; vec3<u32> grid; vec3<f32> box }` -- 48 bytes. */
+export function packInterpolateParams(
+  particleCount: number,
+  grid: Vec3,
+  box: Vec3,
+): Uint8Array {
+  const bytes = new ArrayBuffer(48);
+  const u32 = new Uint32Array(bytes);
+  const f32 = new Float32Array(bytes);
+  u32[0] = particleCount;
+  u32[4] = grid[0] as number;
+  u32[5] = grid[1] as number;
+  u32[6] = grid[2] as number;
+  f32[8] = box[0] as number;
+  f32[9] = box[1] as number;
+  f32[10] = box[2] as number;
+  return new Uint8Array(bytes);
+}
+
 /** Everything reciprocal space needs that the coordinates do not change. */
 export interface ResidentPme {
   readonly grid: Vec3;
@@ -187,8 +267,6 @@ export function preparePme(
   const plans = [nz, ny, nx].map((length) => planFft(length));
   const stageCount = plans.reduce((sum, plan) => sum + plan.stages.length, 0);
 
-  const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
-  const prefactor = (ONE_4PI_EPS0 * 2 * Math.PI) / volume;
 
   const put = (name: string, data: ArrayBufferView, usage: number): GPUBuffer => {
     const buffer = pool.buffer({
@@ -202,49 +280,6 @@ export function preparePme(
   const blank = (name: string, byteLength: number): GPUBuffer =>
     pool.buffer({ label: `pme/${name}`, byteLength, usage: readableStorageUsage() });
 
-  // struct Pme { u32 count; vec3<u32> grid; vec3<f32> box; f32 alpha; f32 prefactor }
-  // vec3 aligns to 16, so grid is at 16, box at 32, alpha at 44, prefactor at 48.
-  const pmeUniform = new ArrayBuffer(64);
-  const pmeU32 = new Uint32Array(pmeUniform);
-  const pmeF32 = new Float32Array(pmeUniform);
-  pmeU32[0] = n;
-  pmeU32[4] = nx;
-  pmeU32[5] = ny;
-  pmeU32[6] = nz;
-  pmeF32[8] = box[0] as number;
-  pmeF32[9] = box[1] as number;
-  pmeF32[10] = box[2] as number;
-  pmeF32[11] = alpha;
-  pmeF32[12] = prefactor;
-
-  // struct Convolution { vec3<u32> grid; vec2<u32> offsets; vec3<f32> box;
-  //                      f32 alpha; f32 prefactor } -> grid 0, offsets 16,
-  // box 32, alpha 44, prefactor 48.
-  const convolveUniform = new ArrayBuffer(64);
-  const convolveU32 = new Uint32Array(convolveUniform);
-  const convolveF32 = new Float32Array(convolveUniform);
-  convolveU32[0] = nx;
-  convolveU32[1] = ny;
-  convolveU32[2] = nz;
-  convolveU32[4] = nx; // where the y moduli begin
-  convolveU32[5] = nx + ny; // where the z moduli begin
-  convolveF32[8] = box[0] as number;
-  convolveF32[9] = box[1] as number;
-  convolveF32[10] = box[2] as number;
-  convolveF32[11] = alpha;
-  convolveF32[12] = prefactor;
-
-  // struct Pme { u32 count; vec3<u32> grid; vec3<f32> box } -> 48 bytes.
-  const interpolateUniform = new ArrayBuffer(48);
-  const interpolateU32 = new Uint32Array(interpolateUniform);
-  const interpolateF32 = new Float32Array(interpolateUniform);
-  interpolateU32[0] = n;
-  interpolateU32[4] = nx;
-  interpolateU32[5] = ny;
-  interpolateU32[6] = nz;
-  interpolateF32[8] = box[0] as number;
-  interpolateF32[9] = box[1] as number;
-  interpolateF32[10] = box[2] as number;
 
   return {
     grid,
@@ -265,12 +300,12 @@ export function preparePme(
       ]),
       storageUsage(),
     ),
-    pmeParams: put("params", new Uint8Array(pmeUniform), uniformUsage()),
+    pmeParams: put("params", packPmeParams(n, grid, box, alpha), uniformUsage()),
     sizeParams: put("size", new Uint32Array([total]), uniformUsage()),
-    convolveParams: put("convolveParams", new Uint8Array(convolveUniform), uniformUsage()),
+    convolveParams: put("convolveParams", packConvolveParams(grid, box, alpha), uniformUsage()),
     interpolateParams: put(
       "interpolateParams",
-      new Uint8Array(interpolateUniform),
+      packInterpolateParams(n, grid, box),
       uniformUsage(),
     ),
   };

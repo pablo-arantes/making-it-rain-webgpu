@@ -134,6 +134,17 @@ export function normalPair(
 export const THERMOSTAT_DOMAIN = 0x9e3779b9;
 
 /**
+ * The barostat's domain, so its uniforms cannot collide with the thermostat's.
+ *
+ * A different constant in the same place. Two generators sharing a seed and a
+ * counter would produce the same stream, and a barostat whose volume proposals
+ * were correlated with the thermostat's noise would sample the wrong ensemble
+ * in a way no single-step test could see. 2^32 times the imaginary part of the
+ * silver ratio, as another nothing-up-my-sleeve number.
+ */
+export const BAROSTAT_DOMAIN = 0x6a09e667;
+
+/**
  * The deviate the thermostat uses for one particle, axis and step.
  *
  * Two counters per particle give four deviates, of which three are used. The

@@ -312,3 +312,63 @@ a whole cluster in registers and iterate it locally, with no atomics and no
 cross-thread coupling. A system built with `constraints=AllBonds` would not have
 that property, which is why the engine checks the cluster size and refuses
 rather than silently truncating.
+
+## The barostat, and what "the box is dynamic" costs
+
+`MonteCarloBarostat` is not a force and not an integrator. Like
+`CMMotionRemover` it runs from `updateContextState`, and what it does is a
+Metropolis move on the volume:
+
+    w = dE + P dV - N_molecules kT ln(V'/V)
+
+Three details, each pinned by a test:
+
+**Molecules move, atoms do not.** Each molecule's centroid is scaled and its
+atoms translated rigidly, so internal geometry is untouched and constrained
+bonds stay constrained. Scaling atoms individually would violate a rigid water's
+constraints by 0.3% on a 1% volume move. Measured: every intramolecular distance
+unchanged to 1e-12, and the worst constraint violation unchanged to 0.
+
+**The centroid is unweighted**, not the centre of mass -- visible on water,
+whose centre of mass sits almost on the oxygen.
+
+**`N` counts molecules**, not atoms. Using atoms would bias the volume
+distribution by the atoms-per-molecule ratio, about 3 for water.
+
+### 🔴 Two counters that look alike and are not
+
+`CMMotionRemover` acts on step **zero** and every `frequency`-th step after it:
+OpenMM's test is `stepCount % frequency != 0 -> return`. The barostat acts on
+the **frequency-th** call: `if (++step < frequency) return; step = 0;`. They sit
+a few lines apart in a step loop and they are off by one from each other.
+
+The barostat's counter has a second trap on a GPU. A step loop encodes many
+steps into one command buffer, so the host reaches the barostat once per *batch*
+and the per-step form advances the counter by one -- which gave zero attempts in
+a hundred steps at frequency 25. `barostatActsAfterSteps` advances by the batch,
+and the loop cuts its batches at the frequency so the attempt lands on the step
+OpenMM puts it on.
+
+### The box as mutable state
+
+Everything that caches a box-derived quantity has to be rewritten when the box
+moves: the pair and exception kernels' boxes in f32 **and** in fixed point,
+three reciprocal-space uniforms whose `prefactor` carries 1/volume, the cell
+geometry, each restraint's wrap, and the dispersion and net-charge corrections
+on the host. The Ewald self energy does not -- it is a sum over charges.
+
+Missing one of those is not a crash. It is an energy slightly wrong in a way
+that reads as ordinary single-precision disagreement, and a barostat that
+samples the wrong ensemble. So `setBox` is compared against a loop
+*constructed* at the same box, which reaches every uniform through `prepare*`
+instead of `pack*`, and the two are asserted **exactly equal**. No tolerance to
+choose, and it costs nothing -- where comparing against the f64 reference at the
+new box took minutes per fixture and proved less.
+
+Two things stay fixed for the life of a run, both deliberately. The **PME mesh**,
+as OpenMM fixes it at context creation, so grid spacing moves with the volume.
+And the **cell divisions**, because the cell count sizes the buffer the pair
+kernel indexes; the extents move instead, which is correct while a cell stays at
+least a cutoff wide. `BoxTooSmallForCells` is thrown rather than silently
+returning a list that misses pairs, and the headroom is whatever the box leaves
+-- 8.7% for 3HTB's 6.52 nm box at a 1 nm cutoff.

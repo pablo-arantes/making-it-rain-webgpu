@@ -55,7 +55,15 @@ function roundTiesToEven(x: number): number {
 export function fixedWords(value: number): { lo: number; hi: number } {
   if (!Number.isFinite(value)) throw new RangeError(`not finite: ${value}`);
   if (Math.abs(value) >= FIXED_MAX) {
-    throw new RangeError(`${value} kJ/mol/nm is outside the fixed-point range`);
+    // No unit in the message: this converts positions (nm), forces
+    // (kJ/mol/nm), energies (kJ/mol) and box lengths, and naming one of them
+    // sends the reader looking in the wrong place. A barostat run that blew up
+    // reported a *position* of 2.15e9 as "kJ/mol/nm".
+    throw new RangeError(
+      `${value} is outside the fixed-point range of +/-${FIXED_MAX} ` +
+        "(2^31). A value this large is almost always a diverged simulation " +
+        "rather than a format limit.",
+    );
   }
   const magnitude = Math.abs(value);
   const whole = Math.floor(magnitude);

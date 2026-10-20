@@ -35,15 +35,31 @@ import {
   type NonbondedForce,
   type OpenMMSystem,
   type PositionRestraintForce,
+  type Vec3,
 } from "../engine/system.js";
 import { ewaldAlpha, pmeMinimumGridSize, smoothFftSize } from "../engine/units.js";
 import { splitConstraints } from "../engine/constraint-clusters.js";
 import {
+  dispersionCorrection,
   netChargeCorrection,
   rectangularBox,
   selfEnergy,
 } from "../reference/forces/nonbonded.js";
 import { centreOfMassRemover, removesOnStep } from "../reference/com-motion.js";
+import {
+  barostatActsAfterSteps,
+  barostatAttempt,
+  boxLengths,
+  diagonalBox,
+  initialBarostatState,
+  type BarostatState,
+} from "../reference/barostat.js";
+import { findMolecules, type Molecules } from "../engine/molecules.js";
+import {
+  threefry2x32,
+  openUnitInterval,
+  BAROSTAT_DOMAIN,
+} from "../reference/random.js";
 import {
   degreesOfFreedom as countDegreesOfFreedom,
   kineticEnergy,
@@ -60,11 +76,30 @@ import {
 } from "./pipeline.js";
 import { readableStorageUsage, uniformUsage } from "./usage.js";
 import { packPositions, planBonded, prepareBonded, unpackFixed, type BondedForce } from "./forces.js";
-import { planDirect, prepareDirect, type Accumulators } from "./nonbonded.js";
-import { planCellList } from "./cell-list.js";
-import { planPme, preparePme } from "./pme.js";
+import {
+  packExceptionParams,
+  packPairParams,
+  planDirect,
+  prepareDirect,
+  type Accumulators,
+  type ResidentDirect,
+} from "./nonbonded.js";
+import { planCellList, updateCellBox } from "./cell-list.js";
+import {
+  packConvolveParams,
+  packInterpolateParams,
+  packPmeParams,
+  planPme,
+  preparePme,
+  type ResidentPme,
+} from "./pme.js";
 import { planZero } from "./zero.js";
-import { planRestraint, prepareRestraint } from "./restraint.js";
+import {
+  packRestraintParams,
+  planRestraint,
+  prepareRestraint,
+  type ResidentRestraint,
+} from "./restraint.js";
 import {
   packConstraints,
   planConstraints,
@@ -118,6 +153,15 @@ export interface RunOptions {
    * mean fewer synchronisations and a longer wait before a run can be stopped.
    */
   readonly maxBatch?: number;
+  /**
+   * The PME mesh, overriding the one the starting box implies.
+   *
+   * A run keeps its mesh for its whole life, as OpenMM does, so a comparison
+   * between a loop whose box was *changed* and one *constructed* at that box
+   * has to pin the mesh or the two differ for a legitimate reason. See
+   * src/gpu/validate-barostat.ts.
+   */
+  readonly mesh?: Vec3;
 }
 
 /** Steps per submission, unless the caller says otherwise. */
@@ -160,6 +204,17 @@ interface EnergyOffsets {
 
 export class StepLoop {
   private stepCount = 0;
+  private barostatState: BarostatState | undefined;
+  private molecules: Molecules | undefined;
+  /**
+   * The barostat's deviate counter.
+   *
+   * A barostat draws one or two uniforms per attempt -- the second only when
+   * the move is uphill -- so the count is not a function of the step number.
+   * It is carried here, and `run.json` has to record it alongside the seed for
+   * a run to be resumable.
+   */
+  private barostatDraw = 0;
 
   private constructor(
     readonly device: GPUDevice,
@@ -169,7 +224,16 @@ export class StepLoop {
     readonly options: RunOptions,
     private readonly accumulators: Accumulators,
     private readonly buffers: IntegratorBuffers,
-    private readonly offsets: EnergyOffsets,
+    private offsets: EnergyOffsets,
+    private box: Vec3,
+    private readonly alpha: number,
+    private readonly nonbonded: NonbondedForce,
+    private readonly direct: ResidentDirect,
+    private readonly pme: ResidentPme,
+    private readonly restraints: readonly ResidentRestraint[],
+    private readonly barostat:
+      | import("../engine/system.js").MonteCarloBarostat
+      | undefined,
     private readonly degreesOfFreedom: number,
     private readonly comFrequency: number,
     /** Rebuilding the cell list. */
@@ -216,9 +280,11 @@ export class StepLoop {
       nonbonded.alpha !== 0
         ? nonbonded.alpha
         : ewaldAlpha(nonbonded.cutoff, nonbonded.ewaldTolerance);
-    const grid = box.map((extent) =>
-      smoothFftSize(pmeMinimumGridSize(alpha, extent, nonbonded.ewaldTolerance)),
-    ) as unknown as [number, number, number];
+    const grid =
+      options.mesh ??
+      (box.map((extent) =>
+        smoothFftSize(pmeMinimumGridSize(alpha, extent, nonbonded.ewaldTolerance)),
+      ) as unknown as [number, number, number]);
 
     // The integrator's buffers double as the shared accumulators: `positions`
     // is what every force kernel reads and what the integrator advances, so
@@ -279,14 +345,11 @@ export class StepLoop {
     const restraints = system.forces.filter(
       (f): f is PositionRestraintForce => f.type === "PositionRestraint",
     );
+    const residentRestraints: ResidentRestraint[] = [];
     for (const [slot, force] of restraints.entries()) {
-      forcePasses.push(
-        await planRestraint(
-          cache,
-          prepareRestraint(pool, force, state.boxVectors, slot),
-          accumulators,
-        ),
-      );
+      const resident = prepareRestraint(pool, force, state.boxVectors, slot);
+      residentRestraints.push(resident);
+      forcePasses.push(await planRestraint(cache, resident, accumulators));
     }
     const { pairs, exceptions } = await planDirect(cache, direct, accumulators);
     forcePasses.push(pairs);
@@ -393,6 +456,9 @@ export class StepLoop {
     // and three for the remover.
     const degreesOfFreedom = countDegreesOfFreedom(system);
 
+    const barostatForce = system.forces.find(
+      (f) => f.type === "MonteCarloBarostat",
+    );
     const loop = new StepLoop(
       device,
       pool,
@@ -406,6 +472,16 @@ export class StepLoop {
         self: selfEnergy(nonbonded, alpha),
         netCharge: netChargeCorrection(nonbonded, alpha, volume),
       },
+      box,
+      alpha,
+      nonbonded,
+      direct,
+      pme,
+      residentRestraints,
+      system.forces.find(
+        (f): f is import("../engine/system.js").MonteCarloBarostat =>
+          f.type === "MonteCarloBarostat",
+      ),
       degreesOfFreedom,
       remover === undefined ? 0 : remover.frequency,
       cellPasses,
@@ -413,6 +489,9 @@ export class StepLoop {
       comPasses,
       phaseBuilder,
     );
+    if (barostatForce !== undefined) {
+      loop.barostatState = initialBarostatState(state.boxVectors);
+    }
     return loop;
   }
 
@@ -435,6 +514,78 @@ export class StepLoop {
     return this.stepCount;
   }
 
+  /** The barostat's accepted and attempted counts, when there is one. */
+  get barostatStatistics(): {
+    readonly attempts: number;
+    readonly accepted: number;
+    readonly volumeScale: number;
+  } | null {
+    if (this.barostatState === undefined) return null;
+    return {
+      attempts: this.barostatAttempts,
+      accepted: this.barostatAccepted,
+      volumeScale: this.barostatState.volumeScale,
+    };
+  }
+
+  private barostatAttempts = 0;
+  private barostatAccepted = 0;
+
+  /**
+   * One barostat attempt, if one is due.
+   *
+   * Driven from the host, which is where OpenMM's API drives it too: it reads
+   * the energy, rescales, reads the energy again, and accepts or rejects. Doing
+   * the rescaling on the device would save a position round trip, and at a
+   * frequency of 25 that trip is about 1 ms against 125 ms of stepping -- so it
+   * is not where the time goes, and the two force evaluations are.
+   *
+   * The deviates come from the same counter-based generator the thermostat
+   * uses, on a different domain, so a run is reproducible from its seed. The
+   * count is carried rather than derived from the step number because an
+   * attempt draws one uniform or two depending on whether the move is uphill.
+   */
+  private async attemptBarostat(stepsJustRun: number): Promise<void> {
+    const barostat = this.barostat;
+    const state = this.barostatState;
+    if (barostat === undefined || state === undefined) return;
+    if (!barostatActsAfterSteps(state, barostat.frequency, stepsJustRun)) return;
+    if (this.molecules === undefined) this.molecules = findMolecules(this.system);
+
+    const seed = this.options.seed ?? 0;
+    const uniform = (): number => {
+      const bits = threefry2x32(
+        [this.barostatDraw >>> 0, seed >>> 0],
+        [BAROSTAT_DOMAIN, 0],
+      );
+      this.barostatDraw++;
+      return openUnitInterval(bits[0]);
+    };
+
+    const positions = await this.positions();
+    const attempt = await barostatAttempt(
+      this.system,
+      barostat,
+      state,
+      diagonalBox(this.box),
+      positions,
+      async (trial, trialBox) => {
+        this.setBox(boxLengths(trialBox));
+        return (await this.potential(trial)).energy;
+      },
+      uniform,
+      this.molecules,
+    );
+
+    // `barostatAttempt` leaves the caller to commit, so whichever
+    // configuration won is written back -- including on rejection, because the
+    // trial was already on the device.
+    this.setBox(boxLengths(attempt.boxVectors));
+    this.setPositions(attempt.positions);
+    this.barostatAttempts++;
+    if (attempt.accepted) this.barostatAccepted++;
+  }
+
   /**
    * Encode and submit `steps` steps as one batch.
    *
@@ -455,6 +606,31 @@ export class StepLoop {
   }
 
   private async runBatch(steps: number): Promise<void> {
+    // 🔴 The barostat cannot be inside an encoded batch. It reads an energy,
+    // decides on the host, and may rewrite every box-dependent uniform -- none
+    // of which can happen between two dispatches already written into a command
+    // buffer. So a batch is cut short at each attempt: the loop submits what it
+    // has, runs the attempt, and starts a new batch. At a frequency of 25 that
+    // is four submissions per hundred steps instead of one, which is the cost
+    // of NPT and is why the notebook's production stage is the slower one.
+    if (this.barostat !== undefined && this.barostat.frequency > 0) {
+      let done = 0;
+      while (done < steps) {
+        const until = Math.min(
+          steps - done,
+          this.barostat.frequency - (this.barostatState?.step ?? 0),
+        );
+        const chunk = Math.min(Math.max(1, until), steps - done);
+        await this.encodeSteps(chunk);
+        done += chunk;
+        await this.attemptBarostat(chunk);
+      }
+      return;
+    }
+    await this.encodeSteps(steps);
+  }
+
+  private async encodeSteps(steps: number): Promise<void> {
     // Each block's `step` field feeds the generator, so the ring is rewritten
     // with this batch's step numbers before anything is encoded.
     writeStepParamsRing(
@@ -641,6 +817,90 @@ export class StepLoop {
     await this.device.queue.onSubmittedWorkDone();
     const error = await this.device.popErrorScope();
     if (error !== null) throw new Error(`${label}: ${error.message}`);
+  }
+
+  /**
+   * The PME mesh, which is fixed for the life of the run.
+   *
+   * Exposed because a comparison against the reference has to use the same
+   * mesh: the reference would otherwise choose one from the current box, and
+   * after a barostat move that is a different grid and a different energy.
+   */
+  get mesh(): Vec3 {
+    return this.pme.grid;
+  }
+
+  /** The current box, nm along each axis. */
+  get boxLengths(): Vec3 {
+    return this.box;
+  }
+
+  /**
+   * Change the box.
+   *
+   * Every uniform that carries a box-derived quantity is rewritten: the pair
+   * and exception kernels' boxes in both f32 and fixed point, the three
+   * reciprocal-space blocks -- whose `prefactor` carries 1/volume -- the cell
+   * geometry, and each restraint's wrap. So are the two host-side energy terms
+   * that depend on the volume, the dispersion correction and the net-charge
+   * correction. The Ewald self energy does not: it is a sum over charges.
+   *
+   * Two things deliberately do *not* change.
+   *
+   * The **PME mesh** stays as the starting box chose it, so the grid spacing
+   * moves with the volume. That is what OpenMM does -- the mesh is fixed at
+   * context creation and `setPeriodicBoxVectors` does not touch it -- and
+   * matching it is what keeps an energy comparison meaningful.
+   *
+   * The **cell divisions** stay too, because the number of cells decides the
+   * size of the buffer the pair kernel indexes and that cannot change mid-run.
+   * The extents move instead, which is correct while a cell stays at least a
+   * cutoff wide; `updateCellBox` throws `BoxTooSmallForCells` rather than
+   * quietly returning a list that misses pairs.
+   */
+  setBox(box: Vec3): void {
+    const queue = this.device.queue;
+    const write = (buffer: GPUBuffer, data: ArrayBufferView): void =>
+      queue.writeBuffer(buffer, 0, data as unknown as BufferSource);
+
+    write(
+      this.direct.pairParams,
+      packPairParams(
+        this.nonbonded,
+        this.direct.sections,
+        this.direct.cellList.geometry.divisions,
+        box,
+        this.alpha,
+      ),
+    );
+    write(
+      this.direct.exceptionParams,
+      packExceptionParams(this.nonbonded, box, this.alpha),
+    );
+    write(
+      this.pme.pmeParams,
+      packPmeParams(this.system.particleCount, this.pme.grid, box, this.alpha),
+    );
+    write(this.pme.convolveParams, packConvolveParams(this.pme.grid, box, this.alpha));
+    write(
+      this.pme.interpolateParams,
+      packInterpolateParams(this.system.particleCount, this.pme.grid, box),
+    );
+    updateCellBox(this.pool, this.direct.cellList, box, this.nonbonded.cutoff);
+    for (const restraint of this.restraints) {
+      write(restraint.params, packRestraintParams(restraint.count, box));
+    }
+
+    const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
+    this.offsets = {
+      dispersion: this.nonbonded.useDispersionCorrection
+        ? dispersionCorrection(this.nonbonded, volume)
+        : 0,
+      // A sum over charges, so the volume does not enter it.
+      self: this.offsets.self,
+      netCharge: netChargeCorrection(this.nonbonded, this.alpha, volume),
+    };
+    this.box = box;
   }
 
   /** The shared force accumulator, for a validator that needs to read it. */

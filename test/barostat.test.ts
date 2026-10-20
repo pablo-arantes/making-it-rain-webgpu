@@ -11,9 +11,12 @@
 import { describe, expect, it } from "vitest";
 import {
   BAR_TO_KJ_PER_MOL_NM3,
+  barostatActsAfterSteps,
   barostatActsNow,
   barostatAttempt,
+  boxLengths,
   boxVolume,
+  diagonalBox,
   initialBarostatState,
   scaleBox,
   scaleMolecules,
@@ -57,6 +60,28 @@ describe("the proposal schedule", () => {
     for (let call = 0; call < 100; call++) {
       expect(barostatActsNow(state, 0)).toBe(false);
     }
+  });
+
+  it("advances by a whole batch when the host only sees batches", async () => {
+    // 🔴 A step loop encodes many steps into one command buffer, so it reaches
+    // the barostat once per batch. Calling the per-step form there advances the
+    // counter by one instead of by the batch -- measured as zero attempts in a
+    // hundred steps at frequency 25, which is how this was found.
+    const state = initialBarostatState(box);
+    expect(barostatActsAfterSteps(state, 25, 25)).toBe(true);
+    expect(state.step).toBe(0);
+    expect(barostatActsAfterSteps(state, 25, 24)).toBe(false);
+    expect(barostatActsAfterSteps(state, 25, 1)).toBe(true);
+  });
+
+  it("carries an overshoot rather than dropping it", () => {
+    // A batch that is not a multiple of the frequency must not lose attempts,
+    // or a long run would do fewer than it should.
+    const state = initialBarostatState(box);
+    expect(barostatActsAfterSteps(state, 25, 30)).toBe(true);
+    expect(state.step).toBe(5);
+    expect(barostatActsAfterSteps(state, 25, 20)).toBe(true);
+    expect(state.step).toBe(0);
   });
 
   it("starts with a proposal width of one percent of the volume", () => {
@@ -165,6 +190,25 @@ describe("scaleMolecules", () => {
     // Centroid is (1, 1, 0); doubling it gives (2, 2, 0), an offset of (1, 1, 0).
     expect(Array.from(positions)).toEqual([1, 1, 0, 4, 1, 0, 1, 4, 0]);
     void system;
+  });
+});
+
+describe("the box matrix", () => {
+  it("builds the diagonal, not three parallel vectors", () => {
+    // 🔴 `lengths.map((l) => [l, 0, 0])` is a plausible-looking matrix whose
+    // volume reads as zero, because `boxVolume` takes `[0][0] * [1][1] *
+    // [2][2]`. It cost a round trip, and what it produced was the cell list
+    // complaining the box had shrunk to nothing -- nothing that pointed at the
+    // matrix.
+    expect(diagonalBox([3, 4, 5] as unknown as Vec3)).toEqual(box);
+    expect(boxVolume(diagonalBox([3, 4, 5] as unknown as Vec3))).toBe(60);
+    expect(boxLengths(box)).toEqual([3, 4, 5]);
+  });
+
+  it("round-trips lengths through vectors", () => {
+    expect(boxLengths(diagonalBox([1.5, 2.5, 3.5] as unknown as Vec3))).toEqual([
+      1.5, 2.5, 3.5,
+    ]);
   });
 });
 

@@ -30,6 +30,10 @@ import {
   validateRestraint,
   type RestraintComparison,
 } from "../src/gpu/validate-restraint.js";
+import {
+  validateBarostat,
+  type BarostatComparison,
+} from "../src/gpu/validate-barostat.js";
 
 declare global {
   interface Window {
@@ -41,6 +45,7 @@ declare global {
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
     __mirRestraint?: RestraintComparison | { error: string };
+    __mirBarostat?: BarostatComparison | { error: string };
   }
 }
 
@@ -168,6 +173,44 @@ function renderIntegrators(report: IntegratorReport): string {
         r.kineticEnergyRelativeError,
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
+    </p>`;
+}
+
+function renderBarostat(b: BarostatComparison): string {
+  return `<h2>Barostat</h2><p class="note">
+      ${b.molecules.toLocaleString("en-US")} molecules. The move and the
+      molecule decomposition are checked in the unit lane; what only runs here
+      is whether the box is genuinely dynamic -- whether changing it rewrites
+      <em>every</em> uniform carrying a box-derived quantity. A stale one is not
+      a crash, it is an energy slightly wrong in a way that looks like ordinary
+      single-precision disagreement, so the device's assembled energy is
+      checked by changing the box and comparing against a loop <em>constructed</em>
+      at that box: the two reach every uniform by different routes, so agreement
+      means both wrote the same thing. Asserted exactly -- the same kernels over
+      the same data give the same bits.
+    </p>
+    <table>
+      <tr><th>Length scale</th><th>After setBox (kJ/mol)</th><th>After construction</th>
+          <th>Difference</th><th>Constraint error change</th><th></th></tr>
+      ${b.changes
+        .map(
+          (c) => `<tr>
+            <td class="num">${c.lengthScale}</td>
+            <td class="num">${c.afterSetBox.toFixed(4)}</td>
+            <td class="num">${c.afterConstruction.toFixed(4)}</td>
+            <td class="num">${c.difference}</td>
+            <td class="num">${exponential(c.constraintErrorChange)}</td>
+            <td><span class="badge ${c.ok ? "ok" : "bad"}">${c.ok ? "pass" : "fail"}</span></td>
+          </tr>`,
+        )
+        .join("")}
+    </table>
+    <p class="note">
+      Over ${b.steps} steps at frequency 25 it made ${b.attempts} attempts and
+      accepted ${b.accepted}; the volume went from
+      ${b.startVolume.toFixed(2)} to ${b.finalVolume.toFixed(2)} nm&sup3; with a
+      proposal width of ${b.volumeScale.toFixed(3)} nm&sup3;.
+      <span class="badge ${b.ok ? "ok" : "bad"}">${b.ok ? "pass" : "fail"}</span>
     </p>`;
 }
 
@@ -378,6 +421,7 @@ async function main(): Promise<void> {
       window.__mirIntegrators = { error: message };
       window.__mirLoop = { error: message };
       window.__mirMinimise = { error: message };
+      window.__mirBarostat = { error: message };
     } else {
       const dynamics = (await dynamicsResponse.json()) as {
         trajectory_verlet: { steps: number };
@@ -455,6 +499,19 @@ async function main(): Promise<void> {
         if (body) body.innerHTML += renderRestraint(restraintResult);
         window.__mirRestraint = restraintResult;
       }
+
+      // From the captured equilibrated frame, for the reason in
+      // `validateBarostat`: state.xml is un-minimised and NVE from it diverges.
+      const barostatResult = await validateBarostat(
+        device,
+        { systemXml, stateXml },
+        {
+          positions: verlet.positions.slice(0, components),
+          velocities: verlet.velocities.slice(0, components),
+        },
+      );
+      if (body) body.innerHTML += renderBarostat(barostatResult);
+      window.__mirBarostat = barostatResult;
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -467,6 +524,7 @@ async function main(): Promise<void> {
     window.__mirLoop = { error: message };
     window.__mirMinimise = { error: message };
     window.__mirRestraint = { error: message };
+    window.__mirBarostat = { error: message };
   }
 }
 

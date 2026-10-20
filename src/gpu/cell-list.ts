@@ -32,6 +32,54 @@ export interface CellGeometry {
   readonly extent: Vec3;
 }
 
+export class BoxTooSmallForCells extends Error {
+  constructor(readonly extent: number, readonly cutoff: number) {
+    super(
+      `the box has shrunk until a cell is ${extent.toFixed(4)} nm across, below ` +
+        `the ${cutoff} nm cutoff. The 27-cell scan only finds every pair inside ` +
+        "the cutoff while a cell is at least that wide, so the forces would be " +
+        "silently missing pairs. The cell divisions are fixed for the life of a " +
+        "run -- changing them would resize the buffer the pair kernel indexes -- " +
+        "so a barostat that compresses this far needs the run restarted at the " +
+        "smaller box.",
+    );
+    this.name = "BoxTooSmallForCells";
+  }
+}
+
+/**
+ * The grid for a box whose divisions are already fixed.
+ *
+ * A barostat changes the box, and `floor(box / cutoff)` would then change the
+ * *number* of cells -- which decides the size of the buffer the pair kernel
+ * indexes into, and so cannot change during a run. The divisions stay as the
+ * starting box set them and the extents move with the volume, which stays
+ * correct as long as an extent does not fall below the cutoff. The starting
+ * extent is `box / floor(box / cutoff)`, so the headroom is whatever the box
+ * happens to leave: 8.7% for 3HTB's 6.52 nm box at a 1 nm cutoff. Well beyond
+ * anything an equilibrated barostat does, and checked rather than assumed.
+ */
+export function geometryForDivisions(
+  box: Vec3,
+  divisions: Vec3,
+  cutoff: number,
+): CellGeometry {
+  const extent = [0, 1, 2].map(
+    (axis) => (box[axis] as number) / (divisions[axis] as number),
+  ) as unknown as Vec3;
+  for (const value of extent) {
+    if ((value as number) < cutoff) {
+      throw new BoxTooSmallForCells(value as number, cutoff);
+    }
+  }
+  return {
+    divisions,
+    cellCount:
+      (divisions[0] as number) * (divisions[1] as number) * (divisions[2] as number),
+    extent,
+  };
+}
+
 export function cellGeometry(box: Vec3, cutoff: number): CellGeometry {
   const divisions: Vec3 = [
     Math.max(1, Math.floor((box[0] as number) / cutoff)),
@@ -112,6 +160,27 @@ function packParams(
     words[20 + axis * 4 + 1] = extentWords.hi;
   }
   return words;
+}
+
+/**
+ * Rewrite the geometry uniform for a new box, keeping the divisions.
+ *
+ * Throws `BoxTooSmallForCells` rather than quietly producing a list that misses
+ * pairs, which is what a cell narrower than the cutoff would do.
+ */
+export function updateCellBox(
+  pool: BufferPool,
+  buffers: CellListBuffers,
+  box: Vec3,
+  cutoff: number,
+): CellGeometry {
+  const geometry = geometryForDivisions(box, buffers.geometry.divisions, cutoff);
+  pool.device.queue.writeBuffer(
+    buffers.params,
+    0,
+    packParams(buffers.particleCount, geometry, box) as unknown as BufferSource,
+  );
+  return geometry;
 }
 
 /** Create (or find) the list's buffers and upload the geometry. */
