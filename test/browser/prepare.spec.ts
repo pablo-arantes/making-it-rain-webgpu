@@ -24,6 +24,18 @@ const present = existsSync(receptor);
 test.describe("the prepare page", () => {
   test.skip(!present, `${receptor} not generated — see tools/README.md`);
 
+  test("is reachable from the front page", async ({ page }) => {
+    // The page existed for a while before anything linked to it, which made it
+    // reachable only by typing the URL. A link is the difference between
+    // shipped and merely built.
+    await page.goto("/");
+    const link = page.locator('nav a[href="./prepare.html"]');
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page.locator("h1")).toHaveText("Prepare a system");
+    await page.waitForFunction(() => window.__mirPrepare?.state === "idle");
+  });
+
   test("prepares a deposited structure into a runnable system", async ({ page }) => {
     const failures: string[] = [];
     page.on("pageerror", (error) => failures.push(error.message));
