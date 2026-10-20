@@ -1,0 +1,22 @@
+{
+  "what": "A system this project prepared, serialised, re-read and ran on the GPU. Closes prepare -> serialise -> run as one chain.",
+  "date": "2026-10-20",
+  "host": "Apple M3 Pro, macOS 14, Google Chrome 155, apple · metal-3",
+  "system": "fixtures/crossfeed/system.xml, built by tools/export_prepared.ts from fixtures/1L2Y/receptor.pdb",
+  "note": "Hydrogens placed by src/prep/hydrogens.ts and a water box filled by src/prep/solvate.ts, so OpenMM never built this system and it has no structural counterpart.",
+  "particles": 2400,
+  "cutoff_nm": 1,
+  "pme": { "alpha_per_nm": 2.628260884878466, "mesh": [25, 25, 25] },
+  "totalEnergy_kJ_per_mol": {
+    "openmm_f64_reference": -13939.798408,
+    "our_reference_f64": -13939.798407952389,
+    "our_gpu_mixed": -13939.813361081877
+  },
+  "relativeError": {
+    "our_reference_vs_openmm": 9.2e-12,
+    "our_gpu_vs_our_reference": 1.0726933812576403e-6
+  },
+  "forceRelativeRms_gpu_vs_reference": 1.4178160208135755e-6,
+  "maxReferenceForce_kJ_per_mol_nm": 12180.107016831242,
+  "verdict": "Inside the ~1e-5 floor docs/DEVIATIONS.md records for a legitimate single-precision implementation."
+}

@@ -409,17 +409,57 @@ x86_64 build that will not load on arm64 (`incompatible architecture`);
 
 ## Next
 
-Phase 3, continuing. The parameter-assignment spine is done and verified: a PDB
-with hydrogens becomes an `OpenMMSystem` whose every force matches OpenMM's
-serialised `System` element for element, on 1L2Y and on T4 lysozyme.
-`docs/PREPARATION.md` has the table and the findings.
+Phase 3 is nearly done. A deposited PDB becomes a runnable system entirely in
+the browser, and the chain is closed at both ends: every force in a prepared
+`System` matches OpenMM's element for element on the parity fixtures, OpenMM
+reads the file this project writes and agrees on the energy to 9.2e-12, and the
+GPU then agrees with our own f64 reference to 1.07e-6 on that same prepared
+system (`docs/measurements/prepared-system-verify-m3pro.json`). The analyses
+agree with pytraj. `docs/PREPARATION.md` has the tables.
 
-What it still needs, in the order that unblocks the user story:
+**Phase 3 remainder, smallest first:**
 
-2. **The UI for preparation.** The whole path works in `src/prep/` and nothing
-   in `web/` calls it yet, so a user still has to upload a `system.xml`.
-3. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
-   image in the solvation clash tests and in the engine's cell list.
-4. **DHFR** as a third protein fixture, and ff99SB through the same parity.
-5. `prmtop`/`inpcrd` export.
-6. **ff99SB and ff99SB-ILDN beyond 1L2Y**, and a ligand — Phase 4.
+1. **ff99SB** through the parity gate; only ff99SB-ILDN has been run.
+2. **DHFR and 1UBQ**, the two fixtures the plan's gate names and that have not
+   been built. The ones used instead are 1L2Y, T4 lysozyme, a solvated 1L2Y and
+   1L2Y under ff99SB-ILDN.
+3. `prmtop`/`inpcrd` export.
+4. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
+   image in the solvation clash tests and in the engine's cell list. A
+   dodecahedron holds ~70% of the water for the same padding, so this is a
+   real saving, not tidiness.
+
+**Phase 4 is untouched**, and it is half the project's stated scope:
+protein–ligand. Heterogen picker, CCD bond orders, SMIRNOFF typing through
+RDKit in WASM, NAGL in ONNX, GAFF by upload, and the ligand analyses. Nothing
+in `src/prep/` handles a non-polymer residue today — it is refused by name.
+
+**Phase 5 is untouched**: Safari, integrated GPUs, accessibility, the tutorial
+page, GROMACS export.
+
+## 🔴 The things that are not features
+
+These matter more than the phase list, because each one is a limit on how much
+any of the above can be trusted.
+
+* **Every acceptance threshold is provisional.** `AGENTS.md` says so in two
+  places. They are calibrated against this machine's *CPU* platform, because
+  its `OpenCL/mixed` is unavailable, and mixed precision is the thing the engine
+  actually targets. `tools/calibrate_thresholds.py` on a Colab T4 is the fix and
+  has not been run.
+* **One GPU, one browser.** Everything is measured on an M3 Pro in Chrome. The
+  atomic-contention finding in `CLAUDE.md` explicitly says not to act on it
+  until it is measured on NVIDIA and on an integrated GPU, and the gather-vs-
+  scatter decision for the force kernel waits on that.
+* **The Dawn lane cannot run here** (macOS 14), so the second GPU lane is
+  unexercised by anyone who has only this machine.
+* **The oracle lane has no oracle.** `vendor/openmm-wasm/` does not exist, so
+  `npm run test:oracle` self-reports as skipped and 9 tests never run.
+* **One unexplained observation**, above: a single browser run had 3HTB's
+  LFMiddle step 0.0167 nm from OpenMM while matching the reference to 1.07e-7.
+  Never reproduced; fixture checksums now instrument it.
+* **`src/gpu/compute.ts` allocates buffers directly**, which `AGENTS.md`
+  forbids — every allocation is supposed to go through one place so peak memory
+  stays measurable.
+* **Three of the four CI jobs are `continue-on-error`**, because none has run on
+  a hosted runner. Leaving them soft makes them decorative.
