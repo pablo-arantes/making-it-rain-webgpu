@@ -6,11 +6,31 @@ file, set the parameters you know from the
 notebooks, and run the simulation on your own machine. No account, no queue, no
 server, and your structure is never uploaded.
 
-> **Status: Phase 0.** There is no MD engine yet. What works today: the page
-> reports your GPU and runs the precision checks the engine's design rests on,
-> the five test lanes are wired up, and the Python oracle that the whole project
-> is validated against regenerates its fixtures. `docs/PLAN.md` is the road map
-> and `docs/PRECISION.md` is what Phase 0 settled.
+> **Status: Phase 2, experimental.** The engine runs. Upload an OpenMM
+> `System` and `State` and the page minimises, equilibrates and produces by
+> strides on your GPU, writing DCD trajectories, OpenMM-format logs and
+> checkpoints you can take away. Every force, the constraints, both
+> integrators, the thermostat, the barostat, the restraints and the minimiser
+> are differentially tested against OpenMM. What is **not** built yet is the
+> preparation path: Phase 3 turns a PDB ID into a solvated system, and until
+> then you bring your own.
+
+## What is measured, not claimed
+
+On an Apple M3 Pro through Chrome 155, against OpenMM 8.4:
+
+| | 1L2Y, 2,373 atoms | 3HTB + JZ4, 26,749 atoms |
+| --- | --- | --- |
+| energy per force group | 1.6e-6 to 8.1e-8 | 1.4e-7 to 1.7e-8 |
+| direct-space forces | 6.9e-7 relative RMS | 5.4e-7 |
+| one step vs OpenMM's own | 9.6e-8 nm | 1.0e-7 nm |
+| energy drift (OpenMM's own) | 0.28 (0.37) | 0.54 (0.39) |
+| throughput | 39 ns/day at 2 fs | 10 ns/day |
+| two identical runs differ by | **0** | **0** |
+
+Drift is kJ/mol per atom per ns from a least-squares slope, with OpenMM's figure
+from the same configuration in brackets. Every number here is reproduced by
+`npm run test:browser`, and `docs/measurements/` holds the commands.
 
 ## Read these first
 
@@ -22,6 +42,7 @@ server, and your structure is never uploaded.
 | [docs/PRECISION.md](docs/PRECISION.md) | how forces and positions are represented without f64, and the two schemes that measurement eliminated |
 | [docs/NONBONDED.md](docs/NONBONDED.md) | what OpenMM puts in which force group, and the three Ewald terms a first reading gets wrong |
 | [docs/DYNAMICS.md](docs/DYNAMICS.md) | the integrator and constraint algorithms, and why the NVE gate cannot use the notebook's integrator |
+| [docs/MINIMISER.md](docs/MINIMISER.md) | what `LocalEnergyMinimizer` actually does, and where it stops short of its own tolerance |
 | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) | every place the app will differ from the notebook, and why |
 | [AGENTS.md](AGENTS.md) · [CLAUDE.md](CLAUDE.md) | engineering invariants, and how to build and test this checkout |
 | [docs/measurements/](docs/measurements/) | the numbers the documents quote, and the commands that produced them |
