@@ -129,6 +129,22 @@ compare. See deviations 16 and 17 in `docs/DEVIATIONS.md` — the second is that
 OpenMM's documented HID/HIE hydrogen-bond rule is unreachable code and always
 yields HID.
 
+## Solvation
+
+```sh
+python tools/dump_solvent.py --pdb fixtures/prep/1L2Y.pdb \
+    --out fixtures/prep/1L2Y-solvent.json
+```
+
+Runs `addSolvent` twice, because only part of it is reproducible. With ions off,
+the water placement is deterministic and every molecule is comparable; with the
+notebook's 0.15 M NaCl, only the counts are, because `_addIons` picks the waters
+to replace with `random.choice`. Deviations 18 and 19 in `docs/DEVIATIONS.md`.
+
+The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
+`spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
+`THIRD_PARTY.md`.
+
 ## Trajectory readers
 
 ```sh

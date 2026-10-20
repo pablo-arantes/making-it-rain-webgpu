@@ -413,13 +413,14 @@ serialised `System` element for element, on 1L2Y and on T4 lysozyme.
 
 What it still needs, in the order that unblocks the user story:
 
-1. **`addHydrogens`**, which a PDB from the RCSB requires before anything else
-   works. Names and order can be matched exactly; positions cannot, because
-   OpenMM minimises them — that needs a `docs/DEVIATIONS.md` entry.
-2. **`addSolvent`**: padding, water model, ions, neutralisation.
-3. **Water and ion templates through the matcher.** `tip3p.xml` parses but no
-   solvated system has been prepared here, so `HOH` matching is untested.
-4. **Cross-fed energies**, which the plan names as a gate and the term-by-term
-   comparison does not replace.
-5. **DHFR** as a third fixture, and ff99SB/ff99SB-ILDN through the same parity.
-6. The **protein analyses** and `prmtop`/`inpcrd` export.
+1. **Cross-fed energies**, which the plan names as a gate and the term-by-term
+   comparison does not replace: prepare here and evaluate in OpenMM, and the
+   reverse. Everything up to the `System` now matches element for element, so
+   this is the remaining question about whether the two agree on a *number*.
+2. **The UI for preparation.** The whole path works in `src/prep/` and nothing
+   in `web/` calls it yet, so a user still has to upload a `system.xml`.
+3. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
+   image in the solvation clash tests and in the engine's cell list.
+4. **DHFR** as a third protein fixture, and ff99SB through the same parity.
+5. The **protein analyses** (Cα RMSD, Rg, RMSF, 2D RMSD, PCA,
+   cross-correlation) and `prmtop`/`inpcrd` export.

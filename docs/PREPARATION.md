@@ -16,6 +16,7 @@ PDB text
   -> readPdb              src/analysis/pdb.ts
   -> stripAtoms           src/prep/hydrogens.ts  drop water and any hydrogens
   -> addHydrogens         src/prep/hydrogens.ts  variants, then the missing H
+  -> solvate              src/prep/solvate.ts    water box, clashes, ions
   -> inferBonds           src/prep/bonds.ts      standard + disulfide + CONECT
   -> matchResidues        src/prep/template.ts   graph matching, not by name
   -> assignAtoms          src/prep/assign.ts     mass, charge, sigma, epsilon
@@ -55,6 +56,17 @@ and the `System` built from *our* hydrogens is identical to the one OpenMM built
 from *its own*, since parameters do not depend on where a hydrogen sits. That
 closes the path from a deposited PDB to a runnable system. Positions are
 deviation 16; the unreachable HID/HIE rule is deviation 17.
+
+Solvation is compared the way the algorithm splits. Water placement is exactly
+reproducible, so it is compared position by position: for 1L2Y at the
+notebook's 4 Å padding and TIP3P, the box comes out 3.17632 nm against OpenMM's
+3.17632, with **699 waters in the same places to 4.4e-16 nm** and 2401 atoms.
+Ion placement is not reproducible in OpenMM (deviation 18), so only the counts
+are compared, and they are exact: 2 Na⁺ and 3 Cl⁻, 694 waters, 2391 atoms.
+
+The end of the chain is checked too: the solvated topology matches templates for
+`HOH`, `NA` and `CL`, comes out neutral to round-off, and builds a `System` with
+a PME nonbonded force and rigid water — a deposited PDB to a runnable system.
 
 The third column is the notebook's actual configuration — 1L2Y in 688 TIP3P
 waters with 2 Na+ and 3 Cl-, under `protein.ff14SB.xml` plus
@@ -129,8 +141,6 @@ cannot reach the energy because epsilon is zero, but it is what the serialised
 
 ## Not built yet
 
-* **`addSolvent`** — padding, water models, ions, neutralisation. The gate is
-  the solvation statistics in the plan.
 * **Force fields beyond ff14SB.** ff99SB and ff99SB-ILDN are vendored and parse;
   neither has been run through a parity comparison.
 * **DHFR** as a third fixture, which the plan's gate names.
