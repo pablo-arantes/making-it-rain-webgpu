@@ -85,6 +85,7 @@ export default defineConfig({
         // index.html, so a page that is missing builds in development and is
         // silently absent from a production build -- which has happened twice.
         prepare: resolve(import.meta.dirname ?? ".", "web/prepare.html"),
+        analyse: resolve(import.meta.dirname ?? ".", "web/analyse.html"),
         validate: resolve(import.meta.dirname ?? ".", "web/validate.html"),
       },
     },

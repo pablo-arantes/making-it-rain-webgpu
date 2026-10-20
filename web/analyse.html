@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Analyse a trajectory — Making it Rain on WebGPU</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Analyse a trajectory</h1>
+      <p class="lede">
+        The notebook's analyses, on a trajectory from a run here or from
+        anywhere else that writes a DCD. Everything happens in this tab.
+      </p>
+      <p id="analyse-status" class="status" role="status">Ready.</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Trajectory</h2>
+        <p class="note">
+          A <code>.dcd</code> and the topology it belongs to. The topology
+          supplies the atom names, which is how the Cα atoms are found — a DCD
+          holds coordinates and nothing else.
+        </p>
+        <p>
+          <label for="file-dcd">Trajectory (<code>.dcd</code>)</label>
+          <input id="file-dcd" type="file" accept=".dcd" />
+        </p>
+        <p>
+          <label for="file-top">Topology (<code>.pdb</code>)</label>
+          <input id="file-top" type="file" accept=".pdb,.ent" />
+        </p>
+        <div id="trajectory-summary" class="panel">Nothing loaded yet.</div>
+        <p><button id="analyse" type="button" disabled>Analyse</button></p>
+      </section>
+
+      <section>
+        <h2>2. Cα RMSD</h2>
+        <p class="note">
+          Each frame best-fit onto the first over the Cα atoms, which is
+          <code>pt.rmsd(traj, ref=0, mask='@CA')</code>.
+        </p>
+        <div class="plots">
+          <canvas id="plot-rmsd" class="plot" height="190"></canvas>
+          <canvas id="plot-rmsd-kde" class="plot" height="190"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>3. Radius of gyration</h2>
+        <div class="plots">
+          <canvas id="plot-rg" class="plot" height="190"></canvas>
+          <canvas id="plot-rg-kde" class="plot" height="190"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Cα RMSF</h2>
+        <p class="note">
+          Fluctuation of each Cα about the mean structure, after superposing
+          every frame. cpptraj does not align inside <code>rmsf</code>; this
+          does, because the alternative measures the molecule tumbling.
+        </p>
+        <canvas id="plot-rmsf" class="plot" height="190"></canvas>
+      </section>
+
+      <section>
+        <h2>5. 2D RMSD</h2>
+        <p class="note">
+          Every frame against every other. Blocks along the diagonal are
+          conformational states; the scale is in nm.
+        </p>
+        <canvas id="plot-2d" class="plot square"></canvas>
+        <p id="scale-2d" class="note"></p>
+      </section>
+
+      <section>
+        <h2>6. Principal components</h2>
+        <p class="note">
+          PC1 against PC2, coloured by time — early frames dark, late frames
+          light. The eigenvalues say how much of the motion each component
+          carries.
+        </p>
+        <canvas id="plot-pca" class="plot" height="220"></canvas>
+        <p id="pca-summary" class="note"></p>
+      </section>
+
+      <section>
+        <h2>7. Cross-correlation</h2>
+        <p class="note">
+          Correlated motion between Cα pairs, −1 to 1. The scale is diverging
+          and centred on zero: anti-correlated regions are not weakly
+          correlated ones.
+        </p>
+        <canvas id="plot-correl" class="plot square"></canvas>
+      </section>
+
+      <section>
+        <h2>8. Take it away</h2>
+        <p class="note">
+          CSV for the numbers and PNG for the figures. The CSVs are what to
+          re-plot from; the PNGs are what the canvases show.
+        </p>
+        <div id="downloads" class="panel">Nothing computed yet.</div>
+      </section>
+    </main>
+
+    <footer>
+      <p class="note">
+        <a href="./index.html">GPU and precision checks</a> ·
+        <a href="./prepare.html">Prepare a system</a> ·
+        <a href="./run.html">Run a system</a>
+      </p>
+    </footer>
+    <script type="module" src="./analyse.ts"></script>
+  </body>
+</html>

@@ -422,5 +422,11 @@ What it still needs, in the order that unblocks the user story:
 3. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
    image in the solvation clash tests and in the engine's cell list.
 4. **DHFR** as a third protein fixture, and ff99SB through the same parity.
-5. The **protein analyses** (Cα RMSD, Rg, RMSF, 2D RMSD, PCA,
-   cross-correlation) and `prmtop`/`inpcrd` export.
+5. `prmtop`/`inpcrd` export.
+6. 🔴 **pytraj, for two gates.** It is not installed in any environment here,
+   and it is what the plan names for both the trajectory readers (it also
+   covers VMD, through cpptraj's use of VMD's `dcdplugin`) and the analyses.
+   The analyses are checked against MDTraj and NumPy instead, which shows they
+   match the stated definitions but not that they match *cpptraj's*
+   conventions. Running `tools/build_analysis_fixture.py` and
+   `tools/crossread_dcd.py` somewhere pytraj exists closes both.

@@ -79,6 +79,7 @@ facts up for the tools.
 | `web/index.html` | the GPU panel and the precision checks |
 | `web/prepare.html` | a PDB ID or an upload in, an OpenMM `System` out |
 | `web/run.html` | upload a system, verify it, run it, download the artefacts |
+| `web/analyse.html` | a DCD and its topology in, the notebook's figures out |
 | `web/validate.html` | every differential check against OpenMM, development only |
 
 All three are named inputs in `vite.config.ts`. 🔴 Vite discovers only

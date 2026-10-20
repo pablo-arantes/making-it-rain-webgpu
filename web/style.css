@@ -126,6 +126,13 @@ button:disabled {
   border-radius: 3px;
   background: var(--panel);
 }
+/* A matrix is square whatever the column is wide, and capped so a 2D RMSD of
+   a long run does not fill the page. */
+.plot.square {
+  height: auto;
+  aspect-ratio: 1;
+  max-width: 30rem;
+}
 progress {
   width: min(28rem, 60%);
   vertical-align: middle;
