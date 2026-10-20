@@ -159,6 +159,8 @@ cannot reach the energy because epsilon is zero, but it is what the serialised
 * **DHFR** as a third fixture, which the plan's gate names.
 * **`prmtop`/`inpcrd` export**, and the protein analyses (Cα RMSD, Rg, RMSF, 2D
   RMSD, PCA, cross-correlation).
-* **Cross-fed energies** — prepare here, evaluate in OpenMM, and the reverse.
-  The `System` comparison is stronger term by term, but it does not prove the
-  two agree on an energy, and that is the gate the plan asks for.
+Cross-fed energies now close the loop: a system prepared here, serialised, read
+by OpenMM and evaluated on double-precision Reference, agrees with this
+project's own reference implementation to 1.7e-16 on the bonded terms, 5.1e-12
+on the nonbonded group and 9.2e-12 on the total, with forces to 5.8e-9
+kJ/mol/nm. `tools/README.md` has the table and what makes the comparison fair.

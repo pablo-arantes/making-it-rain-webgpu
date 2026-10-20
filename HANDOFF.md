@@ -413,10 +413,6 @@ serialised `System` element for element, on 1L2Y and on T4 lysozyme.
 
 What it still needs, in the order that unblocks the user story:
 
-1. **Cross-fed energies**, which the plan names as a gate and the term-by-term
-   comparison does not replace: prepare here and evaluate in OpenMM, and the
-   reverse. Everything up to the `System` now matches element for element, so
-   this is the remaining question about whether the two agree on a *number*.
 2. **The UI for preparation.** The whole path works in `src/prep/` and nothing
    in `web/` calls it yet, so a user still has to upload a `system.xml`.
 3. **A non-rectangular box** (deviation 19), which needs a triclinic minimum

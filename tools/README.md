@@ -145,6 +145,45 @@ The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
 `spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
 `THIRD_PARTY.md`.
 
+## Cross-fed energies
+
+The plan's Phase 3 gate, and the one the term-by-term comparison does not
+replace: parameter parity shows the two engines assign the same numbers to the
+same terms, not that they agree on an energy.
+
+```sh
+# prepare a system here and write it out as OpenMM's own serialisation
+npx tsx tools/export_prepared.ts fixtures/1L2Y/receptor.pdb fixtures/crossfeed
+
+# have OpenMM read that file and evaluate it, per force group
+python tools/cross_feed_energy.py --system fixtures/crossfeed/system.xml \
+    --state fixtures/crossfeed/state.xml --out fixtures/crossfeed/energies.json
+```
+
+The system is deliberately the one with **no OpenMM counterpart**: 1L2Y with
+hydrogens this code placed and a water box this code filled, which OpenMM never
+built and so cannot be compared structurally.
+
+Measured on a 2400-atom box, against double-precision Reference:
+
+| force group | relative difference |
+| --- | --- |
+| HarmonicBondForce | 1.7e-16 |
+| HarmonicAngleForce | 8.8e-16 |
+| PeriodicTorsionForce | 1.6e-16 |
+| NonbondedForce (direct + reciprocal) | 5.1e-12 |
+| total | 9.2e-12 |
+| worst sampled force component | 5.8e-9 kJ/mol/nm |
+
+Three things make that comparison fair rather than approximate. Each force goes
+in its own group, because a total is a sum and a bonded term too high cancels a
+nonbonded term too low. The PME mesh is the one OpenMM actually used, asked for
+through `getPMEParametersInContext` — the Reference platform takes the exact
+minimum grid while the engine rounds up to a smooth FFT size, and comparing
+those compares two different meshes. And the exported system has no
+constraints, since a constrained bond is removed from the `HarmonicBondForce`
+and the two systems would have genuinely different bonded energies.
+
 ## Protein analyses
 
 ```sh
