@@ -55,7 +55,22 @@ python tools/dump_parameters.py --pdb fixtures/prep/1L2Y.pdb \
 # which template each residue matched, and the atom correspondence inside it
 python tools/dump_template_match.py --pdb fixtures/prep/1L2Y.pdb \
     --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/1L2Y-match.json
+
+# and the same three for the second fixture, T4 lysozyme
+python tools/build_prep_fixture.py --pdb fixtures/3HTB/receptor.pdb \
+    --out fixtures/prep/3HTB
+python tools/dump_parameters.py --pdb fixtures/prep/3HTB.pdb \
+    --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/3HTB-params.json
+python tools/dump_template_match.py --pdb fixtures/prep/3HTB.pdb \
+    --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/3HTB-match.json
 ```
+
+1L2Y is 20 residues with no histidine, no cysteine and no sulfur, so it cannot
+tell a rule that is right from one that is merely right for it. 3HTB's receptor
+is 163 residues and 2614 atoms with all twenty standard residues, and adds the
+cases that matter: HID against HIE, which share an element signature and are
+separated only by which ring nitrogen carries the proton, plus methionine's
+sulfur and 8842 torsions.
 
 The second dump exists because charges cannot distinguish two valid graph
 isomorphisms of a symmetric residue — tyrosine's CD1 and CD2 carry identical
