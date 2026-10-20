@@ -197,13 +197,32 @@ the RMSD with **MDTraj and** a NumPy SVD Kabsch fit, the rest from the formulae
 written out in the tool. Two superposition algorithms agreeing is evidence; one
 algorithm compared with itself is not.
 
-🔴 The plan's gate names **pytraj**, which is not installed in any environment
-here. So this shows the implementation matches the stated definitions and an
-independent implementation of them — not that it matches *cpptraj's*
-conventions. That matters where cpptraj is ambiguous: it does no alignment
-inside `rmsf` or `matrix.correl`, so `src/analysis/protein.ts` says what it
-does instead of inheriting an accident. Running this tool somewhere pytraj
-exists would close the gap.
+The plan's gate names **pytraj**, and that gate is now met:
+
+```sh
+# pytraj needs an env where it imports; `ambertools` here is an x86_64 build
+# that will not load on arm64, and `parametrizani_env` works
+~/miniforge3/envs/parametrizani_env/bin/python tools/pytraj_analyses.py \
+    --dcd fixtures/analysis/trajectory.dcd --pdb fixtures/1L2Y/system.pdb \
+    --out fixtures/analysis/pytraj.json
+```
+
+| analysis | agreement with pytraj |
+| --- | --- |
+| `pt.rmsd` | 5.9e-8 nm |
+| `pt.radgyr` | 4.8e-8 nm |
+| `pt.rmsf` (on an aligned trajectory) | 1.9e-8 nm |
+| `pt.pairwise_rmsd` | 7.3e-8 nm |
+| `pt.pca` eigenvalues | 6.4e-10 nm² |
+| `pt.pca` projections | exact, up to each eigenvector's sign |
+| `pytraj.matrix.correl` | 7.7e-7 |
+
+🔴 Two findings came out of running it, both recorded as deviations 20 and 21.
+`pt.rmsf` does no fitting, so the notebook's cell 42 measures tumbling as well
+as internal motion: on these frames the maximum is 0.0737 nm aligned against
+0.1636 nm raw, a factor of 2.2. And cpptraj's PCA eigenvector signs are
+whatever its solver produced — PC1 agrees in every frame here and PC2 is
+flipped in every frame, which is the same component and a mirrored axis.
 
 ## Trajectory readers
 

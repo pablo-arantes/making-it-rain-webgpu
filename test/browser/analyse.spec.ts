@@ -96,6 +96,15 @@ test.describe("the analysis page", () => {
     }
 
     await expect(page.locator("#pca-summary")).toContainText("PC1 carries");
+
+    // 🔴 Both analysis deviations must be on the page. AGENTS.md: the physics
+    // never changes silently, and "the RMSF here is 2.2x smaller than the
+    // notebook's because we align first" is exactly the kind of thing a user
+    // reading the plot has to be told rather than find in a document.
+    await expect(page.locator("main")).toContainText("Deviation 20");
+    await expect(page.locator("main")).toContainText("not the number the notebook plots");
+    await expect(page.locator("main")).toContainText("Deviation 21");
+    await expect(page.locator("main")).toContainText("mirrored");
     await expect(page.locator("#scale-2d")).toContainText("nm");
 
     const artefacts = (result?.artefacts ?? []).map((a) => a.name);

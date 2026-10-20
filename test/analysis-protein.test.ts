@@ -244,3 +244,120 @@ describe.skipIf(!existsSync(refPath))("the distribution and CSV exports", () => 
     expect(matrix).toBe("1,2\n3,4\n");
   });
 });
+
+const pytrajPath = "fixtures/analysis/pytraj.json";
+
+/**
+ * The plan's actual gate: pytraj, which is what the notebook runs.
+ *
+ * `reference.json` is NumPy from formulae written out by hand, which shows the
+ * implementation matches the stated definitions. This shows it matches
+ * **cpptraj's**, and those are different claims — cpptraj could normalise a
+ * covariance differently, or measure a fluctuation about a different mean, and
+ * nothing in the NumPy comparison would notice.
+ *
+ * pytraj is skipped unless `tools/pytraj_analyses.py` has been run, because it
+ * needs an environment where pytraj imports: on this machine that is
+ * `parametrizani_env`, and the `ambertools` env has an x86_64 build that will
+ * not load on arm64.
+ *
+ * Everything from cpptraj arrives in ångström and is converted in the tool.
+ */
+describe.skipIf(!existsSync(pytrajPath) || !present)("against pytraj", () => {
+  interface Pytraj {
+    readonly caIndices: readonly number[];
+    readonly rmsd: readonly number[];
+    readonly radiusOfGyration: readonly number[];
+    readonly rmsfAligned: readonly number[];
+    readonly rmsfRaw: readonly number[];
+    readonly pairwiseRmsd: readonly number[];
+    readonly pcaEigenvalues: readonly number[];
+    readonly pcaProjections: readonly number[];
+    readonly crossCorrelation: readonly number[];
+  }
+  const theirs = JSON.parse(readFileSync(pytrajPath, "utf8")) as Pytraj;
+  const trajectory = readDcd(new Uint8Array(readFileSync(dcdPath)));
+  const ca = caIndices(readPdb(readFileSync(pdbPath, "utf8")));
+
+  it("selects the same atoms cpptraj's '@CA' mask selects", () => {
+    expect([...ca]).toEqual([...theirs.caIndices]);
+  });
+
+  it("matches pt.rmsd, pt.radgyr and pt.pairwise_rmsd", () => {
+    expect(worst(rmsdSeries(trajectory, ca), theirs.rmsd).value).toBeLessThan(5e-7);
+    expect(
+      worst(radiusOfGyration(trajectory, ca), theirs.radiusOfGyration).value,
+    ).toBeLessThan(5e-7);
+    expect(
+      worst(pairwiseRmsd(trajectory, ca), theirs.pairwiseRmsd).value,
+    ).toBeLessThan(5e-7);
+  });
+
+  it("matches pt.rmsf on an aligned trajectory, and not on an unaligned one", () => {
+    // 🔴 This is the finding the pytraj gate exists to produce, and it is about
+    // the notebook rather than about this code.
+    //
+    // `pt.rmsf` does no fitting. Run on a trajectory superposed with
+    // `pt.superpose` it agrees with this implementation to 1.9e-8 nm. Run on
+    // the raw trajectory -- which is what the notebook's cell 42 does -- it
+    // differs by 0.11 nm, because it is then measuring the molecule tumbling
+    // rather than any internal fluctuation. On these 60 frames the maximum goes
+    // from 0.0737 nm aligned to 0.1636 nm raw, a factor of 2.2.
+    //
+    // This aligns. Deviation 20 records it, because it is a different number
+    // from the one the notebook plots and the user should be told which.
+    const ours = rmsf(trajectory, ca);
+    expect(worst(ours, theirs.rmsfAligned).value).toBeLessThan(5e-7);
+
+    const rawGap = worst(ours, theirs.rmsfRaw).value;
+    expect(rawGap).toBeGreaterThan(0.01);
+    expect(Math.max(...theirs.rmsfRaw) / Math.max(...theirs.rmsfAligned)).toBeGreaterThan(
+      1.5,
+    );
+  });
+
+  it("matches cpptraj's PCA eigenvalues, so the covariance convention agrees", () => {
+    // Normalised by the frame count, not by `frames - 1`: that choice moves
+    // these by 1.7% on 60 frames, and they agree to 1e-9.
+    const ours = pca(trajectory, ca, 2);
+    expect(
+      worst(ours.eigenvalues.slice(0, theirs.pcaEigenvalues.length), theirs.pcaEigenvalues)
+        .value,
+    ).toBeLessThan(1e-8);
+  });
+
+  it("matches the PCA projections up to the sign of each eigenvector", () => {
+    // 🔴 Compared up to sign, and that is correct rather than lenient. An
+    // eigenvector is defined only up to sign, so `+v` and `-v` describe the
+    // same component and the projections onto them differ by a factor of -1.
+    // Measured here: PC1 agrees in all 60 frames and PC2 is flipped in all 60.
+    //
+    // `jacobiEigen` fixes the sign deterministically, by making the
+    // largest-magnitude component positive, so this code's answer is at least
+    // reproducible -- cpptraj's is whatever its solver produced. The visible
+    // consequence is that a PC2 axis can be mirrored against the notebook's
+    // figure, which deviation 20 states.
+    const ours = pca(trajectory, ca, 2);
+    const frames = trajectory.frameCount;
+    for (const component of [0, 1]) {
+      let same = 0;
+      let flipped = 0;
+      for (let frame = 0; frame < frames; frame++) {
+        const mine = ours.projections[frame * 2 + component] as number;
+        const theirsValue = theirs.pcaProjections[frame * 2 + component] as number;
+        if (Math.abs(mine - theirsValue) < 5e-6) same++;
+        else if (Math.abs(mine + theirsValue) < 5e-6) flipped++;
+      }
+      // Every frame agrees one way or the other, consistently across frames --
+      // a mixture would mean the components themselves disagree.
+      expect(same + flipped, `PC${component + 1} disagrees beyond a sign`).toBe(frames);
+      expect(same === frames || flipped === frames).toBe(true);
+    }
+  });
+
+  it("matches pytraj.matrix.correl", () => {
+    expect(
+      worst(crossCorrelation(trajectory, ca), theirs.crossCorrelation).value,
+    ).toBeLessThan(5e-6);
+  });
+});

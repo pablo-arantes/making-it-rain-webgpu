@@ -157,6 +157,7 @@ cannot reach the energy because epsilon is zero, but it is what the serialised
 * **Force fields beyond ff14SB.** ff99SB and ff99SB-ILDN are vendored and parse;
   neither has been run through a parity comparison.
 * **DHFR** as a third fixture, which the plan's gate names.
+* **ff99SB** through the parity gate; only ff99SB-ILDN has been run.
 * **`prmtop`/`inpcrd` export**, and the protein analyses (Cα RMSD, Rg, RMSF, 2D
   RMSD, PCA, cross-correlation).
 Cross-fed energies now close the loop: a system prepared here, serialised, read

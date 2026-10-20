@@ -397,12 +397,15 @@ The 1 ns run passes: 43.4 minutes for 1L2Y through `web/run.html`, 100 reports,
 9 artefacts, served from the production build.
 `docs/measurements/gate-1ns-m3pro.json` has the numbers.
 
-🔴 **The trajectory gate is only partly met.** MDAnalysis and MDTraj agree to
-f32 round-off on a real 2373-particle DCD, but **pytraj is not installed in any
-environment on this machine**, and pytraj is what also covers VMD — cpptraj
-reads DCD through VMD's own `dcdplugin`. So "opens in pytraj and VMD" is
-unverified, not passing. Installing pytraj, or running
-`tools/crossread_dcd.py` somewhere that has it, closes this.
+The trajectory gate is met. MDTraj and pytraj agree to 2.9e-7 nm on a real
+2373-particle DCD, and pytraj's read is what covers VMD too — cpptraj goes
+through VMD's own `dcdplugin`, which announces `CHARMM format DCD file` on
+stderr as it does so.
+
+🔴 **pytraj needs the right environment.** `~/miniforge3/envs/ambertools` has an
+x86_64 build that will not load on arm64 (`incompatible architecture`);
+`parametrizani_env` works. Both `tools/crossread_dcd.py` and
+`tools/pytraj_analyses.py` want that interpreter.
 
 ## Next
 
@@ -419,10 +422,4 @@ What it still needs, in the order that unblocks the user story:
    image in the solvation clash tests and in the engine's cell list.
 4. **DHFR** as a third protein fixture, and ff99SB through the same parity.
 5. `prmtop`/`inpcrd` export.
-6. 🔴 **pytraj, for two gates.** It is not installed in any environment here,
-   and it is what the plan names for both the trajectory readers (it also
-   covers VMD, through cpptraj's use of VMD's `dcdplugin`) and the analyses.
-   The analyses are checked against MDTraj and NumPy instead, which shows they
-   match the stated definitions but not that they match *cpptraj's*
-   conventions. Running `tools/build_analysis_fixture.py` and
-   `tools/crossread_dcd.py` somewhere pytraj exists closes both.
+6. **ff99SB and ff99SB-ILDN beyond 1L2Y**, and a ligand — Phase 4.

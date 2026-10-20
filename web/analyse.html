@@ -61,8 +61,12 @@
         <h2>4. Cα RMSF</h2>
         <p class="note">
           Fluctuation of each Cα about the mean structure, after superposing
-          every frame. cpptraj does not align inside <code>rmsf</code>; this
-          does, because the alternative measures the molecule tumbling.
+          every frame.
+          <strong>This is not the number the notebook plots.</strong>
+          cpptraj's <code>rmsf</code> does no fitting, so the notebook's value
+          includes the molecule tumbling: on a 60-frame test the maximum was
+          0.0737 nm aligned against 0.1636 nm unaligned, a factor of 2.2.
+          Aligning is what an RMSF is normally read as meaning. Deviation 20.
         </p>
         <canvas id="plot-rmsf" class="plot" height="190"></canvas>
       </section>
@@ -82,7 +86,11 @@
         <p class="note">
           PC1 against PC2, coloured by time — early frames dark, late frames
           light. The eigenvalues say how much of the motion each component
-          carries.
+          carries, and agree with cpptraj to 6e-10 nm².
+          An axis may appear <em>mirrored</em> against the notebook's figure:
+          an eigenvector is defined only up to sign, so ±v are the same
+          component. The sign is fixed here so repeated runs agree, which
+          cpptraj's does not. Deviation 21.
         </p>
         <canvas id="plot-pca" class="plot" height="220"></canvas>
         <p id="pca-summary" class="note"></p>
