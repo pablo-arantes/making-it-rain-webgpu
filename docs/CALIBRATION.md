@@ -19,7 +19,17 @@ A T4 is the right machine because it is also where the notebook runs.
 
 ## What to do
 
-Six cells. The kernel restarts after the first one, which is normal.
+🔴 **No GitHub needed, and no clone.** An earlier draft of this file told you to
+`git clone https://github.com/pablo-arantes/making-it-rain-webgpu`. That repo
+does not exist — this checkout has no remote configured and all 59 commits are
+local — so that instruction could never have worked.
+
+It is also unnecessary. `tools/calibrate_thresholds.py` and
+`tools/build_reference_system.py` import nothing from this repository: only
+`numpy`, `openmm`, `pdbfixer` and (for a ligand) `rdkit`. Together they are 29
+kB. Upload those two files and you are done.
+
+Six cells. The kernel restarts after the second one, which is normal.
 
 ### 1. Check you actually have a GPU
 
@@ -48,15 +58,17 @@ re-run cell 2.
 !mamba install -q -y -c conda-forge openmm pdbfixer
 ```
 
-Takes a few minutes. `pdbfixer` is what builds the fixture; `openmm` brings the
-CUDA platform.
+A few minutes. `openmm` brings the CUDA platform; `pdbfixer` is what builds the
+fixture.
 
-### 4. The repository
+### 4. Upload the two scripts
 
 ```python
-!git clone -q https://github.com/pablo-arantes/making-it-rain-webgpu
-%cd making-it-rain-webgpu
+from google.colab import files
+files.upload()        # pick calibrate_thresholds.py and build_reference_system.py
 ```
+
+They land in `/content`, which is where the next two cells run.
 
 ### 5. Build a fixture
 
@@ -64,26 +76,25 @@ Fixtures are regenerated rather than committed, so there is nothing to
 calibrate against until this runs.
 
 ```python
-!python tools/build_reference_system.py --pdb-id 1L2Y --out fixtures/
+!python build_reference_system.py --pdb-id 1L2Y --out fixtures/
 ```
 
-That is the protein-only case: about 2,373 atoms, a couple of minutes, and it
-needs nothing beyond `openmm` and `pdbfixer`.
+The protein-only case: about 2,373 atoms, a couple of minutes, and it needs
+nothing beyond `openmm` and `pdbfixer`. It downloads 1L2Y from the RCSB itself.
 
 ### 6. Calibrate
 
 ```python
-!python tools/calibrate_thresholds.py fixtures/1L2Y/system.xml \
-    fixtures/1L2Y/state.xml --out docs/measurements/calibration-T4.json
+!python calibrate_thresholds.py fixtures/1L2Y/system.xml \
+    fixtures/1L2Y/state.xml --out calibration-T4.json
 ```
 
-Then read it back and download it:
+Then read the headline numbers and download the file:
 
 ```python
-import json; print(json.dumps(
-    json.load(open("docs/measurements/calibration-T4.json"))["proposed_thresholds"],
-    indent=1))
-from google.colab import files; files.download("docs/measurements/calibration-T4.json")
+import json
+print(json.dumps(json.load(open("calibration-T4.json"))["proposed_thresholds"], indent=1))
+files.download("calibration-T4.json")
 ```
 
 ## What it should print
@@ -109,9 +120,9 @@ than the platform.
 
 ## Afterwards
 
-Send me the JSON, or commit it — `docs/measurements/calibration-T4.json` is the
-intended home — and the `proposed_thresholds` block goes into `AGENTS.md`,
-**named with the GPU that produced it**. That is the change that turns the
+Send me the JSON. Its home in the repository is
+`docs/measurements/calibration-T4.json`, and the `proposed_thresholds` block
+goes into `AGENTS.md`, **named with the GPU that produced it**. That is the change that turns the
 numbers in this repository from self-consistent into validated, and it lets the
 provisional markers come out.
 
@@ -122,9 +133,9 @@ provisional markers come out.
 
 ```python
 !mamba install -q -y -c conda-forge openff-toolkit openmmforcefields rdkit parmed
-!python tools/build_reference_system.py --pdb-id 3HTB --ligand JZ4 --out fixtures/
-!python tools/calibrate_thresholds.py fixtures/3HTB/system.xml \
-    fixtures/3HTB/state.xml --out docs/measurements/calibration-T4-3HTB.json
+!python build_reference_system.py --pdb-id 3HTB --ligand JZ4 --out fixtures/
+!python calibrate_thresholds.py fixtures/3HTB/system.xml \
+    fixtures/3HTB/state.xml --out calibration-T4-3HTB.json
 ```
 
 🔴 Budget for this. The `CPU` row runs 25,000 NVE steps on 26,700 atoms, which
