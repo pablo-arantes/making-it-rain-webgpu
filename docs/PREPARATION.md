@@ -14,6 +14,8 @@ yet. Every number is produced by `test/prep-*.test.ts` against fixtures from
 ```
 PDB text
   -> readPdb              src/analysis/pdb.ts
+  -> stripAtoms           src/prep/hydrogens.ts  drop water and any hydrogens
+  -> addHydrogens         src/prep/hydrogens.ts  variants, then the missing H
   -> inferBonds           src/prep/bonds.ts      standard + disulfide + CONECT
   -> matchResidues        src/prep/template.ts   graph matching, not by name
   -> assignAtoms          src/prep/assign.ts     mass, charge, sigma, epsilon
@@ -44,6 +46,15 @@ Both fixtures are proteins with explicit hydrogens and no solvent, built by
 | every force in the built `System` | identical, in index order | identical, in index order | identical, in index order |
 | unmatched terms | 0 | 0 | 0 |
 | ambiguous parameter rows | 0 | 0 | 0 |
+
+Hydrogen addition is compared separately, rebuilding from the deposited
+receptor with water and all hydrogens removed — the same starting point OpenMM
+is given. The variant chosen per residue, the full atom list in order, and every
+bond match atom for atom on both proteins (1L2Y 154→304 atoms, 3HTB 1301→2614),
+and the `System` built from *our* hydrogens is identical to the one OpenMM built
+from *its own*, since parameters do not depend on where a hydrogen sits. That
+closes the path from a deposited PDB to a runnable system. Positions are
+deviation 16; the unreachable HID/HIE rule is deviation 17.
 
 The third column is the notebook's actual configuration — 1L2Y in 688 TIP3P
 waters with 2 Na+ and 3 Cl-, under `protein.ff14SB.xml` plus
@@ -118,13 +129,6 @@ cannot reach the energy because epsilon is zero, but it is what the serialised
 
 ## Not built yet
 
-* **`addHydrogens`.** A PDB from the RCSB has none, so this blocks the "give a
-  PDB ID and run" path. *Which* hydrogens are added and their names and order
-  are deterministic and will be compared against OpenMM. Their **positions**
-  will not be: OpenMM places them approximately and then energy-minimises them,
-  so matching its positions means reproducing that minimisation. That belongs in
-  `docs/DEVIATIONS.md` when the code lands, since the user minimises afterwards
-  regardless.
 * **`addSolvent`** — padding, water models, ions, neutralisation. The gate is
   the solvation statistics in the plan.
 * **Force fields beyond ff14SB.** ff99SB and ff99SB-ILDN are vendored and parse;

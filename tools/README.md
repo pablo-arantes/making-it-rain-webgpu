@@ -108,6 +108,27 @@ positions, which makes candidate order reach the result.
 All three are regenerated, never committed; `test/prep-*.test.ts` skip
 themselves and say so when they are absent.
 
+## Hydrogens
+
+```sh
+# what Modeller.addHydrogens produced: variants, atoms, bonds
+python tools/dump_hydrogens.py --pdb fixtures/1L2Y/receptor.pdb \
+    --out fixtures/prep/1L2Y-hydrogens.json
+python tools/dump_hydrogens.py --pdb fixtures/3HTB/receptor.pdb \
+    --out fixtures/prep/3HTB-hydrogens.json
+```
+
+Hydrogens and water are stripped first, so the comparison is against what
+OpenMM builds from heavy atoms rather than against whatever the depositor named
+their hydrogens.
+
+The dump records no positions, deliberately. OpenMM places each hydrogen at its
+parent plus a `random.random()` offset and then minimises the set, so it does
+not reproduce its own hydrogen positions between runs; there is nothing there to
+compare. See deviations 16 and 17 in `docs/DEVIATIONS.md` — the second is that
+OpenMM's documented HID/HIE hydrogen-bond rule is unreachable code and always
+yields HID.
+
 ## Trajectory readers
 
 ```sh
