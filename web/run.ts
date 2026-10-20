@@ -147,6 +147,17 @@ async function readFiles(): Promise<boolean> {
         ? " No PDB, so no final-frame files."
         : " Final frames will be written as PDB.") +
       "</p>";
+    // 🔴 The status line is set once, at start-up, and said "Nothing is
+    // uploaded." for the rest of the session however many files you loaded.
+    // That is a one-line UI bug with a disproportionate cost: it appears in
+    // Playwright's failure snapshots, where it reads as proof that the upload
+    // never happened, and it sent one investigation of a timed-out run down
+    // the wrong path entirely. A status line that can be stale is worse than
+    // no status line.
+    setStatus(
+      `${system.particleCount.toLocaleString("en-US")} particles loaded and ready to run.`,
+      "ok",
+    );
     return true;
   } catch (error) {
     summary.innerHTML = `<p class="bad-box">${

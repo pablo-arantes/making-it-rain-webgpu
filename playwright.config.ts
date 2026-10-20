@@ -25,26 +25,28 @@ export default defineConfig({
     channel: "chrome",
     launchOptions: { args: ["--enable-unsafe-webgpu"] },
   },
-  // 🔴 The long gate runs against the **built** page, not the dev server, and
-  // this is not a preference.
+  // The long gate runs against the **built** page rather than the dev server.
   //
-  // The dev server watches `src/`, and the run page imports the engine straight
-  // out of it. Editing any file in that graph while a run is in flight -- which
-  // during a 90-minute gate is likely -- invalidates the module, and with no
-  // HMR handlers Vite falls back to a full page reload. That wipes the uploaded
-  // files and the form, so the run simply stops, `__mirRun.state` never reaches
-  // `done`, and the gate times out with a page snapshot showing default form
-  // values and "Nothing is uploaded". It looks like the engine hung. It is the
-  // page having been reloaded underneath it.
+  // Two reasons, and the weaker one is listed second on purpose. The dev server
+  // watches `src/`, and the run page imports the engine straight out of it
+  // (`web/run.ts` -> `src/engine/protocol.ts` -> `src/analysis/pdb.ts`). Editing
+  // a file in that graph invalidates the module, and with no HMR handlers Vite
+  // falls back to a full page reload -- which during a 90-minute run would drop
+  // the uploaded files and stop it dead. A gate that long should not share a
+  // file watcher with someone's editor. Second, it exercises the artefact users
+  // actually get, which CLAUDE.md notes is a distinct thing: a page missing from
+  // `vite.config.ts` builds in development and vanishes from a production build.
   //
-  // That happened. `vite preview` serves static files with no watcher, so it
-  // cannot happen again, and it has the side benefit of testing the artefact
-  // users actually get -- which CLAUDE.md notes is a distinct thing, since a
-  // page missing from `vite.config.ts` builds in development and vanishes from
-  // a production build.
+  // 🔴 This is *not* a diagnosed fix for a specific failure. One 90-minute gate
+  // did time out while `src/analysis/pdb.ts` was edited mid-run, and the reload
+  // is a plausible cause -- but it was never established. The evidence first
+  // cited for it, a snapshot reading "Nothing is uploaded", turned out to be a
+  // status line that was set once at start-up and never updated; a healthy
+  // running run shows the identical string. The page has since been fixed, and
+  // the cause of that timeout remains unknown.
   //
-  // `reuseExistingServer` is off for the gate too: attaching to a dev server
-  // someone left running would silently undo all of this.
+  // `reuseExistingServer` is off for the gate: attaching to a dev server
+  // someone left running would silently undo the first reason.
   webServer:
     process.env["MIR_LONG_RUN"] === "1"
       ? {

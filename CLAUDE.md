@@ -87,20 +87,31 @@ development and is **silently missing from a production build**.
 `MIR_LONG_RUN=1 npx playwright test -g nanosecond` runs the plan's 1 ns gate,
 about 38 minutes at the measured 38 ns/day. It is skipped otherwise.
 
-🔴 **The long gate runs against the built page, and editing `src/` during any
-browser run kills it.** The dev server watches `src/`, and `web/run.ts` imports
-the engine straight out of it — `run.ts` → `engine/protocol.ts` →
-`analysis/pdb.ts`, for one real example. Touch anything in that graph while a
-run is in flight and Vite invalidates the module; with no HMR handlers it falls
-back to a **full page reload**, which wipes the uploaded files and the form. The
-run stops, `__mirRun.state` never reaches `done`, and the gate times out 90
-minutes later with a snapshot showing default form values and "Nothing is
-uploaded" — which reads exactly like the engine hanging.
+🔴 **Do not edit `src/` while a browser run is in flight.** The dev server
+watches it, and `web/run.ts` imports the engine straight out of it — `run.ts` →
+`engine/protocol.ts` → `analysis/pdb.ts`, for one real example. Touching
+anything in that graph invalidates the module, and with no HMR handlers Vite
+falls back to a **full page reload**, which drops the uploaded files and the
+form. `playwright.config.ts` serves the long gate from `vite preview` instead,
+which has no watcher; the ordinary `npm run test:browser` lane still uses the
+dev server.
 
-This cost one 90-minute gate. `playwright.config.ts` now serves the gate from
-`vite preview`, which has no watcher, so it cannot recur there. The ordinary
-`npm run test:browser` lane still uses the dev server, so **do not edit `src/`
-while it is running** either.
+🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
+about 1% renderer CPU and accumulates a few seconds over many minutes — the work
+is on the GPU and the loop batches steps per submission. A stalled page looks
+identical. One gate was killed early on exactly this misreading. The real signal
+is `window.__mirRun` and the progress element:
+
+```js
+await page.evaluate(() => window.__mirRun)   // state, stages, reports, artefacts
+await page.locator("progress").getAttribute("value")   // steps completed
+```
+
+Measured on this machine, 1L2Y through `web/run.html`: **about 208 steps/s**,
+5000-step reports roughly every 24 s, so 1 ns at a 2 fs timestep is **~40
+minutes** — against the test's 90-minute budget. Minimisation comes first and
+shows `progress=0` for its duration, which is about 40 s at the default 10000
+steps.
 
 ## Capturing measurements
 
