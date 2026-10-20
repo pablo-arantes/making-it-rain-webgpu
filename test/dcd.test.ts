@@ -15,7 +15,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { DcdWriter, DCD_HEADER_BYTES, AKMA_PICOSECONDS } from "../src/analysis/dcd.js";
+import {
+  AKMA_PICOSECONDS,
+  DCD_HEADER_BYTES,
+  DcdFormatError,
+  DcdWriter,
+  readDcd,
+} from "../src/analysis/dcd.js";
 import { readNpy } from "./npy.js";
 import type { Vec3 } from "../src/engine/system.js";
 
@@ -152,5 +158,99 @@ describe.skipIf(!present)("DcdWriter", () => {
     expect(writer.frameBytes).toBe(3 * (8 + 2 * 4));
     expect(new DataView(writer.header().buffer).getInt32(48, true)).toBe(0);
     expect(writer.frame(new Float64Array(6)).length).toBe(writer.frameBytes);
+  });
+});
+
+describe("reading a DCD back", () => {
+  /**
+   * The writer existed first and that was enough while other people's tools
+   * did the reading. The analyses changed it: Cα RMSD and the rest run over a
+   * trajectory this code wrote.
+   *
+   * The round trip is the cheap test. The one with teeth is against a file
+   * **OpenMM wrote**, because a writer and a reader wrong in the same way
+   * round-trip perfectly — the same argument as for `System` XML.
+   */
+  it("round-trips what the writer produced", () => {
+    const particleCount = 7;
+    const writer = new DcdWriter({
+      particleCount,
+      timeStep: 0.002,
+      interval: 250,
+      firstStep: 1000,
+      periodic: true,
+    });
+    const frames = 4;
+    const positions: Float64Array[] = [];
+    const boxes: Vec3[] = [];
+    const parts: Uint8Array[] = [writer.header()];
+    for (let frame = 0; frame < frames; frame++) {
+      const p = new Float64Array(particleCount * 3);
+      for (let i = 0; i < p.length; i++) p[i] = Math.sin(i + frame) * 2;
+      const box: Vec3 = [3 + frame * 0.01, 4, 5];
+      positions.push(p);
+      boxes.push(box);
+      parts.push(writer.frame(p, box));
+    }
+    const total = parts.reduce((n, part) => n + part.length, 0);
+    const file = new Uint8Array(total);
+    let at = 0;
+    for (const part of parts) {
+      file.set(part, at);
+      at += part.length;
+    }
+    writer.patch(file);
+
+    const read = readDcd(file);
+    expect(read.particleCount).toBe(particleCount);
+    expect(read.frameCount).toBe(frames);
+    expect(read.firstStep).toBe(1000);
+    expect(read.interval).toBe(250);
+    expect(read.periodic).toBe(true);
+    expect(read.timeStep).toBeCloseTo(0.002, 6);
+    for (let frame = 0; frame < frames; frame++) {
+      for (let i = 0; i < particleCount * 3; i++) {
+        // f32 on disk, so this is the storage precision, not the reader's.
+        expect(read.positions[frame * particleCount * 3 + i]).toBeCloseTo(
+          positions[frame]![i]!,
+          5,
+        );
+      }
+      for (let axis = 0; axis < 3; axis++) {
+        expect(read.boxes[frame * 3 + axis]).toBeCloseTo(boxes[frame]![axis]!, 6);
+      }
+    }
+  });
+
+  it("refuses a file it would otherwise misread", () => {
+    // 🔴 These are the failures that matter. A DCD read with the wrong
+    // endianness, or with the unit-cell flag misjudged, does not throw -- it
+    // yields coordinates that are merely wrong, which ruins an analysis
+    // silently. The Fortran record markers are the only thing that tells the
+    // two apart, so they are checked rather than skipped.
+    expect(() => readDcd(new Uint8Array(8))).toThrow(DcdFormatError);
+
+    const header = new DcdWriter({
+      particleCount: 3,
+      timeStep: 0.002,
+      interval: 1,
+      firstStep: 0,
+      periodic: false,
+    }).header();
+
+    const bigEndian = Uint8Array.from(header);
+    new DataView(bigEndian.buffer).setInt32(0, 84, false);
+    expect(() => readDcd(bigEndian)).toThrow(/big-endian/);
+
+    const noMagic = Uint8Array.from(header);
+    noMagic[4] = 0x58;
+    expect(() => readDcd(noMagic)).toThrow(/CORD/);
+
+    const xplor = Uint8Array.from(header);
+    new DataView(xplor.buffer).setInt32(84, 0, true);
+    expect(() => readDcd(xplor)).toThrow(/X-PLOR/);
+
+    // A header with no frames after it.
+    expect(() => readDcd(header)).toThrow(/no complete frame/);
   });
 });

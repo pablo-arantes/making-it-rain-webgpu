@@ -252,3 +252,178 @@ export class DcdWriter {
     for (const { offset, bytes } of this.headerPatches()) file.set(bytes, offset);
   }
 }
+
+export interface DcdTrajectory {
+  readonly particleCount: number;
+  readonly frameCount: number;
+  /** The step the first frame was written at. */
+  readonly firstStep: number;
+  /** Steps between frames. */
+  readonly interval: number;
+  /** ps */
+  readonly timeStep: number;
+  readonly periodic: boolean;
+  /** nm, `frameCount * particleCount * 3`, xyz interleaved per frame. */
+  readonly positions: Float32Array;
+  /** nm, three edge lengths per frame; empty when the file has no boxes. */
+  readonly boxes: Float64Array;
+}
+
+export class DcdFormatError extends Error {
+  constructor(detail: string) {
+    super(
+      `this does not look like a DCD this reader can handle: ${detail}. ` +
+        "The format is a Fortran-record file and the records carry their own " +
+        "lengths, so a mismatch is caught here rather than producing " +
+        "plausible coordinates.",
+    );
+    this.name = "DcdFormatError";
+  }
+}
+
+/**
+ * Read a DCD back.
+ *
+ * The writer existed first, and for a while that was enough: trajectories went
+ * out to a file and other people's tools read them. The analyses changed that
+ * — Cα RMSD and the rest run over a trajectory this code wrote, so it has to
+ * be able to read one.
+ *
+ * Deliberately strict. Every Fortran record carries its own byte count twice,
+ * once before and once after, and this checks both. A DCD read with the wrong
+ * endianness, or with the unit-cell flag misjudged, does not fail — it yields
+ * coordinates that are merely wrong, which is the failure mode that ruins an
+ * analysis quietly. The markers are the only thing that distinguishes the two
+ * cases, so they are checked rather than skipped.
+ *
+ * Only the little-endian, CHARMM-24 dialect OpenMM writes is accepted. A
+ * big-endian or pre-CHARMM file is refused by name instead of being
+ * misinterpreted.
+ */
+export function readDcd(file: Uint8Array): DcdTrajectory {
+  const view = new DataView(file.buffer, file.byteOffset, file.byteLength);
+  if (file.byteLength < DCD_HEADER_BYTES) {
+    throw new DcdFormatError(`only ${file.byteLength} bytes, less than a header`);
+  }
+
+  const first = view.getInt32(0, true);
+  if (first !== 84) {
+    // A big-endian file has 84 in the other byte order, which is a huge
+    // little-endian number -- worth naming, since it is the common case.
+    const swapped = view.getInt32(0, false);
+    throw new DcdFormatError(
+      swapped === 84
+        ? "the leading record marker is big-endian; only the little-endian " +
+          "dialect OpenMM writes is supported"
+        : `the leading record marker is ${first}, not 84`,
+    );
+  }
+  const magic = String.fromCharCode(file[4]!, file[5]!, file[6]!, file[7]!);
+  if (magic !== "CORD") throw new DcdFormatError(`the magic is "${magic}", not "CORD"`);
+
+  const frameCount = view.getInt32(8, true);
+  const firstStep = view.getInt32(12, true);
+  const interval = view.getInt32(16, true);
+  const delta = view.getFloat32(44, true);
+  const periodic = view.getInt32(48, true) !== 0;
+  const charmm = view.getInt32(84, true);
+  if (charmm === 0) {
+    throw new DcdFormatError(
+      "the CHARMM version word is zero, which marks an X-PLOR style file whose " +
+        "header is laid out differently",
+    );
+  }
+  if (view.getInt32(88, true) !== 84) {
+    throw new DcdFormatError("the header's closing record marker is not 84");
+  }
+
+  // The title record, whose length is declared rather than assumed: OpenMM
+  // writes two 80-character lines, but the format allows any number.
+  const titleBytes = view.getInt32(92, true);
+  let at = 96 + titleBytes;
+  if (view.getInt32(at, true) !== titleBytes) {
+    throw new DcdFormatError("the title record's two markers disagree");
+  }
+  at += 4;
+
+  if (view.getInt32(at, true) !== 4) {
+    throw new DcdFormatError("the atom-count record is not four bytes long");
+  }
+  const particleCount = view.getInt32(at + 4, true);
+  if (particleCount <= 0) throw new DcdFormatError(`${particleCount} particles`);
+  at += 12;
+
+  const coordinateBytes = 4 * particleCount;
+  const perFrame = 3 * (coordinateBytes + 8) + (periodic ? 56 : 0);
+  const available = file.byteLength - at;
+  const frames = Math.floor(available / perFrame);
+  if (frames === 0) {
+    throw new DcdFormatError(
+      `no complete frame: ${available} bytes left but a frame needs ${perFrame}`,
+    );
+  }
+
+  // 🔴 The header's frame count is trusted only as far as the file supports.
+  // A run killed mid-write leaves NSET claiming more frames than were flushed,
+  // and reading past the end would fabricate the last one. OpenMM's own
+  // reporter patches NSET after each frame, so the two normally agree.
+  const count = frameCount > 0 ? Math.min(frameCount, frames) : frames;
+
+  const positions = new Float32Array(count * particleCount * 3);
+  const boxes = periodic ? new Float64Array(count * 3) : new Float64Array(0);
+  const fromAngstrom = 1 / TO_ANGSTROM;
+
+  for (let frame = 0; frame < count; frame++) {
+    if (periodic) {
+      if (view.getInt32(at, true) !== 48) {
+        throw new DcdFormatError(
+          `frame ${frame}'s unit-cell record is not 48 bytes; the header says ` +
+            "each frame carries a box",
+        );
+      }
+      at += 4;
+      // [a, cos gamma, b, cos beta, cos alpha, c].
+      const a = view.getFloat64(at, true);
+      const b = view.getFloat64(at + 16, true);
+      const c = view.getFloat64(at + 40, true);
+      boxes[frame * 3] = a * fromAngstrom;
+      boxes[frame * 3 + 1] = b * fromAngstrom;
+      boxes[frame * 3 + 2] = c * fromAngstrom;
+      at += 48;
+      if (view.getInt32(at, true) !== 48) {
+        throw new DcdFormatError(`frame ${frame}'s unit-cell record markers disagree`);
+      }
+      at += 4;
+    }
+    for (let axis = 0; axis < 3; axis++) {
+      if (view.getInt32(at, true) !== coordinateBytes) {
+        throw new DcdFormatError(
+          `frame ${frame} axis ${axis}: the record marker is ` +
+            `${view.getInt32(at, true)}, not ${coordinateBytes}. The atom count ` +
+            "in the header and the frame records do not agree",
+        );
+      }
+      at += 4;
+      const base = frame * particleCount * 3;
+      for (let i = 0; i < particleCount; i++) {
+        positions[base + i * 3 + axis] = view.getFloat32(at, true) * fromAngstrom;
+        at += 4;
+      }
+      if (view.getInt32(at, true) !== coordinateBytes) {
+        throw new DcdFormatError(`frame ${frame} axis ${axis}: markers disagree`);
+      }
+      at += 4;
+    }
+  }
+
+  return {
+    particleCount,
+    frameCount: count,
+    firstStep,
+    interval,
+    timeStep: delta * AKMA_PICOSECONDS,
+    periodic,
+    positions,
+    boxes,
+  };
+}

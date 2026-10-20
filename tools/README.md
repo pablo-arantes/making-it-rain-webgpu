@@ -145,6 +145,27 @@ The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
 `spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
 `THIRD_PARTY.md`.
 
+## Protein analyses
+
+```sh
+python tools/build_analysis_fixture.py --system fixtures/1L2Y/system.xml \
+    --state fixtures/1L2Y/state.xml --pdb fixtures/1L2Y/system.pdb \
+    --out fixtures/analysis
+```
+
+Runs 60 frames of Langevin dynamics and computes every analysis independently:
+the RMSD with **MDTraj and** a NumPy SVD Kabsch fit, the rest from the formulae
+written out in the tool. Two superposition algorithms agreeing is evidence; one
+algorithm compared with itself is not.
+
+🔴 The plan's gate names **pytraj**, which is not installed in any environment
+here. So this shows the implementation matches the stated definitions and an
+independent implementation of them — not that it matches *cpptraj's*
+conventions. That matters where cpptraj is ambiguous: it does no alignment
+inside `rmsf` or `matrix.correl`, so `src/analysis/protein.ts` says what it
+does instead of inheriting an accident. Running this tool somewhere pytraj
+exists would close the gap.
+
 ## Trajectory readers
 
 ```sh
