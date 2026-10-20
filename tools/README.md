@@ -65,6 +65,13 @@ python tools/dump_template_match.py --pdb fixtures/prep/3HTB.pdb \
     --forcefield amber14/protein.ff14SB.xml --out fixtures/prep/3HTB-match.json
 ```
 
+Pass `--system-out fixtures/prep/<name>-system.xml` to `dump_parameters.py` as
+well, which serialises the `System` itself. That file is what
+`test/prep-system.test.ts` compares against, and it is a stronger test than the
+JSON dump: the engine contract *is* `System` XML, so comparing against the file
+the engine consumes catches anything a summary of it would smooth over — the
+bond ordering did exactly that.
+
 1L2Y is 20 residues with no histidine, no cysteine and no sulfur, so it cannot
 tell a rule that is right from one that is merely right for it. 3HTB's receptor
 is 163 residues and 2614 atoms with all twenty standard residues, and adds the

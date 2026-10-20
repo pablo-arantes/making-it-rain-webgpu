@@ -70,7 +70,14 @@ describe.skipIf(!present)("the preparation path's topology", () => {
   it("reconstructs exactly OpenMM's bonds", () => {
     const ours = inferBonds(pdb!, table);
     const theirs = dump!.topology.bonds;
-    const key = (pair: readonly [number, number]): string => `${pair[0]}-${pair[1]}`;
+    // Unordered pairs: `tools/dump_parameters.py` canonicalises its topology
+    // bonds to (min, max) while `inferBonds` keeps the direction the bond table
+    // names, because a built `System` holds bonds in the order and direction
+    // they were added. Direction and order are compared in
+    // test/prep-system.test.ts, against the serialised System itself; this
+    // test is about which bonds exist.
+    const key = (pair: readonly [number, number]): string =>
+      `${Math.min(pair[0], pair[1])}-${Math.max(pair[0], pair[1])}`;
     const oursSet = new Set(ours.map(key));
     const theirsSet = new Set(theirs.map((p) => key(p)));
     const extra = [...oursSet].filter((k) => !theirsSet.has(k));

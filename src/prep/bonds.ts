@@ -60,18 +60,37 @@ const CYSTEINE_NAMES = new Set(["CYS", "CYX", "CYM"]);
 /**
  * Every bond in a PDB: standard, disulfide, and whatever CONECT asserted.
  *
- * Returned as a sorted list of index pairs with the lower index first, so two
- * correct implementations produce the same list regardless of the order they
- * found things in.
+ * 🔴 Returned in **OpenMM's order and direction**, not sorted. That is a
+ * deliberate reversal of how this started, and the reason is the engine
+ * contract. A `HarmonicBondForce` holds its bonds in the order they were
+ * added, and preparation in the browser is supposed to arrive at the same
+ * `System` the notebook would -- not at one with the same bonds in a different
+ * order. With a sorted list, every force in a built `System` matched OpenMM's
+ * element for element except the bonds, which differed in index order only.
+ *
+ * So this follows `Topology.createStandardBonds` exactly: chain by chain,
+ * residue by residue, and within a residue the order the bonds appear in
+ * `residues.xml`, each one in the direction the table names it, then the
+ * disulfides, then CONECT -- which is the sequence `PDBFile` applies.
+ *
+ * Order carries no physics; the energy is a sum either way. It carries
+ * comparability, which is what the validation strategy runs on.
  */
 export function inferBonds(
   topology: PdbTopology,
   table: StandardBondTable,
 ): readonly (readonly [number, number])[] {
-  const bonds = new Set<string>();
+  // A list for the order and a set for the duplicate test, because OpenMM
+  // keeps both: `existingBonds` suppresses a repeat while `_bonds` keeps the
+  // sequence.
+  const bonds: [number, number][] = [];
+  const seen = new Set<string>();
   const add = (a: number, b: number): void => {
     if (a === b) return;
-    bonds.add(a < b ? `${a},${b}` : `${b},${a}`);
+    const key = a < b ? `${a},${b}` : `${b},${a}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    bonds.push([a, b]);
   };
 
   // --- Standard bonds, chain by chain ------------------------------------
@@ -121,8 +140,7 @@ export function inferBonds(
       if (!SULFUR_NAMES.has(entry.name)) continue;
       // A sulfur already carrying a hydrogen is a free thiol, not half a
       // disulfide, and OpenMM uses the same test.
-      const hasHydrogen = [...bonds].some((key) => {
-        const [a, b] = key.split(",").map(Number) as [number, number];
+      const hasHydrogen = bonds.some(([a, b]) => {
         const other = a === atom ? b : b === atom ? a : -1;
         return other >= 0 && (topology.atoms[other] as { element: string }).element === "H";
       });
@@ -150,7 +168,5 @@ export function inferBonds(
   // repeating a standard bond must not create a duplicate.
   for (const [a, b] of topology.conect) add(a, b);
 
-  return [...bonds]
-    .map((key) => key.split(",").map(Number) as [number, number])
-    .sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  return bonds;
 }

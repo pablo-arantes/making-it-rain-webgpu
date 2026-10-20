@@ -45,6 +45,13 @@ def main() -> None:
     parser.add_argument("--pdb", required=True, type=pathlib.Path)
     parser.add_argument("--forcefield", nargs="+", required=True)
     parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--system-out",
+        type=pathlib.Path,
+        help="also serialise the System itself. The engine's contract is "
+        "System XML, so a reimplementation that can build one has to be "
+        "compared against the file rather than only against this dump.",
+    )
     args = parser.parse_args()
 
     pdb = app.PDBFile(str(args.pdb))
@@ -149,6 +156,10 @@ def main() -> None:
             dump.setdefault("other_forces", []).append(kind)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    if args.system_out is not None:
+        args.system_out.write_text(openmm.XmlSerializer.serialize(system))
+        print(f"  wrote {args.system_out}")
+
     (args.out.with_suffix(".json")).write_text(json.dumps(dump, indent=1))
     counts = {k: len(v) for k, v in dump.items() if isinstance(v, list)}
     print(f"  {dump['atoms']} atoms, {len(dump['topology']['bonds'])} topology bonds")
