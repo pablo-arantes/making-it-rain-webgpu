@@ -38,6 +38,7 @@ import {
   validateProtocol,
   type ProtocolComparison,
 } from "../src/gpu/validate-protocol.js";
+import { validatePbc, type PbcComparison } from "../src/gpu/validate-pbc.js";
 
 declare global {
   interface Window {
@@ -51,6 +52,7 @@ declare global {
     __mirRestraint?: RestraintComparison | { error: string };
     __mirBarostat?: BarostatComparison | { error: string };
     __mirProtocol?: ProtocolComparison | { error: string };
+    __mirPbc?: PbcComparison | { error: string };
   }
 }
 
@@ -178,6 +180,41 @@ function renderIntegrators(report: IntegratorReport): string {
         r.kineticEnergyRelativeError,
       )} relative.
       <span class="badge ${report.ok ? "ok" : "bad"}">${report.ok ? "pass" : "fail"}</span>
+    </p>`;
+}
+
+function renderPbc(p: PbcComparison): string {
+  return `<h2>Periodic boundaries</h2><p class="note">
+      Measured as invariances rather than audited by reading. The box is
+      ${p.box.map((v) => v.toFixed(3)).join(" x ")} nm with a ${p.cutoff} nm
+      cutoff, so the minimum image is meaningful out to
+      ${p.minimumImageLimit.toFixed(3)} nm. The fixture's own coordinates have
+      ${p.inputIntact ? "intact" : "SPLIT"} molecules, the longest bonded
+      separation being ${p.inputWorstBondedSeparation.toFixed(3)} nm.
+    </p>
+    <table>
+      <tr><th>Change</th><th>Energy (kJ/mol)</th><th>Relative</th>
+          <th>Force rel. RMS</th><th></th></tr>
+      ${p.invariances
+        .map(
+          (c) => `<tr>
+            <td>${c.what}</td>
+            <td class="num">${c.energy.toFixed(3)}</td>
+            <td class="num">${exponential(c.energyRelativeError)}</td>
+            <td class="num">${exponential(c.forceRelativeRms)}</td>
+            <td><span class="badge ${c.ok ? "ok" : "bad"}">${c.ok ? "pass" : "fail"}</span></td>
+          </tr>`,
+        )
+        .join("")}
+    </table>
+    <p class="note">
+      The last row is the complement and must <em>not</em> be invariant: bonded
+      terms use plain differences, as OpenMM's do, so splitting a molecule reads
+      a bond as a box length. It costs a factor of
+      ${p.splitMoleculeEnergyRatio.toFixed(1)} in total energy, which is why
+      nothing in the engine ever wraps a coordinate and why an uploaded state is
+      checked for intact molecules.
+      <span class="badge ${p.ok ? "ok" : "bad"}">${p.ok ? "pass" : "fail"}</span>
     </p>`;
 }
 
@@ -559,6 +596,10 @@ async function main(): Promise<void> {
 
       // From the captured equilibrated frame, for the reason in
       // `validateBarostat`: state.xml is un-minimised and NVE from it diverges.
+      const pbc = await validatePbc(device, { systemXml, stateXml });
+      if (body) body.innerHTML += renderPbc(pbc);
+      window.__mirPbc = pbc;
+
       // A whole run, on the restrained fixture, at a length the lane affords.
       if (restraintFacts.ok) {
         const restrainedXml = await fetchText("system-restrained.xml");
@@ -617,6 +658,7 @@ async function main(): Promise<void> {
     window.__mirRestraint = { error: message };
     window.__mirBarostat = { error: message };
     window.__mirProtocol = { error: message };
+    window.__mirPbc = { error: message };
   }
 }
 

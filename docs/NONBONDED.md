@@ -315,3 +315,66 @@ that sum exact and watching the number not move. The wrap ordering was confirmed
 by fixing it. And the quantitative bound derived from the intermediate
 measurement -- "3 of the 13" -- was wrong because it assumed unit gain from a
 vector error to a force error.
+
+## Periodic boundaries, measured as invariances
+
+Reading the code and concluding the minimum image is applied in the right places
+is weaker than measuring what the engine does under the symmetries periodicity
+implies. `src/gpu/validate-pbc.ts` measures three, on the device:
+
+| | 1L2Y | 3HTB |
+| --- | --- | --- |
+| one molecule moved one box vector | 3.8e-9 to 7.8e-9 | 3.0e-10 to 9.8e-9 |
+| the whole system moved one box vector | 6.2e-9 | 8.5e-8 |
+| the whole system moved an arbitrary vector | 1.1e-6 | 6.6e-7 |
+
+Relative energy error; the force relative RMS is 1.3e-7, 6.5e-7 and 4.9e-5 for
+1L2Y. The first is the strongest statement available: moving one molecule by a
+box vector changes which *atoms* its neighbours are and which images they are
+reached through, so a path that failed to wrap would move the energy by a large
+amount rather than by parts in 10^9.
+
+The arbitrary translation is two orders looser than the box-vector one, and that
+is expected rather than a defect. A box-vector shift leaves every atom's
+fractional coordinate identical, so the PME mesh assigns exactly the same
+B-spline weights. An arbitrary shift realigns every atom against the charge
+grid, and the mesh forces move by about a part in 10^7 per atom.
+
+### The complement, which is what justifies the design
+
+Bonded terms use **plain differences, with no minimum image**, exactly as
+OpenMM's do — `usesPeriodicBoundaryConditions()` is false unless a system asks
+otherwise, and `parseSystem` rejects one that does. That is correct only while a
+molecule is never split across the boundary.
+
+Measured: moving **one atom** of a molecule by one box vector costs a factor of
+**59.5** in total energy on 1L2Y and **29.0** on 3HTB, with the force RMS out by
+25x and 3.5x. So "never wrap a coordinate" is a rule with a number behind it.
+
+Nothing in the engine wraps a position. Coordinates grow outside the box and
+stay there, which is what OpenMM does too — its `enforcePeriodicBox` affects
+*reporting* only, and even then it wraps whole molecules and keeps them intact.
+Measured: `DCDReporter` with its default settings writes **unwrapped**
+coordinates, so the trajectories this engine writes match.
+
+What can fail is *input*: a state wrapped atom by atom by some other tool.
+`checkMoleculesIntact` in src/engine/wrapping.ts is the boundary guard, and it
+cannot misfire on a sane configuration — the longest bonded separation in either
+fixture is 0.185 nm against a limit of 1.5 nm.
+
+### Where the minimum image is and is not applied
+
+| | wraps? | why |
+| --- | --- | --- |
+| direct-space pairs | yes, in fixed point | the whole point of a cutoff |
+| exclusion corrections and exceptions | yes, in fixed point | an exception can span a boundary |
+| position restraints | yes, in fixed point | `periodicdistance` is in the expression |
+| PME charge spreading and interpolation | yes, fractional coordinate | the mesh is the box |
+| the cell list | yes, exact integer | an atom must land in the cell it is in |
+| bonds, angles, torsions | **no** | OpenMM's convention; see above |
+| centre-of-mass removal | n/a | velocities only |
+
+The minimum image is only meaningful while the cutoff is under half the smallest
+box edge. The cell list demands more than that — at least three cells per axis,
+so at least three cutoffs — and refuses anything tighter, which makes the
+stricter condition the one that binds.

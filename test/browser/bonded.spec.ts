@@ -27,6 +27,10 @@ for (const name of ["1L2Y", "3HTB"]) {
     await page.waitForFunction(() => window.__mirProtocol !== undefined, null, {
       timeout: 1_800_000,
     });
+    const pbc = await page.evaluate(() => window.__mirPbc);
+    if (pbc !== undefined && "error" in pbc) throw new Error(pbc.error);
+    expect(JSON.stringify(pbc!.invariances.filter((c) => !c.ok), null, 1)).toBe("[]");
+    expect(pbc!.inputIntact).toBe(true);
     const report = await page.evaluate(() => window.__mirValidation);
     if (report !== undefined && "error" in report) throw new Error(report.error);
     const checked = report!;
@@ -236,6 +240,17 @@ for (const name of ["1L2Y", "3HTB"]) {
               `  ${s.nsPerDay.toFixed(1)} ns/day`,
           )
           .join("") +
+        pbc!.invariances
+          .map(
+            (c) =>
+              `\n  pbc ${c.what.padEnd(46)}` +
+              `energy rel ${c.energyRelativeError.toExponential(2)}` +
+              `  force rel RMS ${c.forceRelativeRms.toExponential(2)}`,
+          )
+          .join("") +
+        `\n  pbc input              intact ${pbc!.inputIntact}` +
+        `  longest bonded ${pbc!.inputWorstBondedSeparation.toFixed(3)} nm` +
+        `  split costs x${pbc!.splitMoleculeEnergyRatio.toFixed(1)}` +
         `\n  run ensemble           ${protocol!.ensemble}` +
         `  cell headroom ${(protocol!.cellHeadroom * 100).toFixed(1)}%` +
         `\n  artefacts              ${protocol!.artefacts.length} files, resume skipped all: ${protocol!.resumeSkippedEverything}` +
