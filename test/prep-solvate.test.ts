@@ -58,6 +58,89 @@ const present =
   existsSync(waterPath) &&
   existsSync("vendor/ffxml/amber14-tip3p.xml");
 
+/**
+ * The second water model the plan names.
+ *
+ * Worth a separate pass rather than a parameter on the first: the model
+ * changes the clash radius (SPC/E's sigma is 0.31657 nm against TIP3P's
+ * 0.31508) *and* the pre-equilibrated box that gets tiled, so a hard-coded
+ * radius or the wrong box file would still pass every TIP3P test. It fits 716
+ * waters where TIP3P fits 699 in the same cell.
+ */
+describe.skipIf(
+  !existsSync("fixtures/prep/1L2Y-spce-solvent.json") ||
+    !existsSync("vendor/water/spce.pdb"),
+)("solvating 1L2Y with SPC/E", () => {
+  const dump = JSON.parse(
+    readFileSync("fixtures/prep/1L2Y-spce-solvent.json", "utf8"),
+  ) as Dump;
+  const field = mergeForceFields([
+    parseForceField(readFileSync("vendor/ffxml/protein.ff14SB.xml", "utf8")),
+    parseForceField(readFileSync("vendor/ffxml/amber14-spce.xml", "utf8")),
+  ]);
+  const topology = readPdb(readFileSync(pdbPath, "utf8"));
+  const bonds = inferBonds(
+    topology,
+    parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+  );
+  const atoms = assignAtoms(topology, bonds, field).atoms;
+  const waterBox = readPdb(readFileSync("vendor/water/spce.pdb", "utf8"));
+
+  it("keeps exactly the waters OpenMM kept, in the same places", () => {
+    const result = solvate(topology, bonds, atoms, waterBox, {
+      padding: dump.padding_nm,
+      model: "spce",
+      neutralize: false,
+      ionicStrength: 0,
+    });
+    expect(result.waters).toBe(dump.noIons.waters);
+    expect(result.topology.atoms).toHaveLength(dump.noIons.atoms);
+
+    const ours: number[][] = [];
+    for (const residue of result.topology.residues) {
+      if (residue.name !== "HOH") continue;
+      const oxygen = residue.atoms.find(
+        (a) => (result.topology.atoms[a] as { element: string }).element === "O",
+      )!;
+      ours.push([
+        result.topology.positions[oxygen * 3]!,
+        result.topology.positions[oxygen * 3 + 1]!,
+        result.topology.positions[oxygen * 3 + 2]!,
+      ]);
+    }
+    ours.sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!);
+    let worst = 0;
+    for (const [index, oxygen] of ours.entries()) {
+      for (let axis = 0; axis < 3; axis++) {
+        worst = Math.max(worst, Math.abs(oxygen[axis]! - dump.noIons.oxygens[index]![axis]!));
+      }
+    }
+    expect(worst).toBeLessThan(1e-12);
+  });
+
+  it("fits more water than TIP3P in the same box, as its radius implies", () => {
+    // A sanity check on the radius actually being used: SPC/E's sigma is
+    // larger, so each water excludes more volume near the solute -- and yet
+    // the pre-equilibrated SPC/E box is denser, which is what wins. 716
+    // against 699. If the model were ignored both would be 699.
+    const tip3p = JSON.parse(readFileSync(dumpPath, "utf8")) as Dump;
+    expect(dump.noIons.waters).toBeGreaterThan(tip3p.noIons.waters);
+  });
+
+  it("adds the same ions, which depend only on charge and water count", () => {
+    const result = solvate(topology, bonds, atoms, waterBox, {
+      padding: dump.padding_nm,
+      model: "spce",
+      ionicStrength: dump.concentration_molar,
+      neutralize: true,
+      seed: 24301,
+    });
+    expect(result.positiveIons).toBe(dump.withIons.ionCounts["NA"]);
+    expect(result.negativeIons).toBe(dump.withIons.ionCounts["CL"]);
+    expect(result.waters).toBe(dump.withIons.waters);
+  });
+});
+
 describe.skipIf(!present)("solvating 1L2Y", () => {
   const dump = present ? (JSON.parse(readFileSync(dumpPath, "utf8")) as Dump) : undefined;
   const field = present

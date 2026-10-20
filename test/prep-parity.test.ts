@@ -88,6 +88,32 @@ const FIXTURES = [
     note: "1L2Y under ff99SB-ILDN rather than ff14SB",
     fields: ["amber99sbildn.xml"],
   },
+  {
+    // The plan's gate names 1UBQ and DHFR by name. Ubiquitin is the standard
+    // small-protein reference and has a disulfide-free single chain with a
+    // histidine.
+    name: "1UBQ",
+    atoms: 1231,
+    note: "ubiquitin, 76 residues, the plan's named fixture",
+    fields: ["protein.ff14SB.xml"],
+  },
+  {
+    // DHFR, the other named fixture and the standard MD benchmark system. Its
+    // cofactors (NADP+, folate, Mn, BME) are removed by the fixture builder,
+    // which reports them: Phase 3 is protein in water and a ligand is Phase 4.
+    name: "1RX2",
+    atoms: 2489,
+    note: "DHFR, 159 residues, cofactors removed",
+    fields: ["protein.ff14SB.xml"],
+  },
+  {
+    // The third force field the plan names. ff99SB gives 914 torsions where
+    // ff14SB gives 1017 and ff99SB-ILDN gives 938, so all three differ.
+    name: "1L2Y-sb",
+    atoms: 304,
+    note: "1L2Y under ff99SB",
+    fields: ["amber99sb.xml"],
+  },
 ] as const;
 
 function loadFields(names: readonly string[]) {

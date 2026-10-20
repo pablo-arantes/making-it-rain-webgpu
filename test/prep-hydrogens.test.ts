@@ -248,3 +248,73 @@ for (const fixture of FIXTURES) {
     });
   });
 }
+
+
+/**
+ * pH, which the notebook exposes and which changes the chemistry.
+ *
+ * Worth its own case because every other test here runs at pH 7, where the
+ * acidic variants are all deprotonated and the `maxph` attribute never
+ * decides anything. At pH 4 it decides a lot: aspartate and glutamate take
+ * their neutral ASH and GLH forms, and histidine goes to HIP. On T4 lysozyme
+ * that is 21 extra hydrogens and a different net charge, so a pipeline that
+ * ignored the field entirely would pass everything above.
+ *
+ * `docs/DEVIATIONS.md` entry 8 is about this field: the notebook has a pH
+ * control that cannot take effect and a hardcoded 7.4 in the call that can.
+ */
+describe.skipIf(!existsSync("fixtures/prep/3HTB-ph4-hydrogens.json"))(
+  "adding hydrogens at pH 4",
+  () => {
+    const dump = JSON.parse(
+      readFileSync("fixtures/prep/3HTB-ph4-hydrogens.json", "utf8"),
+    ) as Dump;
+    const definitions = parseHydrogenDefinitions(
+      readFileSync(definitionsPath, "utf8"),
+    );
+    const standardBonds = parseStandardBonds(readFileSync(residuesPath, "utf8"));
+    const stripped = stripAtoms(
+      stripAtoms(readPdb(readFileSync("fixtures/3HTB/receptor.pdb", "utf8")), isWater)
+        .topology,
+      isHydrogenAtom,
+    ).topology;
+    const result = addHydrogens(
+      stripped,
+      inferBonds(stripped, standardBonds),
+      definitions,
+      4,
+    );
+
+    it("protonates the acids and the histidine that pH 7 leaves bare", () => {
+      // 2635 atoms against 2614 at pH 7: the `maxph` attribute on ASH's HD2
+      // (4.4) and GLH's HE2 (4.4) now admits them, and HIS becomes HIP
+      // through the pH <= 6.5 branch rather than the hydrogen-bond one.
+      expect(result.topology.atoms).toHaveLength(2635);
+      expect(result.added).toHaveLength(1334);
+      expect(result.variants.filter((v) => v === "HIP")).toHaveLength(1);
+      expect(result.variants.filter((v) => v === "HID")).toHaveLength(0);
+    });
+
+    it("matches OpenMM atom for atom at this pH too", () => {
+      const of = residueOf(result.topology);
+      const ours = result.topology.atoms.map(
+        (a, index) => `${a.name}|${a.element}|${of[index]}`,
+      );
+      expect(ours).toEqual(dump.atoms.map((r) => `${r[0]}|${r[1]}|${r[2]}`));
+      expect(result.variants.map((v) => v ?? null)).toEqual(
+        dump.variants.map((v) => v ?? null),
+      );
+    });
+
+    it("gives a different system from pH 7, which is the point of the field", () => {
+      const neutral = addHydrogens(
+        stripped,
+        inferBonds(stripped, standardBonds),
+        definitions,
+        7,
+      );
+      expect(neutral.topology.atoms).toHaveLength(2614);
+      expect(result.topology.atoms.length - neutral.topology.atoms.length).toBe(21);
+    });
+  },
+);

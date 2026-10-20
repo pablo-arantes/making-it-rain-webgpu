@@ -31,6 +31,13 @@ def main() -> None:
         "--forcefield", nargs="+", default=["amber14/protein.ff14SB.xml"]
     )
     parser.add_argument("--ph", type=float, default=7.0)
+    parser.add_argument(
+        "--keep-hetero",
+        action="store_true",
+        help="keep non-amino-acid residues. Off by default: Phase 3 is protein "
+        "in water, and a ligand needs the Phase 4 path, so a heterogen left in "
+        "would fail template matching rather than be handled",
+    )
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -40,6 +47,24 @@ def main() -> None:
     # Whatever hydrogens the file carried are replaced, so the set is the force
     # field's own and not the depositor's -- an NMR structure's hydrogens may be
     # named differently from the templates.
+    # 🔴 Reported, not silent. Dropping a cofactor changes what the system *is*,
+    # so a fixture that quietly discarded NADP+ and folate would be compared
+    # against OpenMM happily while answering a question nobody asked.
+    STANDARD = {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+        "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "ACE", "NME", "NHE",
+    }
+    if not args.keep_hetero:
+        extra = [
+            r for r in modeller.topology.residues()
+            if r.name not in STANDARD and r.name not in ("HOH", "WAT")
+        ]
+        if extra:
+            names = sorted({r.name for r in extra})
+            print(f"  removed {len(extra)} non-amino-acid residues: {' '.join(names)}")
+            modeller.delete(extra)
+
     modeller.deleteWater()
     modeller.delete([a for a in modeller.topology.atoms() if a.element == app.element.hydrogen])
     modeller.addHydrogens(field, pH=args.ph)

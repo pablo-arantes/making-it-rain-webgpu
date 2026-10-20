@@ -145,6 +145,32 @@ The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
 `spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
 `THIRD_PARTY.md`.
 
+## Amber export
+
+```sh
+npx tsx tools/export_prepared.ts fixtures/1L2Y/receptor.pdb fixtures/crossfeed
+# then write prmtop/inpcrd from any System this project holds, and check them
+python tools/check_prmtop.py --prmtop fixtures/amber/1L2Y.prmtop \
+    --inpcrd fixtures/amber/1L2Y.inpcrd \
+    --system fixtures/prep/1L2Y-system.xml --out fixtures/amber/1L2Y-energies.json
+```
+
+🔴 "Does it load" is not a test of this format. A prmtop with an exclusion
+window off by one, a double-counted 1-4, or a transposed Lennard-Jones type
+matrix parses perfectly and gives a plausible number. `check_prmtop.py` has
+OpenMM build a `System` from the file and compares per-force-group energies
+against the `System` the file was written from. Agreement: 5.2e-9 relative on
+the nonbonded group, 1.3e-8 on the total, with the residual being the kcal/mol
+round trip.
+
+That comparison caught the one real bug. `assignPropers` drops torsion terms
+with a zero force constant because OpenMM does — but OpenMM still creates the
+**1-4 exception** for the pair they span, and Amber has nowhere else to put
+one. 184 of 1L2Y's 812 scaled 1-4 pairs are spanned only by zero-constant
+torsions, so without synthetic dihedrals to carry them the nonbonded energy was
+out by 2791 kJ/mol against a −2431 kJ/mol true value, while every bonded term
+still matched to 1e-10.
+
 ## Cross-fed energies
 
 The plan's Phase 3 gate, and the one the term-by-term comparison does not
