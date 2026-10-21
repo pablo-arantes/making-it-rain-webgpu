@@ -430,6 +430,14 @@ export function prepareDirect(
   };
 }
 
+/**
+ * The cells of a neighbour shell: the home cell and the 26 around it.
+ *
+ * The pair kernel takes one of these per invocation, from the dispatch's y
+ * axis, rather than looping over all 27.
+ */
+const NEIGHBOUR_CELLS = 27;
+
 export interface Accumulators {
   readonly positions: GPUBuffer;
   readonly forces: GPUBuffer;
@@ -456,7 +464,11 @@ export async function planDirect(
       { binding: 4, resource: { buffer: resident.lists } },
       { binding: 5, resource: { buffer: resident.pairParams } },
     ],
-    [Math.ceil(resident.particleCount / 64)],
+    // One invocation per (atom, neighbour cell): the y axis carries the 27
+    // cells of the shell. The kernel used to loop over them, which left only
+    // `particleCount` threads in flight; see the note on `shell` in
+    // nonbonded-pairs.wgsl for why that was the cost of the whole step.
+    [Math.ceil(resident.particleCount / 64), NEIGHBOUR_CELLS],
   );
   if (resident.force.exceptionCount === 0) return { pairs, exceptions: null };
   const exceptions = await cache.pass(

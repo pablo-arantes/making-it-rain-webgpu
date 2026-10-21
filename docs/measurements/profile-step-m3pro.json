@@ -1,0 +1,656 @@
+{
+ "produced_by": "web/validate.html through Google Chrome; src/gpu/profile.ts reads timestamp-query spans per pass",
+ "machine": "Apple M3 Pro (14 GPU cores), macOS 14, Chrome, WebGPU/Metal",
+ "device": {
+  "vendor": "apple",
+  "architecture": "metal-3"
+ },
+ "date": "2026-10-21",
+ "note": "Two changes, measured separately. (1) The pair kernel took one invocation per atom and looped over the 27 cells of the neighbour shell; it now takes one invocation per (atom, cell), which is the same work with 27x the threads. (2) minimum_image64 subtracted one box at a time under a loop bounded at 64; it is now loop-free. Both are exact: the fixed-point accumulators are order-independent and the wrap returns the same image bit for bit.",
+ "fixtures": {
+  "1L2Y": {
+   "before": {
+    "particleCount": 2373,
+    "repeats": 40,
+    "perStepGpuMicroseconds": 4745.8977,
+    "perStepWallMicroseconds": 5269.999998807907,
+    "overheadShare": 0.09945015159894886,
+    "impliedStepsPerSecond": 189.75332072603484,
+    "kernels": [
+     {
+      "label": "direct space pairs",
+      "share": 0.9014632732180469,
+      "microseconds": 4278.252474999999
+     },
+     {
+      "label": "rattle",
+      "share": 0.02900001932195041,
+      "microseconds": 137.631125
+     },
+     {
+      "label": "pme spread",
+      "share": 0.013985789242781191,
+      "microseconds": 66.375125
+     },
+     {
+      "label": "fft radix 5 ns 5",
+      "share": 0.008373352632527246,
+      "microseconds": 39.739075
+     },
+     {
+      "label": "fft radix 5 ns 1",
+      "share": 0.008332996726836316,
+      "microseconds": 39.54755
+     },
+     {
+      "label": "pme interpolate",
+      "share": 0.003768375580451302,
+      "microseconds": 17.884325
+     },
+     {
+      "label": "direct space exceptions",
+      "share": 0.0037672430233799603,
+      "microseconds": 17.87895
+     },
+     {
+      "label": "zero/pmeGrid",
+      "share": 0.003633875209741668,
+      "microseconds": 17.246
+     },
+     {
+      "label": "settle/velocities",
+      "share": 0.00339964133655894,
+      "microseconds": 16.13435
+     },
+     {
+      "label": "shake",
+      "share": 0.00302527591355372,
+      "microseconds": 14.35765
+     },
+     {
+      "label": "integrate/lfmiddle_drift",
+      "share": 0.002581239793685397,
+      "microseconds": 12.2503
+     },
+     {
+      "label": "PeriodicTorsionForce evaluate",
+      "share": 0.0020387133502688015,
+      "microseconds": 9.675525
+     },
+     {
+      "label": "cell/sort_cells",
+      "share": 0.0018240174034935476,
+      "microseconds": 8.656600000000001
+     },
+     {
+      "label": "HarmonicAngleForce evaluate",
+      "share": 0.0016545868656208077,
+      "microseconds": 7.8525
+     },
+     {
+      "label": "cell/scan",
+      "share": 0.0015170101538429705,
+      "microseconds": 7.199574999999999
+     },
+     {
+      "label": "settle/positions",
+      "share": 0.0014744470787897515,
+      "microseconds": 6.997574999999999
+     },
+     {
+      "label": "cell/clear",
+      "share": 0.0014063830326557609,
+      "microseconds": 6.67455
+     },
+     {
+      "label": "zero/loopEnergy",
+      "share": 0.0013335148374563574,
+      "microseconds": 6.328725
+     },
+     {
+      "label": "HarmonicBondForce evaluate",
+      "share": 0.0011998731030380195,
+      "microseconds": 5.694475000000001
+     },
+     {
+      "label": "cell/assign",
+      "share": 0.0010967313939362832,
+      "microseconds": 5.204975
+     },
+     {
+      "label": "pme convolve",
+      "share": 0.0010080284705673282,
+      "microseconds": 4.784
+     },
+     {
+      "label": "integrate/lfmiddle_kick",
+      "share": 0.0009066725142431957,
+      "microseconds": 4.302975
+     },
+     {
+      "label": "pme load grid",
+      "share": 0.0008735122967357682,
+      "microseconds": 4.1456
+     },
+     {
+      "label": "cell/scatter",
+      "share": 0.0008324452505581821,
+      "microseconds": 3.9507
+     },
+     {
+      "label": "integrate/lfmiddle_finish",
+      "share": 0.0007802317357156687,
+      "microseconds": 3.7029
+     },
+     {
+      "label": "zero/loopForces",
+      "share": 0.0007227505135645886,
+      "microseconds": 3.4301
+     }
+    ]
+   },
+   "after": {
+    "particleCount": 2373,
+    "repeats": 40,
+    "perStepGpuMicroseconds": 2141.3887999999997,
+    "perStepWallMicroseconds": 2335.000002384186,
+    "overheadShare": 0.0829170030777287,
+    "impliedStepsPerSecond": 428.26552418798093,
+    "kernels": [
+     {
+      "label": "direct space pairs",
+      "share": 0.6457536342769702,
+      "microseconds": 1382.8096
+     },
+     {
+      "label": "rattle",
+      "share": 0.06426931905126243,
+      "microseconds": 137.62560000000002
+     },
+     {
+      "label": "pme spread",
+      "share": 0.05814843152257077,
+      "microseconds": 124.5184
+     },
+     {
+      "label": "zero/pmeGrid",
+      "share": 0.056618209640397855,
+      "microseconds": 121.2416
+     },
+     {
+      "label": "pme load grid",
+      "share": 0.026013771996939557,
+      "microseconds": 55.7056
+     },
+     {
+      "label": "fft radix 5 ns 1",
+      "share": 0.02448355011476664,
+      "microseconds": 52.4288
+     },
+     {
+      "label": "fft radix 5 ns 5",
+      "share": 0.02142310635042081,
+      "microseconds": 45.8752
+     },
+     {
+      "label": "settle/velocities",
+      "share": 0.019127773527161437,
+      "microseconds": 40.96
+     },
+     {
+      "label": "cell/clear",
+      "share": 0.013771996939556235,
+      "microseconds": 29.4912
+     },
+     {
+      "label": "direct space exceptions",
+      "share": 0.013006885998469778,
+      "microseconds": 27.8528
+     },
+     {
+      "label": "shake",
+      "share": 0.0076511094108645756,
+      "microseconds": 16.384
+     },
+     {
+      "label": "cell/scan",
+      "share": 0.006885998469778117,
+      "microseconds": 14.7456
+     },
+     {
+      "label": "PeriodicTorsionForce evaluate",
+      "share": 0.0045906656465187455,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "pme interpolate",
+      "share": 0.0045906656465187455,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "integrate/lfmiddle_drift",
+      "share": 0.0045906656465187455,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "HarmonicAngleForce evaluate",
+      "share": 0.0045906656465187455,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "integrate/lfmiddle_kick",
+      "share": 0.0038255547054322878,
+      "microseconds": 8.192
+     },
+     {
+      "label": "zero/loopForces",
+      "share": 0.0038255547054322878,
+      "microseconds": 8.192
+     },
+     {
+      "label": "cell/sort_cells",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "zero/loopEnergy",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "pme convolve",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "cell/assign",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "settle/positions",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "HarmonicBondForce evaluate",
+      "share": 0.0022953328232593728,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "integrate/lfmiddle_finish",
+      "share": 0.001530221882172915,
+      "microseconds": 3.2768
+     },
+     {
+      "label": "cell/scatter",
+      "share": 0.001530221882172915,
+      "microseconds": 3.2768
+     }
+    ]
+   },
+   "cells": {
+    "divisions": [
+     3,
+     3,
+     3
+    ],
+    "cellCount": 27,
+    "particleCount": 2373,
+    "deviceEnergy": 128665.87536864518,
+    "hostEnergy": 128665.87536864518
+   }
+  },
+  "3HTB": {
+   "before": {
+    "particleCount": 26749,
+    "repeats": 40,
+    "perStepGpuMicroseconds": 681594.0608,
+    "perStepWallMicroseconds": 631480.0000011921,
+    "overheadShare": 0,
+    "impliedStepsPerSecond": 1.5835814277540259,
+    "kernels": [
+     {
+      "label": "direct space pairs",
+      "share": 0.9225767525936752,
+      "microseconds": 628822.8352000001
+     },
+     {
+      "label": "zero/pmeGrid",
+      "share": 0.03622010903531629,
+      "microseconds": 24687.4112
+     },
+     {
+      "label": "cell/clear",
+      "share": 0.022569060507869967,
+      "microseconds": 15382.9376
+     },
+     {
+      "label": "pme spread",
+      "share": 0.016259146370777765,
+      "microseconds": 11082.1376
+     },
+     {
+      "label": "cell/sort_cells",
+      "share": 0.000564887551320635,
+      "microseconds": 385.024
+     },
+     {
+      "label": "rattle",
+      "share": 0.00025960789592607906,
+      "microseconds": 176.9472
+     },
+     {
+      "label": "shake",
+      "share": 0.00025960789592607906,
+      "microseconds": 176.9472
+     },
+     {
+      "label": "fft radix 3 ns 9",
+      "share": 0.00021153235964347183,
+      "microseconds": 144.1792
+     },
+     {
+      "label": "fft radix 3 ns 3",
+      "share": 0.00020432102920108075,
+      "microseconds": 139.264
+     },
+     {
+      "label": "fft radix 2 ns 27",
+      "share": 0.0001682643769891253,
+      "microseconds": 114.688
+     },
+     {
+      "label": "direct space exceptions",
+      "share": 0.0001442266088478217,
+      "microseconds": 98.304
+     },
+     {
+      "label": "fft radix 3 ns 1",
+      "share": 0.00014182283203369135,
+      "microseconds": 96.66560000000001
+     },
+     {
+      "label": "pme interpolate",
+      "share": 8.413218849456265e-05,
+      "microseconds": 57.344
+     },
+     {
+      "label": "cell/assign",
+      "share": 5.288308991086796e-05,
+      "microseconds": 36.0448
+     },
+     {
+      "label": "PeriodicTorsionForce evaluate",
+      "share": 4.807553628260723e-05,
+      "microseconds": 32.768
+     },
+     {
+      "label": "pme convolve",
+      "share": 3.3652875397825066e-05,
+      "microseconds": 22.9376
+     },
+     {
+      "label": "integrate/lfmiddle_drift",
+      "share": 3.3652875397825066e-05,
+      "microseconds": 22.9376
+     },
+     {
+      "label": "pme load grid",
+      "share": 3.12490985836947e-05,
+      "microseconds": 21.2992
+     },
+     {
+      "label": "HarmonicAngleForce evaluate",
+      "share": 2.884532176956434e-05,
+      "microseconds": 19.6608
+     },
+     {
+      "label": "cell/scatter",
+      "share": 1.6826437698912533e-05,
+      "microseconds": 11.4688
+     },
+     {
+      "label": "integrate/lfmiddle_finish",
+      "share": 1.442266088478217e-05,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "cell/scan",
+      "share": 1.442266088478217e-05,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "zero/loopForces",
+      "share": 1.442266088478217e-05,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "integrate/lfmiddle_kick",
+      "share": 1.442266088478217e-05,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "settle/velocities",
+      "share": 1.2018884070651808e-05,
+      "microseconds": 8.192
+     },
+     {
+      "label": "HarmonicBondForce evaluate",
+      "share": 1.2018884070651808e-05,
+      "microseconds": 8.192
+     },
+     {
+      "label": "settle/positions",
+      "share": 7.211330442391085e-06,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "zero/loopEnergy",
+      "share": 2.4037768141303615e-06,
+      "microseconds": 1.6384
+     }
+    ]
+   },
+   "after": {
+    "particleCount": 26749,
+    "repeats": 40,
+    "perStepGpuMicroseconds": 83992.576,
+    "perStepWallMicroseconds": 77447.50000238419,
+    "overheadShare": 0,
+    "impliedStepsPerSecond": 12.911972626220543,
+    "kernels": [
+     {
+      "label": "direct space pairs",
+      "share": 0.8889105627621184,
+      "microseconds": 74661.888
+     },
+     {
+      "label": "fft radix 3 ns 3",
+      "share": 0.026996976494684483,
+      "microseconds": 2267.5456
+     },
+     {
+      "label": "pme spread",
+      "share": 0.016834097337364674,
+      "microseconds": 1413.9392
+     },
+     {
+      "label": "fft radix 3 ns 1",
+      "share": 0.012562176923827172,
+      "microseconds": 1055.1296
+     },
+     {
+      "label": "fft radix 2 ns 27",
+      "share": 0.010650541304983907,
+      "microseconds": 894.5664
+     },
+     {
+      "label": "fft radix 3 ns 9",
+      "share": 0.010123866185506682,
+      "microseconds": 850.3296
+     },
+     {
+      "label": "zero/pmeGrid",
+      "share": 0.008231737052569979,
+      "microseconds": 691.4048
+     },
+     {
+      "label": "cell/sort_cells",
+      "share": 0.006417633863259534,
+      "microseconds": 539.0336
+     },
+     {
+      "label": "pme load grid",
+      "share": 0.006027504145128255,
+      "microseconds": 506.26559999999995
+     },
+     {
+      "label": "cell/clear",
+      "share": 0.005325270652491954,
+      "microseconds": 447.2832
+     },
+     {
+      "label": "rattle",
+      "share": 0.0020286745342826488,
+      "microseconds": 170.3936
+     },
+     {
+      "label": "shake",
+      "share": 0.0018531161611235736,
+      "microseconds": 155.648
+     },
+     {
+      "label": "direct space exceptions",
+      "share": 0.0007217399785428655,
+      "microseconds": 60.6208
+     },
+     {
+      "label": "pme interpolate",
+      "share": 0.0006632205208231737,
+      "microseconds": 55.7056
+     },
+     {
+      "label": "cell/assign",
+      "share": 0.0005266751194772262,
+      "microseconds": 44.2368
+     },
+     {
+      "label": "PeriodicTorsionForce evaluate",
+      "share": 0.0003511167463181508,
+      "microseconds": 29.4912
+     },
+     {
+      "label": "integrate/lfmiddle_drift",
+      "share": 0.00031210377450502293,
+      "microseconds": 26.2144
+     },
+     {
+      "label": "HarmonicAngleForce evaluate",
+      "share": 0.0002730908026918951,
+      "microseconds": 22.9376
+     },
+     {
+      "label": "settle/positions",
+      "share": 0.00019506485906563932,
+      "microseconds": 16.384
+     },
+     {
+      "label": "pme convolve",
+      "share": 0.00019506485906563932,
+      "microseconds": 16.384
+     },
+     {
+      "label": "settle/velocities",
+      "share": 0.00015605188725251147,
+      "microseconds": 13.1072
+     },
+     {
+      "label": "integrate/lfmiddle_finish",
+      "share": 0.00013654540134594754,
+      "microseconds": 11.4688
+     },
+     {
+      "label": "zero/loopForces",
+      "share": 0.0001170389154393836,
+      "microseconds": 9.8304
+     },
+     {
+      "label": "cell/scan",
+      "share": 9.753242953281966e-05,
+      "microseconds": 8.192
+     },
+     {
+      "label": "integrate/lfmiddle_kick",
+      "share": 9.753242953281966e-05,
+      "microseconds": 8.192
+     },
+     {
+      "label": "cell/scatter",
+      "share": 9.753242953281966e-05,
+      "microseconds": 8.192
+     },
+     {
+      "label": "HarmonicBondForce evaluate",
+      "share": 5.85194577196918e-05,
+      "microseconds": 4.9152
+     },
+     {
+      "label": "zero/loopEnergy",
+      "share": 3.9012971813127866e-05,
+      "microseconds": 3.2768
+     }
+    ]
+   },
+   "cells": {
+    "divisions": [
+     6,
+     6,
+     6
+    ],
+    "cellCount": 216,
+    "particleCount": 26749,
+    "deviceEnergy": 1547197.0532976517,
+    "hostEnergy": 1547197.0532976517
+   }
+  }
+ },
+ "pair_kernel_microseconds_per_step": {
+  "comment": "Each row is the whole pair kernel with one thing changed, all at 40 repeats in one submission. The diagnostic rows are not valid physics; they exist to attribute the cost.",
+  "1L2Y": {
+   "original, loop over 27 cells, looping wrap": 4278.25,
+   "shell split across the dispatch": 4382.72,
+   "shell split, loop-free general wrap": 1382.8
+  },
+  "3HTB": {
+   "original, loop over 27 cells, looping wrap": 628822.84,
+   "shell split across the dispatch": 437782.1,
+   "shell split, two unrolled shifts only (exact to 2.5 box)": 24110.7,
+   "shell split, loop-free general wrap": 74661.9,
+   "diagnostic: count in-cutoff candidates only": 7789.0,
+   "diagnostic: + exclusion scan": 9609.2,
+   "diagnostic: + particle[j] load": 10194.1,
+   "diagnostic: + sqrt, erfc, Coulomb energy": 10539.8,
+   "diagnostic: + erf_derivative and the whole LJ branch": 10824.9,
+   "diagnostic: no minimum image at all": 9614.1,
+   "diagnostic: f32 force accumulation, converted once": 430697.7,
+   "diagnostic: one fixed-point force accumulator not three": 409760.6,
+   "diagnostic: general wrap behind an integer |d| < box guard": 72687.6
+  }
+ },
+ "candidate_efficiency": {
+  "comment": "The 27-cell shell is 27 cutoff volumes and the useful sphere is 4.19 of them, so most candidates are rejected. Counted on the device, not estimated.",
+  "1L2Y": {
+   "candidatesPerAtom": 2373,
+   "inCutoffEvaluations": 959817,
+   "inCutoffPerAtom": 404.5,
+   "shareOfCandidatesInsideCutoff": 0.17
+  },
+  "3HTB": {
+   "candidatesPerAtom": 3344,
+   "inCutoffEvaluations": 12289041,
+   "inCutoffPerAtom": 459.4,
+   "shareOfCandidatesInsideCutoff": 0.137
+  }
+ }
+}

@@ -111,9 +111,44 @@ fn less64(a: vec2<u32>, b: vec2<u32>) -> bool {
   return a.x < b.x;
 }
 
+/// `v * n`, exactly, keeping the low 64 bits.
+///
+/// WGSL has no 64-bit multiply and no 32x32 -> 64 intrinsic, so the low word is
+/// split into 16-bit halves whose four partial products each fit in 32 bits and
+/// are carried by hand. Anything above 2^64 is dropped, which is what the
+/// two's-complement representation wants: the result is correct modulo 2^64.
+fn mul64_u32(v: vec2<u32>, n: u32) -> vec2<u32> {
+  let a0 = v.x & 0xffffu;
+  let a1 = v.x >> 16u;
+  let b0 = n & 0xffffu;
+  let b1 = n >> 16u;
+  let p00 = a0 * b0;
+  let p01 = a0 * b1;
+  let p10 = a1 * b0;
+  let p11 = a1 * b1;
+  // The 2^16 column: the carry out of p00 plus the low halves of the two cross
+  // terms. Three addends each below 2^17, so the sum cannot overflow.
+  let mid = (p00 >> 16u) + (p01 & 0xffffu) + (p10 & 0xffffu);
+  let low = (p00 & 0xffffu) | (mid << 16u);
+  let high = p11 + (p01 >> 16u) + (p10 >> 16u) + (mid >> 16u) + v.y * n;
+  return vec2<u32>(low, high);
+}
+
+/// `d` minus `whole` boxes, in the direction `quotient` points.
+fn shift_whole_boxes(
+  d: vec2<u32>,
+  box: vec2<u32>,
+  quotient: f32,
+  whole: f32,
+) -> vec2<u32> {
+  let shift = mul64_u32(box, u32(whole));
+  if (quotient < 0.0) { return add64(d, shift); }
+  return sub64(d, shift);
+}
+
 /// Shift a fixed-point difference into the nearest periodic image, exactly.
 ///
-/// 🔴 The order matters, and it is the whole reason this function exists. The
+/// 🔴 The order matters, and it is the first reason this function exists. The
 /// obvious way round -- convert the difference to f32, then wrap it -- rounds
 /// the value while it can still be as large as the box diagonal, at the ulp of
 /// a 6.5 nm number: 4.8e-7 nm. The wrap that follows cannot recover what the
@@ -123,10 +158,42 @@ fn less64(a: vec2<u32>, b: vec2<u32>) -> bool {
 ///   1L2Y, 3.08 nm box   convert then wrap  rms 2.98e-8 nm   wrap then convert  5.9e-8 worst
 ///   3HTB, 6.58 nm box   convert then wrap  rms 8.76e-8 nm   wrap then convert  1.2e-7 worst
 ///
-/// The loop runs zero times for a pair inside the cutoff and once for a pair
-/// across a boundary, and is bounded so that a wild coordinate cannot hang a
-/// dispatch. `half` is passed in rather than derived because a 64-bit shift is
-/// more code than a second uniform field.
+/// 🔴 Being **loop-free** is the second reason, and it is the single largest
+/// performance fact measured in this engine. This used to subtract one box at a
+/// time under a `for` bounded at 64, which ran zero or one times for a real
+/// pair -- so it looked free, and reasoning about iteration counts said it was.
+/// It was not. A nested loop in the pair kernel's innermost block stops the
+/// backend unrolling and pipelining the candidate loop around it, and the cost
+/// is not the iterations but everything the compiler then cannot do.
+/// Measured through `web/validate.html` on an M3 Pro, 3HTB at 26,749 atoms:
+///
+///   loop, one box at a time      437,782 us per step in the pair kernel
+///   two unrolled shifts only       24,111 us                      18x
+///   this, loop-free and general    72,171 us                       6x
+///   no wrap at all (diagnostic)     9,614 us
+///
+/// The two-shift version is faster still and is what the hot pair kernel uses,
+/// through `nearest_image_box`, which can afford it because its inputs are
+/// wrapped into the box first. This one keeps no precondition at all, for the
+/// exception and restraint kernels, which read unwrapped positions and together
+/// cost under 100 us. Skipping the estimate behind an integer `|d| < box` test
+/// was measured too and bought nothing -- 72,688 us -- so there is no guard:
+/// the cost is the control flow the backend cannot schedule around, not the
+/// divide.
+///
+/// 1L2Y barely moved, which is why profiling only the small fixture missed it:
+/// 1,152 -> 1,036 us. docs/measurements/profile-step-*.json has both.
+///
+/// The box count is estimated in f32 and applied in integers, so the f32 only
+/// ever picks *which* multiple of the box to remove -- every operation that
+/// touches the returned value is still an integer one, and the rounding this
+/// function exists to avoid never reaches the result. `trunc` rather than
+/// `round` leaves a residue in (-box, box) with the same sign the loop produced,
+/// and the conditional shifts below finish it with the same `<=` comparison, so
+/// this is bit for bit what the loop returned. f32 holds integers exactly only
+/// to 2^24, so a quotient above that leaves a residue of a few boxes; the
+/// estimate therefore runs twice, which covers the whole representable range.
+/// Neither round runs at all for a pair inside the cutoff.
 ///
 /// It terminates on `|d| <= half` rather than `<`, so a separation of exactly
 /// half a box settles on one image instead of alternating between two equally
@@ -134,14 +201,28 @@ fn less64(a: vec2<u32>, b: vec2<u32>) -> bool {
 /// force, and that configuration has measure zero.
 fn minimum_image64(difference: vec2<u32>, box: vec2<u32>, half: vec2<u32>) -> f32 {
   var d = difference;
-  for (var guard = 0u; guard < 64u; guard++) {
-    if (negative64(d)) {
-      if (!less64(half, neg64(d))) { break; }
-      d = add64(d, box);
-    } else {
-      if (!less64(half, d)) { break; }
-      d = sub64(d, box);
-    }
+  let box_f32 = f32(box.y) + f32(box.x) * FIXED_SCALE_INV;
+
+  var quotient = from_fixed(d) / box_f32;
+  var whole = abs(trunc(quotient));
+  if (whole != 0.0) {
+    d = shift_whole_boxes(d, box, quotient, whole);
+    quotient = from_fixed(d) / box_f32;
+    whole = abs(trunc(quotient));
+    if (whole != 0.0) { d = shift_whole_boxes(d, box, quotient, whole); }
+  }
+
+  // Two unrolled shifts: one for the residue `trunc` leaves, one in case the
+  // f32 estimate was a box out either way.
+  if (negative64(d)) {
+    if (less64(half, neg64(d))) { d = add64(d, box); }
+  } else {
+    if (less64(half, d)) { d = sub64(d, box); }
+  }
+  if (negative64(d)) {
+    if (less64(half, neg64(d))) { d = add64(d, box); }
+  } else {
+    if (less64(half, d)) { d = sub64(d, box); }
   }
   return from_fixed(d);
 }

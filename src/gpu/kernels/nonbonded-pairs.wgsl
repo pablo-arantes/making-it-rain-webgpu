@@ -40,8 +40,17 @@ struct Params {
 /// 🔴 Hoisted out of the pair loop deliberately. Reading them from the uniform
 /// inside `pair_vector` meant six `vec4` loads per candidate pair, and a bulk
 /// water atom has a few thousand candidates: it cost 23% of the throughput on
-/// 1L2Y and 34% on 3HTB. The wrap itself is nearly free -- for a pair inside
-/// the cutoff the loop does not run at all.
+/// 1L2Y and 34% on 3HTB.
+///
+/// Hoisting *this atom's own position* the same way was tried and measured
+/// neutral, so it is not done. `delta_image_axis` re-reads `positions[a * 3 +
+/// axis]` for every candidate, which in a gather kernel is loop-invariant, and
+/// the same argument that worked for the box says it should pay. It does not:
+/// 1L2Y 1,152 -> 1,123 us and 3HTB 437,782 -> 437,792 us, both inside the
+/// 0.1% the repeated measurements vary by. Threads in a workgroup are
+/// consecutive atoms in the same cell, so these loads hit cache; the box loads
+/// were from a uniform, which is a different path. The argument was not wrong
+/// about the redundancy, only about it costing anything.
 struct FixedBox {
   box: array<vec2<u32>, 3>,
   half: array<vec2<u32>, 3>,
@@ -59,11 +68,24 @@ fn load_fixed_box() -> FixedBox {
 }
 
 /// The pair vector, nearest image, wrapped in fixed point before conversion.
-fn pair_vector(a: u32, b: u32, geometry: ptr<function, FixedBox>) -> vec3<f32> {
+///
+/// Deliberately not three `delta_image_axis` calls: the box would come from the
+/// uniform each time. The arithmetic is identical -- difference in fixed point,
+/// wrap in fixed point, convert last -- so the result is bit for bit the same.
+fn pair_vector(a: u32, b: u32, frame: ptr<function, FixedBox>) -> vec3<f32> {
   return vec3<f32>(
-    delta_image_axis(a, b, 0u, (*geometry).box[0], (*geometry).half[0]),
-    delta_image_axis(a, b, 1u, (*geometry).box[1], (*geometry).half[1]),
-    delta_image_axis(a, b, 2u, (*geometry).box[2], (*geometry).half[2]),
+    minimum_image64(
+      sub64(positions[b * 3u + 0u], positions[a * 3u + 0u]),
+      (*frame).box[0], (*frame).half[0],
+    ),
+    minimum_image64(
+      sub64(positions[b * 3u + 1u], positions[a * 3u + 1u]),
+      (*frame).box[1], (*frame).half[1],
+    ),
+    minimum_image64(
+      sub64(positions[b * 3u + 2u], positions[a * 3u + 2u]),
+      (*frame).box[2], (*frame).half[2],
+    ),
   );
 }
 
@@ -95,10 +117,25 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= params.particle_count) { return; }
 
+  // Which of the 27 cells around the home cell this invocation handles.
+  //
+  // 🔴 One invocation per atom left only `particle_count` threads in flight --
+  // 2373 on 1L2Y, which is 38 workgroups of 64 and nowhere near enough to hide
+  // memory latency on a GPU that wants tens of thousands. Splitting the
+  // neighbour shell across the dispatch's y axis multiplies the thread count by
+  // 27 without changing the work. It is exact: the per-atom force already
+  // accumulates through `accumulate_into`, whose fixed-point atomics are
+  // order-independent by construction, so 27 partial sums land on the same
+  // total as one. See the measurement in docs/measurements/.
+  let shell = gid.y;
+  let dx = i32(shell / 9u) - 1;
+  let dy = i32((shell / 3u) % 3u) - 1;
+  let dz = i32(shell % 3u) - 1;
+
   let me = particle[i];
   let cutoff_squared = params.cutoff * params.cutoff;
   let cells = params.cells;
-  var geometry = load_fixed_box();
+  var frame = load_fixed_box();
 
   // Which cell this atom is in, read from the list rather than recomputed.
   //
@@ -141,53 +178,47 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   var force_z = vec2<u32>(0u, 0u);
   var energy_sum = vec2<u32>(0u, 0u);
 
-  for (var dx = -1; dx <= 1; dx++) {
-    for (var dy = -1; dy <= 1; dy++) {
-      for (var dz = -1; dz <= 1; dz++) {
-        let neighbour = (vec3<i32>(home) + vec3<i32>(dx, dy, dz) + vec3<i32>(cells))
-                      % vec3<i32>(cells);
-        let cell = (u32(neighbour.x) * cells.y + u32(neighbour.y)) * cells.z
-                 + u32(neighbour.z);
-        let start = lists[cell];
-        let end = lists[cell + 1u];
-        for (var slot = start; slot < end; slot++) {
-          let j = lists[params.sorted_offset + slot];
-          if (j == i) { continue; }
+  let neighbour = (vec3<i32>(home) + vec3<i32>(dx, dy, dz) + vec3<i32>(cells))
+                % vec3<i32>(cells);
+  let cell = (u32(neighbour.x) * cells.y + u32(neighbour.y)) * cells.z
+           + u32(neighbour.z);
+  let start = lists[cell];
+  let end = lists[cell + 1u];
+  for (var slot = start; slot < end; slot++) {
+    let j = lists[params.sorted_offset + slot];
+    if (j == i) { continue; }
 
-          let d = pair_vector(i, j, &geometry);
-          let r_squared = dot(d, d);
-          if (r_squared >= cutoff_squared) { continue; }
-          if (is_excluded(i, j)) { continue; }
+    let d = pair_vector(i, j, &frame);
+    let r_squared = dot(d, d);
+    if (r_squared >= cutoff_squared) { continue; }
+    if (is_excluded(i, j)) { continue; }
 
-          let other = particle[j];
-          let r = sqrt(r_squared);
-          let alpha_r = params.alpha * r;
-          let charge_product = 138.93545764498457 * me.x * other.x;
-          let screened = erfc_approx(alpha_r);
-          // Halved here rather than at the end: each pair is seen from both
-          // ends, and scaling by 0.5 is exact in f32, so this is the same total
-          // and keeps the running sum a pure integer.
-          energy_sum = add64(energy_sum, to_fixed(0.5 * charge_product * screened / r));
-          var d_e_d_r = charge_product *
-            (-screened / r_squared - params.alpha * erf_derivative(alpha_r) / r);
+    let other = particle[j];
+    let r = sqrt(r_squared);
+    let alpha_r = params.alpha * r;
+    let charge_product = 138.93545764498457 * me.x * other.x;
+    let screened = erfc_approx(alpha_r);
+    // Halved here rather than at the end: each pair is seen from both
+    // ends, and scaling by 0.5 is exact in f32, so this is the same total
+    // and keeps the running sum a pure integer.
+    energy_sum = add64(energy_sum, to_fixed(0.5 * charge_product * screened / r));
+    var d_e_d_r = charge_product *
+      (-screened / r_squared - params.alpha * erf_derivative(alpha_r) / r);
 
-          let epsilon = sqrt(me.z * other.z);
-          if (epsilon != 0.0) {
-            let sigma = 0.5 * (me.y + other.y);
-            let s2 = sigma * sigma / r_squared;
-            let s6 = s2 * s2 * s2;
-            let s12 = s6 * s6;
-            energy_sum = add64(energy_sum, to_fixed(2.0 * epsilon * (s12 - s6)));
-            d_e_d_r += (4.0 * epsilon / r) * (6.0 * s6 - 12.0 * s12);
-          }
-          // F_i = (dE/dr / r) * d, and this invocation owns only atom i.
-          let contribution = (d_e_d_r / r) * d;
-          force_x = add64(force_x, to_fixed(contribution.x));
-          force_y = add64(force_y, to_fixed(contribution.y));
-          force_z = add64(force_z, to_fixed(contribution.z));
-        }
-      }
+    let epsilon = sqrt(me.z * other.z);
+    if (epsilon != 0.0) {
+      let sigma = 0.5 * (me.y + other.y);
+      let s2 = sigma * sigma / r_squared;
+      let s6 = s2 * s2 * s2;
+      let s12 = s6 * s6;
+      energy_sum = add64(energy_sum, to_fixed(2.0 * epsilon * (s12 - s6)));
+      d_e_d_r += (4.0 * epsilon / r) * (6.0 * s6 - 12.0 * s12);
     }
+    // F_i = (dE/dr / r) * d, and this invocation owns only atom i.
+    let contribution = (d_e_d_r / r) * d;
+    force_x = add64(force_x, to_fixed(contribution.x));
+    force_y = add64(force_y, to_fixed(contribution.y));
+    force_z = add64(force_z, to_fixed(contribution.z));
   }
 
   accumulate_into(i * 3u + 0u, force_x);

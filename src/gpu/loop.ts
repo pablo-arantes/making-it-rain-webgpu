@@ -68,6 +68,7 @@ import {
 import { fromFixed, fromWords } from "../reference/fixed-point.js";
 import { BufferPool } from "./allocator.js";
 import { pipelineCacheFor, readBuffer } from "./compute.js";
+import { profilePasses, type Profile } from "./profile.js";
 import {
   encodePasses,
   withOffsets,
@@ -646,6 +647,33 @@ export class StepLoop {
       return;
     }
     await this.encodeSteps(steps);
+  }
+
+  /**
+   * GPU time per kernel for one step's worth of passes.
+   *
+   * 🔴 This **advances the system** by `repeats` steps and leaves the loop's
+   * step counter untouched, so the state afterwards does not correspond to any
+   * step number. It is a measurement entry point, not part of a run: use it on
+   * a loop you are about to discard.
+   *
+   * `repeats` exists because a single step of a small system is dominated by
+   * launch overhead rather than by the kernels. Twenty steps in one submission
+   * is enough for the steady-state cost to show through, and the profile
+   * reports wall-clock alongside the summed GPU time so the gap between them --
+   * which is launch overhead and queue bubbles -- is visible rather than
+   * hidden inside a per-kernel number.
+   *
+   * The cell list is included once rather than per step, matching a run at the
+   * default interval of 1; a longer interval would amortise it further.
+   */
+  async profileStep(repeats = 20): Promise<Profile | undefined> {
+    const passes = [
+      ...this.cellPasses,
+      ...this.forcePasses,
+      ...this.phaseBuilder(0),
+    ];
+    return profilePasses(this.device, "step", passes, repeats);
   }
 
   private async encodeSteps(steps: number): Promise<void> {

@@ -42,6 +42,11 @@ import {
 } from "../src/gpu/validate-protocol.js";
 import { validatePbc, type PbcComparison } from "../src/gpu/validate-pbc.js";
 import {
+  validateProfile,
+  type ProfileComparison,
+} from "../src/gpu/validate-profile.js";
+
+import {
   validatePersistence,
   type PersistenceComparison,
 } from "../src/gpu/validate-persistence.js";
@@ -53,6 +58,7 @@ declare global {
     __mirIntegrators?: IntegratorReport | { error: string };
     __mirRandom?: RandomComparison | { error: string };
     __mirCellList?: CellListComparison | { error: string };
+    __mirProfile?: ProfileComparison;
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
     __mirRestraint?: RestraintComparison | { error: string };
@@ -525,6 +531,44 @@ async function main(): Promise<void> {
       </p>`;
     }
     window.__mirCellList = cells;
+
+    // Where a step's GPU time goes. Development-only, like the rest of this
+    // page: it needs `timestamp-query` and reports its absence rather than
+    // failing when a device does not offer it.
+    const profile = await validateProfile(device, { systemXml, stateXml });
+    if (body) {
+      body.innerHTML += !profile.available
+        ? `<div class="check"><h3>Where a step's time goes</h3>
+           <p class="note">${profile.reason ?? "unavailable"}</p></div>`
+        : `<div class="check"><h3>Where a step's time goes</h3>
+        <p class="claim">
+          Per-kernel GPU time through <code>timestamp-query</code>. Summed GPU
+          time is what the kernels cost; wall-clock is what the caller waited.
+          The gap is launch overhead and queue bubbles, and no kernel change
+          will move it — which is why both are shown.
+        </p>
+        <p class="note">
+          ${profile.particleCount.toLocaleString("en-US")} particles over
+          ${profile.repeats} steps in one submission:
+          <strong>${profile.perStepGpuMicroseconds.toFixed(1)} µs</strong> of GPU
+          time per step against
+          <strong>${profile.perStepWallMicroseconds.toFixed(1)} µs</strong> of
+          wall-clock, so ${(profile.overheadShare * 100).toFixed(0)}% of the
+          time is outside every kernel. Implied
+          ${profile.impliedStepsPerSecond.toFixed(0)} steps/s.
+        </p>
+        <table><tr><th>Kernel</th><th>Share</th><th>µs/step</th></tr>` +
+          profile.kernels
+            .map(
+              (kernel) =>
+                `<tr><td><code>${kernel.label}</code></td>` +
+                `<td>${(kernel.share * 100).toFixed(1)}%</td>` +
+                `<td>${kernel.microseconds.toFixed(2)}</td></tr>`,
+            )
+            .join("") +
+          "</table></div>";
+    }
+    window.__mirProfile = profile;
 
     const randomness = await validateRandom(device);
     if (body) {
