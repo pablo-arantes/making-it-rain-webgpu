@@ -142,6 +142,40 @@ test.describe("the run page", () => {
     );
   });
 
+  test("reports what this GPU can hold, before running anything", async ({ page }) => {
+    // 🔴 Phase 5's cross-device work, in the only form a single-GPU machine can
+    // check in a browser: that the real adapter's limits reach the fitness
+    // logic and that the page says what they allow. The arithmetic itself is
+    // tested against other devices' limits in test/device-fitness.test.ts,
+    // because this machine has one GPU and the floor profile is the guarantee
+    // that matters.
+    await page.goto("/run.html");
+    await page.waitForFunction(() => window.__mirRun?.state === "idle");
+    await page.locator("#file-system").setInputFiles(`fixtures/${fixture}/system.xml`);
+    await page.locator("#file-state").setInputFiles(`fixtures/${fixture}/state.xml`);
+
+    // The ceiling is stated at upload, not discovered during a run.
+    await expect(page.locator("#upload-summary")).toContainText("holds about");
+    const summary = (await page.locator("#upload-summary").textContent()) ?? "";
+    const held = Number(
+      (summary.match(/holds about ([\d,]+) atoms/)?.[1] ?? "0").replace(/,/g, ""),
+    );
+    expect(held).toBeGreaterThan(100_000);
+    // Whatever it reports has to exceed the system it just accepted.
+    expect(held).toBeGreaterThan(2373);
+
+    // And the verification carries the same verdict, so the two cannot drift.
+    await page.locator("#verify").click();
+    await page.waitForFunction(() => window.__mirVerify !== undefined, null, {
+      timeout: 300_000,
+    });
+    const verify = await page.evaluate(() => window.__mirVerify);
+    const fitness = (verify as { fitness?: { fits: boolean; maxAtoms: number } })
+      ?.fitness;
+    expect(fitness?.fits).toBe(true);
+    expect(fitness?.maxAtoms).toBe(held);
+  });
+
   test("runs a nanosecond end to end", async ({ page }) => {
     // The plan's Phase 2 gate. Opt-in: about 38 minutes at the measured
     // 38 ns/day for this fixture, which no default lane should spend.

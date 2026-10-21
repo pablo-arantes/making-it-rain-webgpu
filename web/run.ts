@@ -27,6 +27,7 @@ import {
   WebGpuUnavailable,
 } from "../src/gpu/device.js";
 import { parseSystem } from "../src/engine/system.js";
+import { deviceFitness } from "../src/gpu/device.js";
 import { openOpfsOutputs, type OpfsOutputs } from "../src/engine/opfs.js";
 import { runProtocol, stageNames, type ProtocolSettings } from "../src/engine/protocol.js";
 import { protocolHooksFor } from "../src/gpu/validate-protocol.js";
@@ -154,6 +155,27 @@ async function readFiles(): Promise<boolean> {
     // never happened, and it sent one investigation of a timed-out run down
     // the wrong path entirely. A status line that can be stale is worse than
     // no status line.
+    // 🔴 Checked at upload, before any GPU work. The limits that bind are per
+    // device, so a system prepared on one machine can exceed another's — and
+    // without this the first sign is an allocation failure part-way through a
+    // run, which reads as a bug rather than as a system too large for the
+    // hardware. `loadedLimits` is filled in once the adapter is known.
+    if (loadedLimits !== undefined) {
+      const fitness = deviceFitness(loadedLimits, system.particleCount);
+      if (!fitness.fits) {
+        summary.innerHTML +=
+          '<p class="bad-box"><strong>This system is too large for this GPU.</strong> ' +
+          fitness.problems.map((problem) => escapeText(problem.detail)).join(" ") +
+          "</p>";
+        setStatus("The system does not fit this GPU; see the panel.", "bad");
+        return false;
+      }
+      summary.innerHTML +=
+        `<p class="note">This GPU holds about ` +
+        `${fitness.maxAtoms.toLocaleString("en-US")} atoms, limited by its ` +
+        `${escapeText(fitness.limitedBy)}.</p>`;
+    }
+
     setStatus(
       `${system.particleCount.toLocaleString("en-US")} particles loaded and ready to run.`,
       "ok",
@@ -417,11 +439,39 @@ window.addEventListener("resize", queueRedraw);
 queueRedraw();
 window.__mirRun = { state: "idle" };
 
+/** The adapter's limits, for the upload-time fitness check. */
+let loadedLimits: Readonly<Record<string, number>> | undefined;
+
+const escapeText = (value: string): string =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 void (async () => {
   try {
     const adapter = await requestEngineAdapter();
     const device = await requestEngineDevice(adapter);
     const info = adapter.info;
+    // 🔴 The **device's** limits, not the adapter's, and the difference is
+    // large in both directions. `adapter.limits` reports what the hardware
+    // could support — 4.29 GB of storage binding on this machine — while a
+    // device created without asking for anything gets WebGPU's defaults, which
+    // are 128 MB. Measured here: a preflight reading the adapter's maxima said
+    // 4,473,924 atoms and one reading an unrequested device's said 139,810,
+    // for the same GPU. Only the limits the engine actually requests describe
+    // what a run can do, which is why this is taken from the device
+    // `requestEngineDevice` returns.
+    loadedLimits = Object.fromEntries(
+      (
+        [
+          "maxBufferSize",
+          "maxStorageBufferBindingSize",
+          "maxComputeWorkgroupStorageSize",
+          "maxComputeInvocationsPerWorkgroup",
+          "maxComputeWorkgroupSizeX",
+          "maxComputeWorkgroupsPerDimension",
+          "maxStorageBuffersPerShaderStage",
+        ] as const
+      ).map((name) => [name, device.limits[name] as number]),
+    );
     setStatus(
       `Ready on ${[info?.vendor, info?.architecture, info?.device]
         .filter(Boolean)

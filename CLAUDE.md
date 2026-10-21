@@ -127,6 +127,18 @@ remote from the cause: the ligand keeps every atom, its element signature
 matches its template exactly, and matching fails on the bond graph because the
 residue has no bonds at all.
 
+🔴 **`adapter.limits`, `device.limits` and *requested* limits are three
+different things, and the gap is large.** On this M3 Pro the adapter reports
+4.29 GB of `maxStorageBufferBindingSize`; a device created without asking for
+anything gets WebGPU's default of **128 MB**; the engine asks for more and gets
+it. A preflight reading the adapter's maxima claimed 4,473,924 atoms and one
+reading an unrequested device's claimed 139,810 — same GPU, a 32× spread.
+Anything deciding what a run can do must read the limits of the device the
+engine will actually use. `deviceFitness` in `src/gpu/device.ts` takes a plain
+limits record for exactly this reason, so the caller has to be explicit about
+which it passes, and `DEVICE_PROFILES` lets the arithmetic be tested against
+other classes of hardware from one machine.
+
 🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
 about 1% renderer CPU and accumulates a few seconds over many minutes — the work
 is on the GPU and the loop batches steps per submission. A stalled page looks

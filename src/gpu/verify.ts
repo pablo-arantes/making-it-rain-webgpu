@@ -35,6 +35,7 @@ import {
 import { rectangularBox } from "../reference/forces/nonbonded.js";
 import { checkMoleculesIntact } from "../engine/wrapping.js";
 import { cellHeadroom } from "./cell-list.js";
+import { deviceFitness, type DeviceFitness } from "./device.js";
 import { StepLoop } from "./loop.js";
 
 export interface ForceAgreement {
@@ -67,6 +68,16 @@ export interface VerifyReport {
   /** How much the box can compress before the cell list fails. */
   readonly cellHeadroom: number;
   readonly canRunNpt: boolean;
+  /**
+   * Whether this system fits this GPU.
+   *
+   * 🔴 Checked here because here is before the run. The limits that bind are
+   * per device, so a system that runs on the machine it was prepared on can
+   * exceed a user's — and without this the first sign is an allocation failure
+   * part-way through, which reads as a bug rather than as a system too large
+   * for the hardware.
+   */
+  readonly fitness: DeviceFitness;
   readonly thresholds: typeof VERIFY_THRESHOLDS;
   readonly ok: boolean;
   /** Seconds the whole check took, because the user is waiting. */
@@ -148,6 +159,24 @@ export async function verifySystem(
 
   const wrapping = checkMoleculesIntact(system, state.positions, box);
   const headroom = cellHeadroom(box, nonbonded.cutoff);
+  const fitness = deviceFitness(
+    // `device.limits` is a `GPUSupportedLimits`, whose members are accessors
+    // rather than own properties, so spreading it yields an empty object.
+    Object.fromEntries(
+      (
+        [
+          "maxBufferSize",
+          "maxStorageBufferBindingSize",
+          "maxComputeWorkgroupStorageSize",
+          "maxComputeInvocationsPerWorkgroup",
+          "maxComputeWorkgroupSizeX",
+          "maxComputeWorkgroupsPerDimension",
+          "maxStorageBuffersPerShaderStage",
+        ] as const
+      ).map((name) => [name, device.limits[name] as number]),
+    ),
+    system.particleCount,
+  );
 
   return {
     particleCount: system.particleCount,
@@ -166,11 +195,20 @@ export async function verifySystem(
     worstBondedSeparation: wrapping.worstSeparation,
     cellHeadroom: headroom,
     canRunNpt: headroom >= VERIFY_THRESHOLDS.nptHeadroom,
+    fitness,
     thresholds: VERIFY_THRESHOLDS,
+    // 🔴 `fitness.fits` is folded in, and it is not redundant even though
+    // reaching this line means the buffers were allocated. The memory checks
+    // are indeed already proven by getting here; the *other* limits are not.
+    // A device reporting fewer than eight storage buffers per stage, or fewer
+    // than 64 invocations per workgroup, can still complete this verification
+    // -- which binds fewer resources than the force kernels in a run -- and
+    // then fail during the run itself. Better to say so now.
     ok:
       energyRelativeError < VERIFY_THRESHOLDS.energyRelative &&
       forceRelativeRms < VERIFY_THRESHOLDS.forceRelativeRms &&
-      wrapping.intact,
+      wrapping.intact &&
+      fitness.fits,
     elapsed: (performance.now() - began) / 1000,
   };
 }

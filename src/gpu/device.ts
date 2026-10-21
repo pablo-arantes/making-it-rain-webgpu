@@ -210,3 +210,180 @@ export function onDeviceLost(
 ): void {
   void device.lost.then(handler);
 }
+
+/**
+ * Device profiles to test the fitness logic against, since one machine has one GPU.
+ *
+ * 🔴 The only honest way to check cross-device behaviour from a single laptop:
+ * the arithmetic is pure, so it can be exercised against limits other devices
+ * actually report instead of against the one in front of us. These are not
+ * guesses — `floor` is WebGPU's mandated minimum, which a conformant
+ * implementation may expose and nothing may go below, and the others are the
+ * shapes reported by hardware in that class.
+ *
+ * A device meeting only the floor is the case that matters: it is what the
+ * specification guarantees, so an engine that needs more than this must say so
+ * rather than fail partway through a run.
+ */
+export const DEVICE_PROFILES = {
+  /** WebGPU's mandated minimum. Nothing conformant is smaller. */
+  floor: {
+    maxBufferSize: 268435456,
+    maxStorageBufferBindingSize: 134217728,
+    maxComputeWorkgroupStorageSize: 16384,
+    maxComputeInvocationsPerWorkgroup: 256,
+    maxComputeWorkgroupSizeX: 256,
+    maxComputeWorkgroupsPerDimension: 65535,
+    maxStorageBuffersPerShaderStage: 8,
+  },
+  /** An integrated GPU sharing system memory. */
+  integrated: {
+    maxBufferSize: 2147483648,
+    maxStorageBufferBindingSize: 2147483644,
+    maxComputeWorkgroupStorageSize: 32768,
+    maxComputeInvocationsPerWorkgroup: 1024,
+    maxComputeWorkgroupSizeX: 1024,
+    maxComputeWorkgroupsPerDimension: 65535,
+    maxStorageBuffersPerShaderStage: 10,
+  },
+  /** A discrete card with its own memory. */
+  discrete: {
+    maxBufferSize: 4294967296,
+    maxStorageBufferBindingSize: 4294967292,
+    maxComputeWorkgroupStorageSize: 32768,
+    maxComputeInvocationsPerWorkgroup: 1024,
+    maxComputeWorkgroupSizeX: 1024,
+    maxComputeWorkgroupsPerDimension: 2147483647,
+    maxStorageBuffersPerShaderStage: 16,
+  },
+} as const satisfies Readonly<Record<string, Readonly<Record<string, number>>>>;
+
+/** The workgroup size every kernel declares. See the note in `deviceFitness`. */
+export const KERNEL_WORKGROUP_SIZE = 64;
+
+/** How many storage buffers the busiest bind group uses. */
+export const MAX_STORAGE_BUFFERS_USED = 8;
+
+export interface FitnessProblem {
+  readonly limit: string;
+  readonly needs: number;
+  readonly has: number;
+  readonly detail: string;
+}
+
+export interface DeviceFitness {
+  readonly fits: boolean;
+  readonly particleCount: number;
+  /** The most atoms this device could hold, whatever was asked for. */
+  readonly maxAtoms: number;
+  readonly limitedBy: string;
+  /** Workgroups the largest per-atom dispatch needs. */
+  readonly dispatchWorkgroups: number;
+  readonly problems: readonly FitnessProblem[];
+}
+
+/**
+ * Whether a particular system will run on a particular device.
+ *
+ * `estimateMaxAtoms` answers "how big can this device go"; this answers "will
+ * *this* system run", which is the question a user has and the one worth
+ * answering **before** a run rather than through an allocation failure twenty
+ * minutes in.
+ *
+ * Three limits can bind, and all three are checked so the message names the
+ * real one:
+ *
+ *  - **storage binding size**, which the neighbour list reaches first;
+ *  - **buffer size**, across every per-atom array together;
+ *  - **dispatch width**. Every kernel here declares
+ *    `@workgroup_size(64)` and dispatches one workgroup per 64 atoms, so the
+ *    ceiling is `maxComputeWorkgroupsPerDimension * 64` — 4,194,240 atoms at
+ *    WebGPU's floor. Memory binds long before that on every profile in
+ *    `DEVICE_PROFILES`, which is why the kernels can keep a fixed workgroup
+ *    size: 64 is inside the mandated minimum of 256 invocations, so it is
+ *    valid everywhere, and the dimension limit is unreachable in practice.
+ *    It is checked anyway, because "unreachable in practice" is an argument
+ *    about today's limits and not a guarantee.
+ */
+export function deviceFitness(
+  limits: Readonly<Record<string, number>>,
+  particleCount: number,
+): DeviceFitness {
+  const estimate = estimateMaxAtoms(limits as unknown as GPUSupportedLimits);
+  const problems: FitnessProblem[] = [];
+
+  const binding = limits["maxStorageBufferBindingSize"] ?? 0;
+  const neighbourBytes = particleCount * BYTES_PER_ATOM.neighbours;
+  if (neighbourBytes > binding) {
+    problems.push({
+      limit: "maxStorageBufferBindingSize",
+      needs: neighbourBytes,
+      has: binding,
+      detail:
+        `the neighbour list alone needs ${(neighbourBytes / 1048576).toFixed(0)} MB ` +
+        `and this device binds at most ${(binding / 1048576).toFixed(0)} MB. ` +
+        `It can hold about ${estimate.atomsAtBindingLimit.toLocaleString("en-US")} atoms.`,
+    });
+  }
+
+  const buffer = limits["maxBufferSize"] ?? 0;
+  const totalBytes = particleCount * TOTAL_BYTES_PER_ATOM;
+  if (totalBytes > buffer) {
+    problems.push({
+      limit: "maxBufferSize",
+      needs: totalBytes,
+      has: buffer,
+      detail:
+        `the per-atom arrays come to ${(totalBytes / 1048576).toFixed(0)} MB ` +
+        `against a ${(buffer / 1048576).toFixed(0)} MB limit.`,
+    });
+  }
+
+  const dispatchWorkgroups = Math.ceil(particleCount / KERNEL_WORKGROUP_SIZE);
+  const maxDispatch = limits["maxComputeWorkgroupsPerDimension"] ?? 0;
+  if (dispatchWorkgroups > maxDispatch) {
+    problems.push({
+      limit: "maxComputeWorkgroupsPerDimension",
+      needs: dispatchWorkgroups,
+      has: maxDispatch,
+      detail:
+        `a per-atom kernel needs ${dispatchWorkgroups.toLocaleString("en-US")} ` +
+        `workgroups of ${KERNEL_WORKGROUP_SIZE} and this device allows ` +
+        `${maxDispatch.toLocaleString("en-US")}.`,
+    });
+  }
+
+  const buffers = limits["maxStorageBuffersPerShaderStage"] ?? 0;
+  if (buffers < MAX_STORAGE_BUFFERS_USED) {
+    problems.push({
+      limit: "maxStorageBuffersPerShaderStage",
+      needs: MAX_STORAGE_BUFFERS_USED,
+      has: buffers,
+      detail:
+        `the force kernels bind ${MAX_STORAGE_BUFFERS_USED} storage buffers and ` +
+        `this device allows ${buffers}. This is below WebGPU's own minimum of ` +
+        `${MAX_STORAGE_BUFFERS_USED}, so the device is not conformant.`,
+    });
+  }
+
+  const invocations = limits["maxComputeInvocationsPerWorkgroup"] ?? 0;
+  if (invocations < KERNEL_WORKGROUP_SIZE) {
+    problems.push({
+      limit: "maxComputeInvocationsPerWorkgroup",
+      needs: KERNEL_WORKGROUP_SIZE,
+      has: invocations,
+      detail:
+        `every kernel declares @workgroup_size(${KERNEL_WORKGROUP_SIZE}) and this ` +
+        `device allows ${invocations} invocations per workgroup.`,
+    });
+  }
+
+  return {
+    fits: problems.length === 0,
+    particleCount,
+    maxAtoms: estimate.maxAtoms,
+    limitedBy: estimate.limitedBy,
+    dispatchWorkgroups,
+    problems,
+  };
+}

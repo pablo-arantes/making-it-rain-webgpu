@@ -463,8 +463,18 @@ committed trajectory.
 
 **Phase 4 — protein–ligand from a PDB ID.** Heterogen picker, CCD bond orders,
 SMIRNOFF typing with RDKit WASM, NAGL in ONNX, GAFF by upload, and the ligand
-analyses (interaction network, ligand RMSD, pocket and named-residue distances,
-frame extraction).
+analyses (~~interaction network~~, ligand RMSD, pocket and named-residue
+distances, frame extraction).
+
+🔴 **The interaction network is cut**, by decision rather than by difficulty.
+Reproducing ProLIF's fingerprint means reproducing nine interaction types whose
+criteria rest on atom typing a PDB does not carry, and the parts that were
+built — chemistry perception and the hydrophobic rule — agreed with ProLIF
+exactly while the assembled per-residue fingerprint did not (21 of 25 pairs
+differing in at least one frame). Shipping that behind a loose tolerance would
+have been worse than not shipping it, and the notebook's own version is already
+coarse: deviation 11 records that it samples at most ten frames whatever the
+trajectory length. Anyone wanting it has ProLIF.
 *Gates:* parameter parity for 3HTB/JZ4 and 181L/benzene against the OpenFF
 Python route; the NAGL-vs-AM1-BCC charge report; the interaction network against
 ProLIF.

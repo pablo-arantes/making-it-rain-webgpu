@@ -434,8 +434,21 @@ protein–ligand. Heterogen picker, CCD bond orders, SMIRNOFF typing through
 RDKit in WASM, NAGL in ONNX, GAFF by upload, and the ligand analyses. Nothing
 in `src/prep/` handles a non-polymer residue today — it is refused by name.
 
-**Phase 5 is untouched**: Safari, integrated GPUs, accessibility, the tutorial
-page, GROMACS export.
+**Phase 5 has started.** `deviceFitness` answers "will *this* system run on
+*this* GPU" before any GPU work, naming the limit that binds — storage binding,
+buffer size, dispatch width, storage buffers per stage, or invocations per
+workgroup. `DEVICE_PROFILES` holds WebGPU's mandated floor plus integrated and
+discrete shapes, so the arithmetic is tested against hardware this machine does
+not have; `test/device-fitness.test.ts` asserts every fixture fits the **floor**,
+which is the portability guarantee. The run page states the ceiling at upload
+and `verifySystem` carries the same verdict.
+
+🔴 What that does **not** establish is that the kernels produce right numbers on
+another GPU. Only running them there does, and `npm run test:browser` is the
+lane. Still open in Phase 5: workgroup tuning (64 everywhere, which is valid
+below WebGPU's 256-invocation minimum but not necessarily fast on a 32-wide
+NVIDIA warp or a 16-wide Intel EU), subgroups, fewer readbacks, Safari,
+accessibility, the tutorial page, GROMACS export.
 
 ## 🔴 The things that are not features
 
