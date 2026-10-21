@@ -62,19 +62,37 @@ def group_the_forces(system: openmm.System) -> list[str]:
     return names
 
 
+# Why each candidate platform could not be used, filled in by make_context.
+# 🔴 Recorded, not just printed. A platform that fails to produce a Context was
+# previously skipped with `continue` and a line of stdout, which left a JSON
+# file that looks complete and is missing the only row that matters. One Colab
+# run came back with CUDA in `available_platforms`, no CUDA row, and no record
+# of the reason -- the cause existed only in a notebook cell that had since been
+# cleared.
+SKIPPED: dict[str, str] = {}
+
+
 def make_context(system_xml: str, name: str, precision: str | None,
                  grouped: bool) -> tuple[openmm.Context, list[str]] | None:
     system = XmlSerializer.deserialize(open(system_xml).read())
     names = group_the_forces(system) if grouped else []
+    label = f"{name}/{precision}" if precision else name
     try:
         plat = openmm.Platform.getPlatformByName(name)
-    except Exception:
+    except Exception as exc:
+        SKIPPED[label] = f"the platform is not registered: {exc}"
         return None
     props = {"Precision": precision} if precision else {}
     try:
         ctx = openmm.Context(system, openmm.VerletIntegrator(0.002), plat, props)
     except Exception as exc:
-        print(f"  {name}/{precision}: unavailable ({exc})")
+        # 🔴 The platform being *registered* does not mean it is usable. OpenMM
+        # lists CUDA whenever its plugin loads, which needs only libcuda --
+        # not a device, not a matching driver. So "CUDA is available" and "a
+        # Context can be made on CUDA" are different claims, and this is where
+        # the second one is tested.
+        SKIPPED[label] = f"{type(exc).__name__}: {exc}"
+        print(f"  {label}: unavailable ({exc})")
         return None
     return ctx, names
 
@@ -263,6 +281,18 @@ def main() -> None:
     print("Reference total:", ref["total"], "kJ/mol")
     del ref_ctx
 
+    # What the machine says it has, independent of what OpenMM managed to use.
+    try:
+        import subprocess
+        report["host"]["nvidia_smi"] = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,driver_version,memory.total",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip() or "(no output)"
+    except Exception as exc:
+        report["host"]["nvidia_smi"] = f"unavailable: {exc}"
+    print("  host GPU:", report["host"]["nvidia_smi"])
+
     report["platforms"] = {}
     for name, precision in CANDIDATES:
         label = f"{name}/{precision}" if precision else name
@@ -320,6 +350,24 @@ def main() -> None:
     else:
         print("\nNo mixed-precision GPU platform on this host, so no thresholds were "
               "proposed.  Run this on a CUDA machine (Colab T4).")
+    report["skipped_platforms"] = dict(SKIPPED)
+    gpu_rows = [k for k in report["platforms"] if k.split("/")[0] in ("CUDA", "HIP", "OpenCL")]
+    report["verdict"] = {
+        "gpu_row_present": bool(gpu_rows),
+        "gpu_rows": gpu_rows,
+        "thresholds_proposed": "proposed_thresholds" in report,
+        "summary": (
+            "usable: a GPU platform produced a row"
+            if gpu_rows
+            else "NOT USABLE for calibration: no GPU platform produced a row, so "
+                 "the mixed-precision basis the thresholds need is missing. See "
+                 "skipped_platforms for the reason each candidate failed."
+        ),
+    }
+    if not gpu_rows:
+        print("\n🔴 " + report["verdict"]["summary"])
+        for label, reason in SKIPPED.items():
+            print(f"     {label}: {reason}")
     if args.out:
         json.dump(report, open(args.out, "w"), indent=1)
         print("wrote", args.out)

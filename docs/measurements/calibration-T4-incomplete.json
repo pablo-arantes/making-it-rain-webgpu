@@ -1,0 +1,135 @@
+{
+ "host": {
+  "platform": "Linux-6.6.122+-x86_64-with-glibc2.39",
+  "processor": "x86_64"
+ },
+ "openmm": "8.6.1.dev-b399af4",
+ "fixture": "fixtures/1L2Y/system.xml",
+ "available_platforms": [
+  "Reference",
+  "CPU",
+  "CUDA"
+ ],
+ "equilibration": {
+  "platform": "CPU",
+  "picoseconds": 10.0,
+  "seconds": 116.3,
+  "potential_energy_kJ_mol": -37961.71579528775
+ },
+ "force_groups": [
+  "HarmonicBondForce",
+  "PeriodicTorsionForce",
+  "NonbondedForce",
+  "CMMotionRemover",
+  "HarmonicAngleForce",
+  "NonbondedForce[reciprocal]"
+ ],
+ "reference": {
+  "energies": {
+   "0:HarmonicBondForce": 256.1067007636736,
+   "1:PeriodicTorsionForce": 1041.9102621717911,
+   "2:NonbondedForce": 155405.2510019057,
+   "3:CMMotionRemover": 0.0,
+   "4:HarmonicAngleForce": 622.2736679126152,
+   "5:NonbondedForce[reciprocal]": -195287.24733349687
+  },
+  "total": -37961.70570074288,
+  "force_rms_kJ_mol_nm": 1024.2885180469227
+ },
+ "platforms": {
+  "CPU": {
+   "device": "x86_64",
+   "single_point_vs_reference": {
+    "energy_abs_kJ_mol": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": -9.094947017729282e-13,
+     "2:NonbondedForce": -0.005287412699544802,
+     "3:CMMotionRemover": 0.0,
+     "4:HarmonicAngleForce": -1.1368683772161603e-13,
+     "5:NonbondedForce[reciprocal]": -0.0025140220823232085
+    },
+    "energy_rel": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": -8.729107820448455e-16,
+     "2:NonbondedForce": -3.4023385088062204e-08,
+     "3:CMMotionRemover": null,
+     "4:HarmonicAngleForce": -1.8269588379494288e-16,
+     "5:NonbondedForce[reciprocal]": -1.2873457517837562e-08
+    },
+    "total_abs_kJ_mol": -0.007801434978318866,
+    "total_rel": -2.055080201036962e-07,
+    "force_rms_error_kJ_mol_nm": 0.04943606442798906,
+    "force_max_error_kJ_mol_nm": 0.2092629062046808,
+    "force_rel_rms": 4.8263808055031214e-05,
+    "force_rms_reference_kJ_mol_nm": 1024.2885180469227,
+    "worst_atom": 2596,
+    "worst_atom_reference_force_kJ_mol_nm": 1307.509140259614
+   },
+   "nve": {
+    "steps": 25000,
+    "timestep_fs": 2,
+    "atoms": 2925,
+    "drift_kJ_mol_per_ns_per_atom": -0.01635201875307095,
+    "max_excursion_kJ_mol_per_atom": 0.0023388475874358285,
+    "total_energy_series_kJ_mol": [
+     -30676.2402,
+     -30673.5283,
+     -30675.1095,
+     -30677.4049,
+     -30675.7703,
+     -30677.9055,
+     -30680.2507,
+     -30677.2485,
+     -30677.1199,
+     -30676.9045,
+     -30674.5498,
+     -30675.9131,
+     -30676.5988,
+     -30677.3056,
+     -30672.7301,
+     -30677.8281,
+     -30675.3476,
+     -30673.8996,
+     -30669.3991,
+     -30681.2511,
+     -30676.1818,
+     -30675.9093,
+     -30680.8195,
+     -30672.6305,
+     -30676.3203,
+     -30676.676,
+     -30676.5016,
+     -30677.3305,
+     -30674.2442,
+     -30676.3399,
+     -30677.3378,
+     -30677.0053,
+     -30678.673,
+     -30678.3243,
+     -30676.9208,
+     -30674.0982,
+     -30681.4178,
+     -30675.5768,
+     -30679.9071,
+     -30675.9164,
+     -30678.6702,
+     -30680.6586,
+     -30677.2889,
+     -30674.5698,
+     -30677.9532,
+     -30673.9369,
+     -30680.2533,
+     -30678.6933,
+     -30681.9696,
+     -30676.9712
+    ]
+   },
+   "speed": {
+    "steps": 5000,
+    "seconds": 73.77,
+    "ns_per_day": 11.7
+   }
+  }
+ },
+ "_note": "INCOMPLETE. CUDA appears in available_platforms but produced no row, so the mixed-precision basis the thresholds need is absent and no proposed_thresholds block was written. The reason CUDA failed was printed to the notebook and not recorded; tools/calibrate_thresholds.py now records it. Kept as the record of the first attempt."
+}

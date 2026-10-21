@@ -97,6 +97,60 @@ print(json.dumps(json.load(open("calibration-T4.json"))["proposed_thresholds"], 
 files.download("calibration-T4.json")
 ```
 
+## 🔴 If `CUDA` appears but produces no row
+
+This happened on the first attempt, and it is the failure worth knowing about
+because the output looks finished. `docs/measurements/calibration-T4-incomplete.json`
+is the record: `available_platforms` lists `Reference`, `CPU` and **`CUDA`**,
+and `platforms` contains only `CPU`. No `proposed_thresholds` block was written,
+which is correct — but nothing in the file said why.
+
+**OpenMM registering a platform does not mean the platform works.** The CUDA
+plugin is listed as soon as it loads, which needs only `libcuda` — not a
+device, not a matching driver, not a usable toolkit. "CUDA is available" and "a
+Context can be made on CUDA" are different claims.
+
+Run this before cell 5 and it will name the cause:
+
+```python
+import openmm
+from openmm import Platform
+print("openmm", openmm.version.version)
+print("plugin load failures:", Platform.getPluginLoadFailures() or "none")
+print("platforms:", [Platform.getPlatform(i).getName()
+                     for i in range(Platform.getNumPlatforms())])
+
+one = openmm.System(); one.addParticle(1.0)
+try:
+    ctx = openmm.Context(one, openmm.VerletIntegrator(0.001),
+                         Platform.getPlatformByName("CUDA"))
+    print("CUDA works:", ctx.getPlatform().getPropertyValue(ctx, "DeviceName"))
+except Exception as exc:
+    print("CUDA cannot make a Context:", type(exc).__name__, exc)
+```
+
+`getPluginLoadFailures()` is the one that usually answers it — a missing
+`libcufft` or `libcudart` shows up there by name.
+
+The two causes in practice:
+
+**No GPU attached.** `nvidia-smi` in cell 1 errors or lists nothing. Fix it in
+**Runtime → Change runtime type → T4 GPU**. The CUDA platform can still be
+registered on a CPU runtime, which is exactly why cell 1 exists.
+
+**A toolkit the driver cannot run.** conda-forge's `openmm` is built against a
+particular CUDA version, and the one `mamba` resolves may not match Colab's
+driver. Pin it to what `nvidia-smi` reports — a 550-series driver is CUDA 12:
+
+```python
+!mamba install -q -y -c conda-forge openmm pdbfixer "cuda-version=12"
+```
+
+Then re-run the diagnostic. `calibrate_thresholds.py` now records every
+candidate's failure under `skipped_platforms` and writes a `verdict` block
+saying in plain words whether the run met its purpose, so a second attempt is
+self-describing and you will not need to copy anything out of the notebook.
+
 ## What it should print
 
 One line per platform and precision the runtime offers. On a T4 expect
