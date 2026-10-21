@@ -285,6 +285,41 @@ ligand's coarser scale was applied to every **protein** 1-4 pair, shifting all
 38401 exception charge products. OpenMM keeps the **first** and raises past
 `SCALETOL = 1e-5`; so does this now.
 
+## The interaction fingerprint (Phase 4, partly done)
+
+```sh
+~/miniforge3/envs/prolif/bin/python tools/dump_interactions.py \
+    --dcd fixtures/analysis-3HTB/trajectory.dcd --pdb fixtures/3HTB/system.pdb \
+    --sdf fixtures/3HTB/ligand.sdf --ligand UNK \
+    --out fixtures/analysis-3HTB/interactions.json
+```
+
+🔴 **Getting a meaningful reference out of ProLIF takes two fixes, and without
+either it reports almost nothing while appearing to work.** MDAnalysis does not
+infer bonds from a PDB, so the protein reaches RDKit as disconnected atoms and
+no SMARTS matches — every chemistry-dependent interaction vanishes and only
+`VdWContact` survives, since it needs nothing but elements and distances. And a
+ligand from a PDB has no bond orders, so its aromaticity is unknown. Measured
+on 3HTB: **one** interaction before, **26** after, across HBDonor, Hydrophobic
+and VdWContact. A parity test against the first number would have passed
+trivially.
+
+**Status: partly done, and not wired into the UI.**
+
+Verified: the MOL/SDF reader; aromaticity perception, which the file does not
+state because RDKit writes Kekulé bonds; and `isHydrophobic`, which evaluates
+ProLIF's SMARTS as a rule rather than a pattern match and selects **exactly**
+the atoms ProLIF's own substructure search does. Aromaticity decides one of
+them — the phenol's C–OH carbon is excluded by the pattern's carbon branch and
+admitted by its aromatic branch, so without ring perception it is eight of nine.
+
+Not verified: the assembled per-residue, per-frame fingerprint. 21 of 25 shared
+pairs differ in at least one frame, frequencies up to 0.38 apart. Protein
+connectivity is *not* the cause — `guess_bonds` and `inferBonds` both give 2634
+bonds for the same 2614 atoms, and the per-residue hydrophobic sets agree. Next
+to check: whether `run_from_iterable` restricts which residues it evaluates by
+distance, and whether ProLIF's residue labels map to PDB numbers as assumed.
+
 ## Ligand analyses (Phase 4)
 
 ```sh
