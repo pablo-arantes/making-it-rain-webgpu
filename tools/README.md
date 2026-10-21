@@ -243,6 +243,48 @@ those compares two different meshes. And the exported system has no
 constraints, since a constrained bond is removed from the `HarmonicBondForce`
 and the two systems would have genuinely different bonded energies.
 
+## Ligand typing by uploaded parameters (Phase 4)
+
+The route that makes browser-side protein–ligand preparation possible without
+RDKit in WebAssembly. `openmmforcefields` emits an ffxml holding a residue
+template plus types, bonded terms and nonbonded parameters, and
+`src/prep/ffxml.ts` already reads exactly that — so the ligand is parameterised
+once, anywhere, and the browser merges the result.
+
+```sh
+~/miniforge3/envs/parametrizani_env/bin/python tools/dump_ligand_ffxml.py \
+    --sdf fixtures/3HTB/ligand.sdf --method smirnoff \
+    --out fixtures/ligand/JZ4-ligand.xml
+
+# then the usual parity dumps, with the ligand ffxml as a third force field
+python tools/dump_parameters.py --pdb fixtures/3HTB/system.pdb \
+    --forcefield amber14/protein.ff14SB.xml amber14/tip3p.xml \
+    fixtures/ligand/JZ4-ligand.xml \
+    --out fixtures/prep/3HTB-lig-params.json \
+    --system-out fixtures/prep/3HTB-lig-system.xml
+```
+
+**Charges come from NAGL, not AM1-BCC**, and not only because AmberTools' `sqm`
+is unavailable here: the browser cannot run `sqm` either, so NAGL is the method
+the engine will actually use (deviation 6). Using it on both sides makes the
+comparison measure the *typing* rather than the charge method.
+`openff-gnn-am1bcc-1.0.0.pt` is the model, and it gives a total charge of
+−0.000000 e on JZ4.
+
+Result: every field of every force matches OpenMM element for element on the
+full 26,749-atom solvated system — 18698 bonds, 12809 angles, 8910 torsions,
+38401 exceptions, and all 26749 masses, charges, sigmas and epsilons. The
+ligand is matched by **graph**, which is what makes this work at all: the
+template is named after the molecule's SMILES and its atoms carry Tripos
+names, and neither appears in the PDB.
+
+🔴 One real bug, worth 2e-11 and easy to dismiss as round-off. A SMIRNOFF
+ligand ffxml declares `coulomb14scale="0.8333333333"` where ff14SB declares
+`0.8333333333333334`. `mergeForceFields` took the *last* file's value, so the
+ligand's coarser scale was applied to every **protein** 1-4 pair, shifting all
+38401 exception charge products. OpenMM keeps the **first** and raises past
+`SCALETOL = 1e-5`; so does this now.
+
 ## Ligand analyses (Phase 4)
 
 ```sh

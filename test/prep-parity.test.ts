@@ -114,9 +114,23 @@ const FIXTURES = [
     note: "1L2Y under ff99SB",
     fields: ["amber99sb.xml"],
   },
+  {
+    // 🔴 The Phase 4 gate: a protein-ligand system, with the ligand typed by
+    // the OpenFF Python route and its parameters arriving as an uploaded
+    // ffxml. 26749 atoms, and the ligand is matched by *graph* -- the template
+    // is named after the molecule's SMILES and its atoms carry Tripos names,
+    // neither of which appears in the PDB.
+    name: "3HTB-lig",
+    atoms: 26749,
+    note: "3HTB with JZ4 typed by openff-2.0.0 and NAGL charges",
+    fields: ["protein.ff14SB.xml", "amber14-tip3p.xml", "../../fixtures/ligand/JZ4-ligand.xml"],
+  },
 ] as const;
 
 function loadFields(names: readonly string[]) {
+  // A name starting `../` is a path relative to vendor/ffxml, which is how the
+  // uploaded ligand parameters are reached: they are a regenerated fixture
+  // rather than something vendored.
   return mergeForceFields(
     names.map((name) => parseForceField(readFileSync(`vendor/ffxml/${name}`, "utf8"))),
   );

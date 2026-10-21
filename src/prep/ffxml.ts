@@ -143,6 +143,9 @@ export class UnsupportedForceField extends Error {
   }
 }
 
+/** OpenMM's `NonbondedGenerator.SCALETOL`: how far two files' 1-4 scales may differ. */
+const SCALE_TOLERANCE = 1e-5;
+
 /** Force tags that would change the energy and are not implemented. */
 const REFUSED = new Set([
   "GBSAOBCForce",
@@ -441,8 +444,19 @@ export function mergeForceFields(fields: readonly ForceField[]): ForceField {
   const propers: TorsionRow[] = [];
   const impropers: TorsionRow[] = [];
   const fromResidue = new Set<string>();
-  let coulomb14Scale = (fields[0] as ForceField).coulomb14Scale;
-  let lj14Scale = (fields[0] as ForceField).lj14Scale;
+  // 🔴 The **first** file's 1-4 scales win, and a later file that disagrees is
+  // refused. This is OpenMM's rule, down to the tolerance: `NonbondedGenerator`
+  // keeps `existing[0]` and raises `Found multiple NonbondedForce tags with
+  // different 1-4 scales` past `SCALETOL = 1e-5`.
+  //
+  // Taking the last instead is a silent, tiny, wrong answer -- which is how
+  // this was found. A SMIRNOFF ligand ffxml from `openmmforcefields` declares
+  // `coulomb14scale="0.8333333333"` where ff14SB declares
+  // `0.8333333333333334`; letting the ligand win applied its coarser value to
+  // every *protein* 1-4 pair and shifted 38401 exception charge products by
+  // 2e-11. Small enough to dismiss as round-off, and not round-off at all.
+  const coulomb14Scale = (fields[0] as ForceField).coulomb14Scale;
+  const lj14Scale = (fields[0] as ForceField).lj14Scale;
   let torsionOrdering = (fields[0] as ForceField).torsionOrdering;
 
   for (const field of fields) {
@@ -454,8 +468,18 @@ export function mergeForceFields(fields: readonly ForceField[]): ForceField {
     propers.push(...field.propers);
     impropers.push(...field.impropers);
     for (const attribute of field.fromResidue) fromResidue.add(attribute);
-    coulomb14Scale = field.coulomb14Scale;
-    lj14Scale = field.lj14Scale;
+    if (
+      Math.abs(field.coulomb14Scale - coulomb14Scale) > SCALE_TOLERANCE ||
+      Math.abs(field.lj14Scale - lj14Scale) > SCALE_TOLERANCE
+    ) {
+      throw new Error(
+        "these force field files disagree about the 1-4 scale factors: " +
+          `${coulomb14Scale} / ${lj14Scale} against ${field.coulomb14Scale} / ` +
+          `${field.lj14Scale}. Amber has one pair for the whole system, so one ` +
+          "of them would silently be applied to the other's exceptions. OpenMM " +
+          "refuses this too.",
+      );
+    }
     if (field.torsionOrdering !== "default") torsionOrdering = field.torsionOrdering;
   }
 

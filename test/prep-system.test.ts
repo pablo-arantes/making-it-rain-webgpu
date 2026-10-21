@@ -48,6 +48,10 @@ const FIXTURES = [
   { name: "1UBQ", fields: ["protein.ff14SB.xml"] },
   { name: "1RX2", fields: ["protein.ff14SB.xml"] },
   { name: "1L2Y-sb", fields: ["amber99sb.xml"] },
+  {
+    name: "3HTB-lig",
+    fields: ["protein.ff14SB.xml", "amber14-tip3p.xml", "../../fixtures/ligand/JZ4-ligand.xml"],
+  },
 ] as const;
 const fieldPath = "vendor/ffxml/protein.ff14SB.xml";
 
