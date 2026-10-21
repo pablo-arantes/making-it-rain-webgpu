@@ -309,10 +309,20 @@ describe.skipIf(!existsSync(pytrajPath) || !present)("against pytraj", () => {
     const ours = rmsf(trajectory, ca);
     expect(worst(ours, theirs.rmsfAligned).value).toBeLessThan(5e-7);
 
+    // 🔴 The ratio asserted here is deliberately loose, and the reason is a
+    // mistake worth not repeating. It was first written as `> 1.5`, which was
+    // the ratio on the trajectory that existed then: 0.0737 nm aligned against
+    // 0.1636 raw, a factor of 2.2. Regenerating the fixture with an energy
+    // minimisation first -- a strictly better protocol -- gave 0.0958 against
+    // 0.1393, a factor of 1.45, and the test failed on a change that improved
+    // the fixture. How much of an RMSF is tumbling is a property of the
+    // trajectory, so a tight bound here is a threshold fitted to one run. The
+    // claim is that alignment changes the answer materially; 20% is already
+    // far outside numerical noise.
     const rawGap = worst(ours, theirs.rmsfRaw).value;
-    expect(rawGap).toBeGreaterThan(0.01);
+    expect(rawGap).toBeGreaterThan(0.005);
     expect(Math.max(...theirs.rmsfRaw) / Math.max(...theirs.rmsfAligned)).toBeGreaterThan(
-      1.5,
+      1.2,
     );
   });
 

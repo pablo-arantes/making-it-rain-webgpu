@@ -243,6 +243,41 @@ those compares two different meshes. And the exported system has no
 constraints, since a constrained bond is removed from the `HarmonicBondForce`
 and the two systems would have genuinely different bonded energies.
 
+## Ligand analyses (Phase 4)
+
+```sh
+# a protein-ligand trajectory: 3HTB with its JZ4 ligand, present as UNK
+python tools/build_analysis_fixture.py --system fixtures/3HTB/system.xml \
+    --state fixtures/3HTB/state.xml --pdb fixtures/3HTB/system.pdb \
+    --frames 60 --interval 100 --out fixtures/analysis-3HTB
+
+# MDAnalysis and ProLIF, in the one env that has both
+~/miniforge3/envs/prolif/bin/python tools/dump_ligand_analyses.py \
+    --dcd fixtures/analysis-3HTB/trajectory.dcd --pdb fixtures/3HTB/system.pdb \
+    --ligand UNK --out fixtures/analysis-3HTB/ligand.json
+```
+
+Cells 33 to 37. Agreement: ligand RMSD 1.2e-7 nm, centre of mass 9.8e-8 nm,
+pocket residues identical, pocket and named-residue distances 1.4e-7 nm.
+
+🔴 `build_analysis_fixture.py` now minimises before integrating. Without it
+3HTB reaches `Particle coordinate is nan` within a few hundred steps of 2 fs
+Langevin from the raw solvated coordinates — 1L2Y happened to survive, which is
+not a property to depend on.
+
+🔴 Two findings, deviations 22 and 23. The notebook's ligand RMSD superposes the
+selection first, so it measures the ligand's **conformation**, not its
+displacement — under 0.032 nm here while the centre of mass moves further. And
+`resname UNK` selects nothing on a system prepared outside the notebook, which
+MDAnalysis reports as an RMSD of zero rather than an error.
+
+**The interaction network is not done.** ProLIF on this trajectory returns only
+three `VdWContact` interactions, because a ligand read from a PDB has no bond
+orders and ProLIF cannot perceive it properly. A useful parity test needs the
+ligand supplied with its chemistry — which `src/prep/ccd.ts` can now provide —
+so the network waits on wiring those together rather than on the fingerprint
+itself.
+
 ## Protein analyses
 
 ```sh

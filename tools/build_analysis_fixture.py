@@ -58,6 +58,16 @@ def main() -> None:
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--interval", type=int, default=250, help="steps per frame")
     parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--no-minimise",
+        action="store_true",
+        help="skip the energy minimisation. 🔴 Off by default because the "
+        "fixtures' state.xml holds raw solvated coordinates: 1L2Y happens to "
+        "survive 2 fs Langevin from there, and 3HTB with its ligand does not "
+        "-- it reaches `Particle coordinate is nan` within a few hundred "
+        "steps. A trajectory generator that depends on the input being lucky "
+        "is not one to compare analyses against.",
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +89,14 @@ def main() -> None:
     )
     simulation.context.setState(state)
     simulation.context.setVelocitiesToTemperature(298 * unit.kelvin, 24301)
+    if not args.no_minimise:
+        simulation.minimizeEnergy(
+            tolerance=10 * unit.kilojoule_per_mole / unit.nanometer,
+            maxIterations=10000,
+        )
+        print(f"  minimised to "
+              f"{simulation.context.getState(getEnergy=True).getPotentialEnergy()}")
+        simulation.context.setVelocitiesToTemperature(298 * unit.kelvin, 24301)
     simulation.reporters.append(app.DCDReporter(str(dcd), args.interval))
     simulation.step(args.interval * args.frames)
 
