@@ -442,11 +442,21 @@ page, GROMACS export.
 These matter more than the phase list, because each one is a limit on how much
 any of the above can be trusted.
 
-* **Every acceptance threshold is provisional.** `AGENTS.md` says so in two
-  places. They are calibrated against this machine's *CPU* platform, because
-  its `OpenCL/mixed` is unavailable, and mixed precision is the thing the engine
-  actually targets. `tools/calibrate_thresholds.py` on a Colab T4 is the fix and
-  has not been run.
+* ✅ **The thresholds are measured, not provisional.** OpenCL/mixed on an
+  NVIDIA L4: force relative RMS 1.43e-05, total energy 0.0136 kJ/mol, NVE drift
+  −0.0235 kJ/mol/ns/atom (`docs/measurements/calibration-L4-opencl-mixed.json`).
+  Two things remain open inside that. **CUDA is still unmeasured** — every
+  precision failed with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`, so the basis is
+  OpenCL/mixed. The engine has now been measured against
+  that basis at the same equilibrated coordinates: **1.10e-06 force relative
+  RMS against the 1.43e-05 threshold**, 12.9x inside it and 1.27x the error of
+  OpenMM's double-precision CPU platform
+  (`docs/measurements/engine-force-error-equilibrated-m3pro.json`).
+* 🔴 **NVE drift reproduces only to a factor of ~3.** The same CPU/double
+  configuration on nominally the same fixture gives −0.123 on the M3 Pro and
+  −0.0443 on the L4 host. Any drift threshold needs a factor-of-several
+  tolerance, and tightening one after a passing run would be fitting the
+  threshold to the engine.
 * **One GPU, one browser.** Everything is measured on an M3 Pro in Chrome. The
   atomic-contention finding in `CLAUDE.md` explicitly says not to act on it
   until it is measured on NVIDIA and on an integrated GPU, and the gather-vs-

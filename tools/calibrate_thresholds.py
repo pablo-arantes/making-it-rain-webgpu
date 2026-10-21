@@ -246,6 +246,14 @@ def main() -> None:
     p.add_argument("--skip-nve", action="store_true")
     p.add_argument("--skip-speed", action="store_true")
     p.add_argument("--out")
+    p.add_argument(
+        "--save-equilibrated",
+        help="write the equilibrated State to this path. 🔴 This is what makes "
+        "the WebGPU engine comparable with the numbers in this report: the "
+        "force error has to be evaluated at the *same* configuration, and "
+        "equilibration is stochastic, so re-running it elsewhere gives a "
+        "different structure and an incomparable number.",
+    )
     args = p.parse_args()
 
     state = XmlSerializer.deserialize(open(args.state_xml).read())
@@ -368,6 +376,24 @@ def main() -> None:
         print("\n🔴 " + report["verdict"]["summary"])
         for label, reason in SKIPPED.items():
             print(f"     {label}: {reason}")
+    if args.save_equilibrated:
+        equilibrated = openmm.State()
+        # There is no public State constructor, so the state is rebuilt through
+        # a throwaway Reference context at the equilibrated coordinates.
+        scratch = XmlSerializer.deserialize(open(args.system_xml).read())
+        ctx = openmm.Context(
+            scratch, openmm.VerletIntegrator(0.002),
+            openmm.Platform.getPlatformByName("Reference"),
+        )
+        ctx.setPeriodicBoxVectors(*box)
+        ctx.setPositions(positions)
+        if velocities is not None:
+            ctx.setVelocities(velocities)
+        equilibrated = ctx.getState(getPositions=True, getVelocities=True)
+        open(args.save_equilibrated, "w").write(XmlSerializer.serialize(equilibrated))
+        print("wrote", args.save_equilibrated)
+        del ctx
+
     if args.out:
         json.dump(report, open(args.out, "w"), indent=1)
         print("wrote", args.out)

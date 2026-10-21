@@ -1,0 +1,125 @@
+{
+ "host": {
+  "platform": "macOS-14.5-arm64-arm-64bit",
+  "processor": "arm",
+  "nvidia_smi": "unavailable: [Errno 2] No such file or directory: 'nvidia-smi'"
+ },
+ "openmm": "8.4.0.dev-4768436",
+ "fixture": "fixtures/1L2Y/system.xml",
+ "available_platforms": [
+  "Reference",
+  "CPU",
+  "OpenCL"
+ ],
+ "equilibration": {
+  "platform": "OpenCL",
+  "picoseconds": 10.0,
+  "seconds": 6.4,
+  "potential_energy_kJ_mol": -30230.52658010216
+ },
+ "force_groups": [
+  "HarmonicBondForce",
+  "PeriodicTorsionForce",
+  "NonbondedForce",
+  "CMMotionRemover",
+  "HarmonicAngleForce",
+  "NonbondedForce[reciprocal]"
+ ],
+ "reference": {
+  "energies": {
+   "0:HarmonicBondForce": 254.32658412907446,
+   "1:PeriodicTorsionForce": 1058.9848471984965,
+   "2:NonbondedForce": 123616.58113926876,
+   "3:CMMotionRemover": 0.0,
+   "4:HarmonicAngleForce": 607.229314889509,
+   "5:NonbondedForce[reciprocal]": -155767.6569765935
+  },
+  "total": -30230.53509110767,
+  "force_rms_kJ_mol_nm": 1039.2651639228957
+ },
+ "platforms": {
+  "OpenCL/single": {
+   "device": "Apple M3 Pro",
+   "single_point_vs_reference": {
+    "energy_abs_kJ_mol": {
+     "0:HarmonicBondForce": 0.00013706233178822913,
+     "1:PeriodicTorsionForce": -7.546998085672385e-05,
+     "2:NonbondedForce": 0.006327926006633788,
+     "3:CMMotionRemover": 0.0,
+     "4:HarmonicAngleForce": -0.0011654754465553196,
+     "5:NonbondedForce[reciprocal]": 0.003111270460067317
+    },
+    "energy_rel": {
+     "0:HarmonicBondForce": 5.389225521098808e-07,
+     "1:PeriodicTorsionForce": -7.126634630927606e-08,
+     "2:NonbondedForce": 5.118994513773705e-08,
+     "3:CMMotionRemover": null,
+     "4:HarmonicAngleForce": -1.9193333028847406e-06,
+     "5:NonbondedForce[reciprocal]": 1.9973789941096905e-08
+    },
+    "total_abs_kJ_mol": 0.004391132464661496,
+    "total_rel": 1.4525487066066356e-07,
+    "force_rms_error_kJ_mol_nm": 0.014801626189628523,
+    "force_max_error_kJ_mol_nm": 0.20196316474160447,
+    "force_rel_rms": 1.4242396169382884e-05,
+    "force_rms_reference_kJ_mol_nm": 1039.2651639228957,
+    "worst_atom": 166,
+    "worst_atom_reference_force_kJ_mol_nm": 1465.003597065899
+   }
+  },
+  "CPU": {
+   "device": "arm",
+   "single_point_vs_reference": {
+    "energy_abs_kJ_mol": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": 0.0,
+     "2:NonbondedForce": -0.002406672472716309,
+     "3:CMMotionRemover": 0.0,
+     "4:HarmonicAngleForce": 1.1368683772161603e-13,
+     "5:NonbondedForce[reciprocal]": 8.100573904812336e-05
+    },
+    "energy_rel": {
+     "0:HarmonicBondForce": 0.0,
+     "1:PeriodicTorsionForce": 0.0,
+     "2:NonbondedForce": -1.9468848357850203e-08,
+     "3:CMMotionRemover": null,
+     "4:HarmonicAngleForce": 1.8722224855416013e-16,
+     "5:NonbondedForce[reciprocal]": 5.200420974445017e-10
+    },
+    "total_abs_kJ_mol": -0.002325666770047974,
+    "total_rel": -7.693104879020384e-08,
+    "force_rms_error_kJ_mol_nm": 0.0009008620646657063,
+    "force_max_error_kJ_mol_nm": 0.00512502830570363,
+    "force_rel_rms": 8.668259996950522e-07,
+    "force_rms_reference_kJ_mol_nm": 1039.2651639228957,
+    "worst_atom": 1735,
+    "worst_atom_reference_force_kJ_mol_nm": 2045.2916376013218
+   }
+  }
+ },
+ "proposed_thresholds": {
+  "basis": "OpenCL/single",
+  "basis_is_mixed_precision": false,
+  "device": "Apple M3 Pro",
+  "force_rel_rms": 1.4242396169382884e-05,
+  "force_max_error_kJ_mol_nm": 0.20196316474160447,
+  "total_energy_abs_kJ_mol": 0.004391132464661496,
+  "nve_drift_kJ_mol_per_ns_per_atom": null,
+  "note": "the WebGPU engine must not exceed these by more than the factor recorded in AGENTS.md; raising the factor is a reviewed change. A single-precision basis is weaker than the intended mixed-precision one and must be replaced by a CUDA/mixed run."
+ },
+ "skipped_platforms": {
+  "CUDA/double": "the platform is not registered: There is no registered Platform called \"CUDA\"",
+  "CUDA/mixed": "the platform is not registered: There is no registered Platform called \"CUDA\"",
+  "CUDA/single": "the platform is not registered: There is no registered Platform called \"CUDA\"",
+  "HIP/mixed": "the platform is not registered: There is no registered Platform called \"HIP\"",
+  "OpenCL/mixed": "OpenMMException: No compatible OpenCL platform is available"
+ },
+ "verdict": {
+  "gpu_row_present": true,
+  "gpu_rows": [
+   "OpenCL/single"
+  ],
+  "thresholds_proposed": true,
+  "summary": "usable: a GPU platform produced a row"
+ }
+}

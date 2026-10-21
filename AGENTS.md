@@ -123,13 +123,41 @@ it:
   with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`, so the basis is OpenCL/mixed.
   Both are genuine mixed precision, but OpenMM's CUDA and OpenCL platforms are
   separate implementations and may not agree to better than the spread above.
-* **The engine has not been compared against this basis under the same
-  protocol.** The 1.42e-6 force relative RMS in
-  `docs/measurements/prepared-system-verify-m3pro.json` was measured on a
-  freshly prepared, un-equilibrated system — the exact condition the
-  calibration tool equilibrates away — so it is not comparable with 1.43e-05
-  and must not be quoted against it. Re-measuring under the calibration's own
-  protocol is outstanding.
+* **CUDA is unmeasured** (above), so the basis is OpenCL/mixed.
+
+### Where the engine sits against it
+
+Measured at the configuration the thresholds are defined at — the calibration's
+own equilibration, saved with `--save-equilibrated` so every engine sees the
+same coordinates, because equilibration is stochastic and re-running it gives
+an incomparable structure. 1L2Y, 2373 particles,
+`docs/measurements/engine-force-error-equilibrated-m3pro.json`:
+
+| | force rel. RMS | total energy error |
+| --- | ---: | ---: |
+| OpenMM OpenCL single | 1.42e-05 | 0.0044 kJ/mol |
+| **this engine, WebGPU** | **1.10e-06** | **0.0084 kJ/mol** |
+| OpenMM CPU double | 8.67e-07 | 0.0023 kJ/mol |
+
+The engine is **12.9× inside** the single-precision basis on forces, and sits
+nearer OpenMM's *double*-precision CPU platform (1.27× its error) than its
+single-precision GPU one. That is the designed consequence of 64-bit
+fixed-point positions and exact force accumulation: the only single-precision
+step is the per-pair evaluation itself.
+
+🔴 **The asymmetry is real and is not a defect.** The total energy is about
+twice as far out as OpenMM's single-precision platform even though the forces
+are thirteen times better. The total is a difference of two large cancelling
+PME terms — about +122,000 and −154,000 kJ/mol here — so its relative error is
+amplified by the cancellation, not by the accumulator. Do not "fix" the energy
+by changing the force accumulator.
+
+Both sides use the identical formula, `sqrt(Σ(a−b)² / Σb²)` over all 3N
+components, in `src/gpu/verify.ts` and `tools/calibrate_thresholds.py`. Each
+engine is compared against *its own* f64 reference, which is only legitimate
+because the two references agree: at these coordinates ours and OpenMM's
+Reference differ by 5.2e-12 relative, matching the 9.2e-12 that
+`test/crossfeed.test.ts` finds on a different system.
 
 `tools/calibrate_thresholds.py` produces this table, and raising a threshold is
 a reviewed change with a reason, never a convenience.
