@@ -106,8 +106,46 @@
         <canvas id="plot-correl" class="plot square"></canvas>
       </section>
 
+      <section id="ligand-section" hidden>
+        <h2>8. The ligand</h2>
+        <p class="note">
+          Shown when the topology has a non-polymer residue. Pick which one is
+          the ligand — the notebook assumes it is called <code>UNK</code>, which
+          is true only of systems the notebook prepared.
+        </p>
+        <p>
+          <label for="ligand-residue">Ligand residue</label>
+          <select id="ligand-residue"></select>
+          <label for="pocket-cutoff">Pocket cutoff (Å)</label>
+          <input id="pocket-cutoff" type="number" value="4" step="0.5" min="1" />
+        </p>
+        <p class="note">
+          <strong>Two numbers, not one.</strong> The notebook's "ligand RMSD"
+          superposes the ligand on itself before measuring, so it reports a
+          change of <em>shape</em> and says nothing about whether the ligand
+          moved. Both are plotted: the conformational RMSD, and the distance
+          its centre of mass has travelled from the first frame. Deviation 22.
+        </p>
+        <div class="plots">
+          <canvas id="plot-lig-rmsd" class="plot"></canvas>
+          <canvas id="plot-lig-com" class="plot"></canvas>
+        </div>
+        <p class="note">
+          Residues lining the pocket, taken from the <strong>first frame</strong>
+          and then held for the whole trajectory, which is what the notebook
+          does — a residue that swings into contact later does not appear.
+        </p>
+        <div id="pocket-body" class="panel">Not computed yet.</div>
+        <p>
+          <label for="extract-frame">Extract frame</label>
+          <input id="extract-frame" type="number" value="0" min="0" />
+          <button id="extract" type="button">Save as PDB</button>
+          <span id="extract-note" class="note"></span>
+        </p>
+      </section>
+
       <section>
-        <h2>8. Take it away</h2>
+        <h2>9. Take it away</h2>
         <p class="note">
           CSV for the numbers and PNG for the figures. The CSVs are what to
           re-plot from; the PNGs are what the canvases show.

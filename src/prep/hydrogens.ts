@@ -187,6 +187,28 @@ export function isHydrogenAtom(atom: PdbAtom): boolean {
 }
 
 /**
+ * A hydrogen this code could put back: one on a residue the definitions cover.
+ *
+ * 🔴 Never remove what you cannot rebuild. `addHydrogens` replaces a file's
+ * hydrogens because a depositor's names are not always the force field's — but
+ * it can only do that for residues `hydrogens.xml` describes. A ligand has no
+ * entry, so stripping its hydrogens leaves a fragment that matches no template
+ * at all: JZ4 would arrive as 10 atoms where its ffxml template has 22, and
+ * template matching would fail on an element signature mismatch rather than
+ * on anything informative.
+ *
+ * So the rule is conditional on the definitions rather than on the element,
+ * which also means a ligand that arrives *without* hydrogens fails for the
+ * right reason — it is missing atoms the force field needs, and no amount of
+ * stripping or rebuilding will supply them.
+ */
+export function rebuildableHydrogen(
+  definitions: HydrogenDefinitions,
+): (atom: PdbAtom) => boolean {
+  return (atom) => isHydrogen(atom) && definitions.has(atom.residueName.toUpperCase());
+}
+
+/**
  * The variant for one residue, by OpenMM's rules.
  *
  * Returns `null` for "no specific variant", which is not the same as a missing
@@ -540,7 +562,18 @@ export function addHydrogens(
       residues,
       chains,
       box: topology.box,
-      conect: [],
+      // 🔴 Carried through, remapped. Dropping these loses every bond that is
+      // not in the standard table -- which is every bond of every ligand. The
+      // symptom is remote from the cause: the ligand survives with all its
+      // atoms, its element signature matches its force field template
+      // exactly, and template matching then fails on the bond graph because
+      // the residue has no bonds at all.
+      conect: topology.conect
+        .map(([a, b]) => [remap.get(a), remap.get(b)] as const)
+        .filter(
+          (pair): pair is readonly [number, number] =>
+            pair[0] !== undefined && pair[1] !== undefined,
+        ),
       positions: Float64Array.from(positions),
     },
     bonds: newBonds,

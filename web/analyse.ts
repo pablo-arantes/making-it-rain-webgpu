@@ -32,6 +32,15 @@ import {
   rmsf,
   seriesCsv,
 } from "../src/analysis/protein.js";
+import {
+  centreOfMassSeries,
+  extractFrame,
+  ligandHeavyAtoms,
+  ligandRmsd,
+  pocketResidues,
+  residueDistances,
+} from "../src/analysis/ligand.js";
+import { writePdb } from "../src/analysis/pdb.js";
 import { drawHeatmap } from "./heatmap.js";
 import { drawPlot } from "./plot.js";
 
@@ -68,6 +77,44 @@ const escape = (value: string): string =>
 
 let trajectory: DcdTrajectory | undefined;
 let topology: PdbTopology | undefined;
+
+/** Residue names that are neither polymer nor solvent: ligand candidates. */
+const SOLVENT_OR_ION = new Set([
+  "HOH", "WAT", "DOD", "NA", "CL", "K", "MG", "ZN", "MN", "FE", "BR", "IOD",
+  "LI", "RB", "CS", "CA", "SO4", "PO4",
+]);
+const POLYMER_OR_SOLVENT = new Set([
+  "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU",
+  "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "HID", "HIE",
+  "HIP", "CYX", "ASH", "GLH", "LYN", "ACE", "NME", "NHE", "MSE",
+  ...SOLVENT_OR_ION,
+]);
+
+function fillLigandPicker(): void {
+  const section = el<HTMLElement>("ligand-section");
+  const select = el<HTMLSelectElement>("ligand-residue");
+  select.innerHTML = "";
+  if (topology === undefined) {
+    section.hidden = true;
+    return;
+  }
+  const counts = new Map<string, number>();
+  for (const residue of topology.residues) {
+    const name = residue.name.toUpperCase();
+    if (POLYMER_OR_SOLVENT.has(name)) continue;
+    counts.set(name, (counts.get(name) ?? 0) + residue.atoms.length);
+  }
+  // Largest first: the interesting ligand is almost always the biggest
+  // non-polymer thing in the file.
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  section.hidden = ranked.length === 0;
+  for (const [name, atoms] of ranked) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = `${name} — ${atoms} atoms`;
+    select.append(option);
+  }
+}
 
 function describe(): void {
   const parts: string[] = [];
@@ -138,6 +185,7 @@ el<HTMLInputElement>("file-top").addEventListener("change", (event) => {
   void file.text().then((text) => {
     try {
       topology = readPdb(text);
+      fillLigandPicker();
       setStatus(`Loaded ${file.name}.`, "ok");
     } catch (error) {
       topology = undefined;
@@ -210,6 +258,7 @@ button.addEventListener("click", () => {
     files.length = 0;
     window.__mirAnalyse = { state: "analysing" };
     try {
+      const report: Record<string, number | string> = {};
       const ca = caIndices(topology);
       const frames = trajectory.frameCount;
       // The time axis, in ps. 🔴 Built from this trajectory's own interval and
@@ -275,6 +324,75 @@ button.addEventListener("click", () => {
         max: 1,
       });
 
+      // --- the ligand, when the topology has one -------------------------
+      const ligandName = el<HTMLSelectElement>("ligand-residue").value;
+      if (ligandName !== "") {
+        setStatus("Ligand…");
+        await yieldToPaint();
+        const ligand = ligandHeavyAtoms(topology, ligandName);
+        const cutoff = Number(el<HTMLInputElement>("pocket-cutoff").value) / 10;
+        const conformational = ligandRmsd(trajectory, ligand);
+        const centre = centreOfMassSeries(trajectory, topology, ligand);
+        const travelled = new Float64Array(frames);
+        for (let frame = 0; frame < frames; frame++) {
+          travelled[frame] = Math.hypot(
+            (centre[frame * 3] as number) - (centre[0] as number),
+            (centre[frame * 3 + 1] as number) - (centre[1] as number),
+            (centre[frame * 3 + 2] as number) - (centre[2] as number),
+          );
+        }
+        line("plot-lig-rmsd", `${ligandName} conformational RMSD`, "nm", "#d98fd9",
+          time, conformational);
+        line("plot-lig-com", `${ligandName} centre-of-mass displacement`, "nm",
+          "#d9b38f", time, travelled);
+
+        const pocket = pocketResidues(
+          topology, ligand, trajectory.positions, trajectory.particleCount, 0, cutoff,
+        );
+        const distances = residueDistances(trajectory, topology, ligand, pocket);
+        el<HTMLDivElement>("pocket-body").innerHTML =
+          `<p class="note">${pocket.length} residue` +
+          `${pocket.length === 1 ? "" : "s"} within ` +
+          `${(cutoff * 10).toFixed(1)} Å of ${escape(ligandName)} in frame 0.</p>` +
+          "<table><tr><th>Residue</th><th>Mean (nm)</th><th>SD (nm)</th></tr>" +
+          distances
+            .map(
+              (d) =>
+                `<tr><td>${d.residue}</td><td>${d.mean.toFixed(4)}</td>` +
+                `<td>${d.standardDeviation.toFixed(4)}</td></tr>`,
+            )
+            .join("") +
+          "</table>";
+
+        files.push(
+          {
+            name: "ligand.csv",
+            text: seriesCsv([
+              { name: "time_ps", values: time },
+              { name: "conformational_rmsd_nm", values: conformational },
+              { name: "com_displacement_nm", values: travelled },
+            ]),
+          },
+          {
+            name: "pocket_distances.csv",
+            text: seriesCsv([
+              { name: "time_ps", values: time },
+              ...distances.map((d) => ({
+                name: `res_${d.residue}_nm`,
+                values: d.distances,
+              })),
+            ]),
+          },
+          { name: "ligand_rmsd.png", canvas: "plot-lig-rmsd" },
+          { name: "ligand_com.png", canvas: "plot-lig-com" },
+        );
+        report["ligand"] = ligandName;
+        report["ligandAtoms"] = ligand.length;
+        report["pocketResidues"] = pocket.length;
+        report["ligandRmsdMax"] = Number(Math.max(...conformational).toFixed(6));
+        report["ligandComMax"] = Number(Math.max(...travelled).toFixed(6));
+      }
+
       files.push(
         {
           name: "analysis.csv",
@@ -304,14 +422,14 @@ button.addEventListener("click", () => {
       );
       offer();
 
-      const report: Record<string, number | string> = {
+      Object.assign(report, {
         frames,
         caAtoms: ca.length,
         rmsdMax: Number(Math.max(...rmsd).toFixed(6)),
         rgMean: Number((rg.reduce((a, b) => a + b, 0) / frames).toFixed(6)),
         rmsfMax: Number(Math.max(...fluctuation).toFixed(6)),
         pc1Fraction: Number(((components.eigenvalues[0]! / total) * 100).toFixed(3)),
-      };
+      });
       window.__mirAnalyse = {
         ...(window.__mirAnalyse ?? { state: "done" }),
         state: "done",
@@ -400,5 +518,39 @@ function drawPcaScatter(projections: Float64Array, frames: number): void {
   context.restore();
 }
 
+/**
+ * Cell 33: one frame as a structure, solvent dropped.
+ *
+ * Separate from the Analyse button because it is a different question — "give
+ * me this frame" rather than "measure the trajectory" — and because a user
+ * picking through frames should not re-run a PCA each time.
+ */
+el<HTMLButtonElement>("extract").addEventListener("click", () => {
+  const note = el<HTMLSpanElement>("extract-note");
+  if (trajectory === undefined || topology === undefined) {
+    note.textContent = "Load a trajectory and a topology first.";
+    return;
+  }
+  const index = Number(el<HTMLInputElement>("extract-frame").value);
+  if (!Number.isInteger(index) || index < 0 || index >= trajectory.frameCount) {
+    note.textContent = `Frame must be between 0 and ${trajectory.frameCount - 1}.`;
+    return;
+  }
+  const frame = extractFrame(topology, trajectory, index);
+  const text = writePdb(frame, {
+    remark: `FRAME ${index} OF ${trajectory.frameCount}, SOLVENT REMOVED`,
+  });
+  const url = URL.createObjectURL(new Blob([text], { type: "chemical/x-pdb" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `frame_${index}.pdb`;
+  link.click();
+  URL.revokeObjectURL(url);
+  note.textContent =
+    `${frame.atoms.length.toLocaleString("en-US")} atoms, ` +
+    `${frame.residues.length} residues, solvent removed.`;
+});
+
 window.__mirAnalyse = { state: "idle" };
+fillLigandPicker();
 describe();

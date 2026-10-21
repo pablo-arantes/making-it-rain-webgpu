@@ -40,7 +40,51 @@
       </section>
 
       <section>
-        <h2>2. Settings</h2>
+        <h2>2. A ligand, if there is one</h2>
+        <p class="note">
+          A ligand needs parameters, and deriving them in a browser needs a
+          cheminformatics toolkit this page does not carry. So they are
+          uploaded: an OpenMM <code>ffxml</code> holding the ligand's residue
+          template, atom types and parameters, which the notebook and anything
+          with AmberTools can write. The ligand is then matched by the shape of
+          its bonds, so the names inside the file need not match your structure.
+        </p>
+        <p>
+          <label for="ligand-residue">Which residue is the ligand</label>
+          <select id="ligand-residue">
+            <option value="">(none — drop all heterogens)</option>
+          </select>
+        </p>
+        <p>
+          <label for="file-ligand">Ligand parameters (<code>.xml</code>)</label>
+          <input id="file-ligand" type="file" accept=".xml" />
+        </p>
+        <div id="ligand-summary" class="panel">
+          No ligand parameters. Heterogens will be dropped.
+        </div>
+        <details>
+          <summary>How to produce one</summary>
+          <pre>from openff.toolkit.topology import Molecule
+from openff.toolkit.utils.nagl_wrapper import NAGLToolkitWrapper
+from openmmforcefields.generators import SMIRNOFFTemplateGenerator
+
+mol = Molecule.from_file("ligand.sdf", allow_undefined_stereo=True)
+NAGLToolkitWrapper().assign_partial_charges(
+    mol, "openff-gnn-am1bcc-1.0.0.pt")
+open("ligand.xml", "w").write(
+    SMIRNOFFTemplateGenerator(
+        molecules=[mol], forcefield="openff-2.0.0"
+    ).generate_residue_template(mol))</pre>
+          <p class="note">
+            <code>tools/dump_ligand_ffxml.py</code> in the repository does
+            exactly this. Charges come from NAGL rather than AM1-BCC because
+            <code>sqm</code> cannot run in a tab either — deviation 6.
+          </p>
+        </details>
+      </section>
+
+      <section>
+        <h2>3. Settings</h2>
         <p class="note">
           The notebook's fields, with its defaults. Padding is the distance
           from the solute's bounding sphere to the box face, and the ionic
@@ -90,12 +134,12 @@
       </section>
 
       <section>
-        <h2>3. What was built</h2>
+        <h2>4. What was built</h2>
         <div id="report" class="panel">Not prepared yet.</div>
       </section>
 
       <section>
-        <h2>4. Where this differs from the notebook</h2>
+        <h2>5. Where this differs from the notebook</h2>
         <p class="note">
           Every deviation that applies to what was just built, listed rather
           than buried. <code>docs/DEVIATIONS.md</code> has the full set and the
@@ -105,7 +149,7 @@
       </section>
 
       <section>
-        <h2>5. Take it away</h2>
+        <h2>6. Take it away</h2>
         <p class="note">
           <code>system.xml</code> and <code>state.xml</code> are OpenMM's own
           serialisation, so the same files run here, in the notebook, or on a

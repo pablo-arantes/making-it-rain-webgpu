@@ -48,12 +48,13 @@ import {
 } from "../src/prep/ffxml.js";
 import {
   addHydrogens,
-  isHydrogenAtom,
   isWater,
   parseHydrogenDefinitions,
+  rebuildableHydrogen,
   stripAtoms,
   type HydrogenDefinitions,
 } from "../src/prep/hydrogens.js";
+import { findLigandCandidates } from "../src/prep/ligand.js";
 import { prepareSystem } from "../src/prep/prepare.js";
 import {
   boundingSphereRadius,
@@ -145,6 +146,134 @@ function fetchText(url: string): Promise<string> {
 // --- Loaded structure ---------------------------------------------------
 
 let loaded: { name: string; text: string; topology: PdbTopology } | undefined;
+/** An uploaded ligand ffxml, parsed so a bad file is reported on upload. */
+let ligand: { name: string; field: ForceField; templates: readonly string[] } | undefined;
+
+const ligandSummary = el<HTMLDivElement>("ligand-summary");
+
+function describeLigand(): void {
+  if (ligand === undefined) {
+    ligandSummary.innerHTML =
+      '<p class="note">No ligand parameters. Heterogens will be dropped.</p>';
+  } else {
+    ligandSummary.innerHTML =
+      `<p class="note"><strong>${escape(ligand.name)}</strong>: ` +
+      `${ligand.templates.length} residue template` +
+      `${ligand.templates.length === 1 ? "" : "s"}, ` +
+      `${ligand.field.types.size} atom types. ` +
+      // 🔴 Named, because the template name is almost never the residue name:
+      // openmmforcefields names it after the molecule's SMILES. Matching is by
+      // graph, so that is fine -- but a user comparing the two would otherwise
+      // think the file was wrong.
+      `Template${ligand.templates.length === 1 ? "" : "s"} named ` +
+      `<code>${escape(ligand.templates.map((t) => t.slice(0, 40)).join(", "))}</code>, ` +
+      "which need not match your residue name: the ligand is matched by the " +
+      "shape of its bonds.</p>";
+  }
+  describeStructure();
+}
+
+el<HTMLInputElement>("file-ligand").addEventListener("change", (event) => {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (file === undefined) {
+    ligand = undefined;
+    describeLigand();
+    return;
+  }
+  void file.text().then((text) => {
+    try {
+      const field = parseForceField(text);
+      if (field.templates.length === 0) {
+        throw new Error(
+          "this file has no residue template, so it cannot describe a ligand. " +
+            "An ffxml from openmmforcefields' `generate_residue_template` has one.",
+        );
+      }
+      ligand = {
+        name: file.name,
+        field,
+        templates: field.templates.map((t) => t.name),
+      };
+      setStatus(`Loaded ligand parameters from ${file.name}.`, "ok");
+    } catch (error) {
+      ligand = undefined;
+      setStatus(
+        `${file.name} is not usable ligand parameters: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        "bad",
+      );
+    }
+    describeLigand();
+  });
+});
+
+/**
+ * The heterogen picker.
+ *
+ * 🔴 Asking rather than inferring, and the reason is a specific trap. The
+ * notebook renames every ligand to `UNK`, and OpenMM's `hydrogens.xml` *has* a
+ * `UNK` entry — an unknown **amino acid**, with hydrogens on N, CA, CB and CG.
+ * So a ligand called `UNK` looks to this pipeline like a residue whose
+ * hydrogens can be rebuilt: they get stripped, and then nothing is put back,
+ * because the ligand has no backbone for those definitions to attach to. JZ4
+ * arrived as 10 atoms against its template's 22 and matched nothing.
+ *
+ * Naming the ligand residue explicitly removes the guess. The chosen residue is
+ * excluded from hydrogen stripping and from heterogen dropping; everything else
+ * non-polymer is dropped.
+ */
+function fillLigandPicker(): void {
+  const select = el<HTMLSelectElement>("ligand-residue");
+  const previous = select.value;
+  select.innerHTML = '<option value="">(none — drop all heterogens)</option>';
+  if (loaded === undefined) return;
+  // Grouped by residue *name*, because that is what the pipeline keys on:
+  // listing each of fifty chlorides separately would be fifty options that all
+  // mean the same thing.
+  const groups = new Map<
+    string,
+    { copies: number; heavy: number; hydrogens: number; additive: boolean }
+  >();
+  for (const candidate of findLigandCandidates(loaded.topology)) {
+    if (candidate.code === "HOH" || candidate.code === "WAT") continue;
+    const existing = groups.get(candidate.code);
+    if (existing === undefined) {
+      groups.set(candidate.code, {
+        copies: 1,
+        heavy: candidate.heavyAtoms,
+        hydrogens: candidate.hydrogens,
+        additive: candidate.likelyAdditive,
+      });
+    } else {
+      existing.copies++;
+    }
+  }
+  for (const [code, group] of [...groups].sort(
+    (a, b) => Number(a[1].additive) - Number(b[1].additive) || b[1].heavy - a[1].heavy,
+  )) {
+    const option = document.createElement("option");
+    option.value = code;
+    option.textContent =
+      `${code} — ${group.heavy} heavy atom${group.heavy === 1 ? "" : "s"}` +
+      `${group.hydrogens > 0 ? `, ${group.hydrogens} H` : ", no hydrogens"}` +
+      `${group.copies > 1 ? `, ${group.copies} copies` : ""}` +
+      `${group.additive ? " (looks like an additive)" : ""}`;
+    select.append(option);
+  }
+  // The largest non-additive candidate is first, so it is the useful default.
+  const first = [...select.options].find((o) => o.value !== "" && !o.textContent?.includes("additive"));
+  select.value =
+    [...select.options].some((o) => o.value === previous) && previous !== ""
+      ? previous
+      : (first?.value ?? "");
+}
+
+const chosenLigand = (): string => el<HTMLSelectElement>("ligand-residue").value;
+
+el<HTMLSelectElement>("ligand-residue").addEventListener("change", () => {
+  describeStructure();
+  describeLigand();
+});
 
 function describeStructure(): void {
   if (loaded === undefined) {
@@ -155,10 +284,13 @@ function describeStructure(): void {
   const { topology } = loaded;
   const hydrogens = topology.atoms.filter((a) => a.element.toUpperCase() === "H").length;
   const waters = topology.residues.filter((r) => r.name === "HOH" || r.name === "WAT").length;
+  // 🔴 By residue name, not by the HETATM flag. A ligand is often written as
+  // `ATOM` by a modelling program, and a flag-based test then reports no
+  // heterogens on a structure that has one.
   const hetatms = new Set(
-    topology.atoms
-      .filter((a) => a.hetatm && a.residueName !== "HOH")
-      .map((a) => a.residueName),
+    findLigandCandidates(topology)
+      .filter((c) => c.code !== "HOH" && c.code !== "WAT")
+      .map((c) => c.code),
   );
   structureSummary.innerHTML =
     `<p class="note"><strong>${escape(loaded.name)}</strong>: ` +
@@ -169,9 +301,13 @@ function describeStructure(): void {
     `${waters === 1 ? "" : "s"} will be removed and rebuilt.` +
     (hetatms.size === 0
       ? ""
-      : ` <strong>Ignored:</strong> ${escape([...hetatms].join(", "))} — ` +
-        "this page prepares protein in water, and a heterogen needs the " +
-        "ligand path, which is Phase 4.") +
+      : ligand === undefined
+      ? ` <strong>Dropped:</strong> ${escape([...hetatms].join(", "))} — ` +
+        "no ligand parameters are loaded, so these are removed. Upload an " +
+        "ffxml above to keep one."
+      : ` <strong>Kept:</strong> ${escape([...hetatms].join(", "))}, using the ` +
+        "uploaded parameters. Its hydrogens are taken from your file as they " +
+        "are, because nothing here can rebuild them.") +
     "</p>";
   prepareButton.disabled = false;
 }
@@ -183,6 +319,7 @@ function load(name: string, text: string): void {
       throw new Error("the file has no ATOM or HETATM records");
     }
     loaded = { name, text, topology };
+    fillLigandPicker();
     describeStructure();
     setStatus(`Loaded ${name}.`, "ok");
   } catch (error) {
@@ -333,7 +470,17 @@ async function loadForceField(
     fetchText(WATER_BOX_URLS[water] ?? tip3pBoxUrl),
   ]);
   return {
-    field: mergeForceFields([parseForceField(proteinXml), parseForceField(waterXml)]),
+    // 🔴 The protein file comes first and the ligand last, and the order is
+    // load-bearing: `mergeForceFields` keeps the *first* file's 1-4 scale
+    // factors, matching OpenMM. A SMIRNOFF ligand ffxml writes
+    // `coulomb14scale="0.8333333333"` where ff14SB writes
+    // `0.8333333333333334`, and letting the ligand win would apply its coarser
+    // value to every protein 1-4 pair.
+    field: mergeForceFields([
+      parseForceField(proteinXml),
+      parseForceField(waterXml),
+      ...(ligand === undefined ? [] : [ligand.field]),
+    ]),
     bonds: parseStandardBonds(residuesXml),
     hydrogens: parseHydrogenDefinitions(hydrogensXml),
     box: readPdb(boxPdb),
@@ -361,9 +508,36 @@ prepareButton.addEventListener("click", () => {
       window.__mirPrepare = { state: "preparing" };
       setStatus("Removing water and hydrogens…");
       await yieldToPaint();
-      const heavy = stripAtoms(
-        stripAtoms(loaded.topology, isWater).topology,
-        isHydrogenAtom,
+      // 🔴 Only hydrogens on residues the definitions cover. A ligand's cannot
+      // be rebuilt -- `hydrogens.xml` has no entry for it -- so removing them
+      // would leave a fragment matching no template: JZ4 would arrive as 10
+      // atoms against its ffxml's 22.
+      const keepResidue = chosenLigand().toUpperCase();
+      if (keepResidue !== "" && ligand === undefined) {
+        throw new Error(
+          `${keepResidue} is selected as the ligand but no parameters are ` +
+            "loaded for it. Upload an ffxml, or set the ligand to (none) to " +
+            "drop it.",
+        );
+      }
+      const withoutWater = stripAtoms(loaded.topology, isWater).topology;
+
+      // Everything non-polymer except the chosen ligand goes: it has no
+      // parameters, and dropping it here gives a clearer failure than letting
+      // template matching meet it later.
+      const polymerOnly = stripAtoms(withoutWater, (atom) => {
+        const name = atom.residueName.toUpperCase();
+        if (name === keepResidue) return false;
+        return !data.hydrogens.has(name) && !isWater(atom);
+      }).topology;
+
+      // 🔴 The chosen ligand keeps its hydrogens whatever `hydrogens.xml` says
+      // about its name. See `fillLigandPicker`: a ligand called `UNK` collides
+      // with that file's unknown-amino-acid entry, and the collision costs all
+      // twelve of JZ4's hydrogens.
+      const rebuildable = rebuildableHydrogen(data.hydrogens);
+      const heavy = stripAtoms(polymerOnly, (atom) =>
+        atom.residueName.toUpperCase() === keepResidue ? false : rebuildable(atom),
       ).topology;
 
       setStatus("Adding hydrogens…");
@@ -431,8 +605,18 @@ prepareButton.addEventListener("click", () => {
         hydrogenated.topology.atoms.length,
       );
 
+      const ligandAtoms =
+        keepResidue === ""
+          ? 0
+          : hydrogenated.topology.residues
+              .filter((r) => r.name.toUpperCase() === keepResidue)
+              .reduce((n, r) => n + r.atoms.length, 0);
+
       const fields: Record<string, number | string> = {
         "Solute atoms": hydrogenated.topology.atoms.length,
+        ...(keepResidue === ""
+          ? {}
+          : { [`Ligand ${keepResidue} atoms`]: ligandAtoms }),
         "Hydrogens added": hydrogenated.added.length,
         Waters: solvated.waters,
         [`${positiveIon} ions`]: solvated.positiveIons,

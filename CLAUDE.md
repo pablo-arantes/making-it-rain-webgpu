@@ -77,9 +77,9 @@ facts up for the tools.
 | Page | What it is |
 | --- | --- |
 | `web/index.html` | the GPU panel and the precision checks |
-| `web/prepare.html` | a PDB ID or an upload in, an OpenMM `System` out |
+| `web/prepare.html` | a PDB ID or an upload in, an OpenMM `System` out; a ligand needs its parameters uploaded as an ffxml |
 | `web/run.html` | upload a system, verify it, run it, download the artefacts |
-| `web/analyse.html` | a DCD and its topology in, the notebook's figures out |
+| `web/analyse.html` | a DCD and its topology in, the notebook's figures out, protein and ligand |
 | `web/validate.html` | every differential check against OpenMM, development only |
 
 All five are named inputs in `vite.config.ts`. 🔴 Vite discovers only
@@ -108,6 +108,24 @@ OpenMM, so it reads as a physics regression rather than as contention: nothing
 in the output says "timeout" unless you look for the absence of an
 `AssertionError`. `pkill -f "Google Chrome"; pkill -f vite` first, and suspect
 this whenever a test that is deterministic by construction fails once.
+
+🔴 **`hydrogens.xml` has a `UNK` entry, and the notebook names every ligand
+`UNK`.** That entry is an unknown *amino acid* — hydrogens on N, CA, CB, CG. So
+a ligand called `UNK` looks like a residue whose hydrogens can be rebuilt: the
+preparation path strips all twelve of JZ4's, then adds none back because the
+ligand has no backbone for those definitions to attach to, and template
+matching fails on an element signature that is short by twelve hydrogens.
+`web/prepare.html` asks which residue is the ligand rather than inferring it,
+and that residue is excluded from both hydrogen stripping and heterogen
+dropping. `rebuildableHydrogen` in `src/prep/hydrogens.ts` is the general rule:
+never remove what you cannot put back.
+
+🔴 **A ligand's bonds live in the PDB's `CONECT` records and nowhere else.**
+`residues.xml` has no entry for a ligand, so `inferBonds` finds nothing for it.
+`addHydrogens` used to return `conect: []`, which lost them — and the symptom is
+remote from the cause: the ligand keeps every atom, its element signature
+matches its template exactly, and matching fails on the bond graph because the
+residue has no bonds at all.
 
 🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
 about 1% renderer CPU and accumulates a few seconds over many minutes — the work

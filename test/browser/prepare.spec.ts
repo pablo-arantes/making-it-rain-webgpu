@@ -133,6 +133,77 @@ test.describe("the prepare page", () => {
     );
   });
 
+  test("prepares a protein-ligand system from uploaded parameters", async ({ page }) => {
+    // Phase 4's user-facing path. The parameters themselves are gated against
+    // OpenMM in test/prep-parity.test.ts on the same ligand; this checks the
+    // page reaches it and handles the two traps that only appear here.
+    const ligandXml = "fixtures/ligand/JZ4-ligand.xml";
+    test.skip(!existsSync(ligandXml), `${ligandXml} not generated`);
+
+    await page.goto("/prepare.html");
+    await page.waitForFunction(() => window.__mirPrepare?.state === "idle");
+    await page.locator("#file-pdb").setInputFiles("fixtures/3HTB/system.pdb");
+    // The file is read asynchronously, so wait for the summary before asserting
+    // on anything the read populates.
+    await expect(page.locator("#structure-summary")).toContainText("atoms");
+
+    // 🔴 The heterogen picker, which exists because inference gets this wrong.
+    // The notebook renames every ligand to `UNK`, and OpenMM's hydrogens.xml
+    // *has* a `UNK` entry -- an unknown amino acid. A ligand called UNK is
+    // therefore judged to have rebuildable hydrogens, loses all twelve of
+    // them, and matches no template.
+    expect(await page.locator("#ligand-residue").inputValue()).toBe("UNK");
+    await expect(page.locator("#structure-summary")).toContainText("Dropped:");
+
+    // Selecting a ligand without parameters must fail loudly, not silently.
+    await page.locator("#prepare").click();
+    await page.waitForFunction(
+      () => ["done", "failed"].includes(window.__mirPrepare?.state ?? ""),
+      null,
+      { timeout: 120_000 },
+    );
+    expect(await page.evaluate(() => window.__mirPrepare?.state)).toBe("failed");
+    expect(await page.evaluate(() => window.__mirPrepare?.error)).toContain(
+      "no parameters are loaded",
+    );
+
+    await page.locator("#file-ligand").setInputFiles(ligandXml);
+    await expect(page.locator("#ligand-summary")).toContainText("residue template");
+    // The template is named after the molecule's SMILES, which is why matching
+    // is by graph -- the page says so rather than leaving it to look wrong.
+    await expect(page.locator("#ligand-summary")).toContainText(
+      "matched by the shape of its bonds",
+    );
+    await expect(page.locator("#structure-summary")).toContainText("Kept:");
+
+    await page.locator("#padding").fill("10");
+    await page.locator("#prepare").click();
+    await page.waitForFunction(
+      () => ["done", "failed"].includes(window.__mirPrepare?.state ?? ""),
+      null,
+      { timeout: 300_000 },
+    );
+    const result = await page.evaluate(() => window.__mirPrepare);
+    expect(result?.error ?? "").toBe("");
+    const report = result?.report ?? {};
+
+    // 🔴 The ligand keeps all 22 atoms. Ten would mean its hydrogens were
+    // stripped, which is the failure the picker exists to prevent.
+    expect(report["Ligand UNK atoms"]).toBe(22);
+    // Protein hydrogens are still rebuilt -- 1313 of them on T4 lysozyme.
+    expect(Number(report["Hydrogens added"])).toBeGreaterThan(1000);
+    expect(Number(report["Solute charge (e)"])).toBe(6);
+    expect(Number(report["Total charge (e)"])).toBeCloseTo(0, 6);
+    expect(Number(report["Total atoms"])).toBeGreaterThan(30000);
+
+    const artefacts = (result?.artefacts ?? []).map((a) => a.name).sort();
+    expect(artefacts).toEqual(["state.xml", "system.pdb", "system.xml"]);
+    console.log(
+      `\n  prepared ${report["Total atoms"]} atoms with ligand UNK ` +
+        `(${report["Ligand UNK atoms"]} atoms), box ${report["Box (nm)"]} nm`,
+    );
+  });
+
   test("the system.xml it offers is a system the engine can read", async ({ page }) => {
     // 🔴 Round-tripped *in the page*, through the same serialiser and parser
     // the engine uses. A prepared system the user cannot take away is a result

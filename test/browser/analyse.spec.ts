@@ -138,6 +138,65 @@ test.describe("the analysis page", () => {
     );
   });
 
+  test("analyses the ligand too, when the topology has one", async ({ page }) => {
+    // The 3HTB trajectory carries JZ4 as `UNK`. Everything here is verified
+    // against MDAnalysis headlessly in test/analysis-ligand.test.ts; this
+    // checks the page reaches it, picks the right residue, and reports both
+    // numbers rather than the one the notebook plots.
+    const ligandDcd = "fixtures/analysis-3HTB/trajectory.dcd";
+    test.skip(!existsSync(ligandDcd), `${ligandDcd} not generated`);
+
+    await page.goto("/analyse.html");
+    await page.waitForFunction(() => window.__mirAnalyse?.state === "idle");
+    // Hidden until a topology with a non-polymer residue is loaded.
+    await expect(page.locator("#ligand-section")).toBeHidden();
+
+    await page.locator("#file-dcd").setInputFiles(ligandDcd);
+    await page.locator("#file-top").setInputFiles("fixtures/3HTB/system.pdb");
+    await expect(page.locator("#ligand-section")).toBeVisible();
+    // The ligand is the largest non-polymer residue, not the ions.
+    expect(await page.locator("#ligand-residue").inputValue()).toBe("UNK");
+
+    await page.locator("#analyse").click();
+    await page.waitForFunction(
+      () =>
+        window.__mirAnalyse?.state === "done" ||
+        window.__mirAnalyse?.state === "failed",
+      null,
+      { timeout: 300_000 },
+    );
+    const result = await page.evaluate(() => window.__mirAnalyse);
+    expect(result?.error ?? "").toBe("");
+    const summary = result?.summary ?? {};
+    expect(summary["ligand"]).toBe("UNK");
+    expect(summary["ligandAtoms"]).toBe(10);
+    expect(summary["pocketResidues"]).toBe(15);
+
+    // 🔴 Both numbers, and the displacement must exceed the conformational
+    // RMSD -- that is the whole point of deviation 22. If the page reported
+    // only the notebook's number a user would conclude the ligand never moved.
+    expect(Number(summary["ligandRmsdMax"])).toBeLessThan(0.05);
+    expect(Number(summary["ligandComMax"])).toBeGreaterThan(
+      Number(summary["ligandRmsdMax"]),
+    );
+    await expect(page.locator("#ligand-section")).toContainText("Deviation 22");
+    await expect(page.locator("#pocket-body")).toContainText("15 residues");
+
+    const artefacts = (result?.artefacts ?? []).map((a) => a.name);
+    expect(artefacts).toContain("ligand.csv");
+    expect(artefacts).toContain("pocket_distances.csv");
+
+    // Cell 33: one frame, solvent dropped, as a real PDB.
+    const download = page.waitForEvent("download");
+    await page.locator("#extract-frame").fill("42");
+    await page.locator("#extract").click();
+    const text = readFileSync((await (await download).path())!, "utf8");
+    expect(text).toContain("REMARK   1 FRAME 42");
+    expect(text).toContain("UNK");
+    expect(text).not.toContain("HOH");
+    await expect(page.locator("#extract-note")).toContainText("solvent removed");
+  });
+
   test("refuses a topology that cannot be the same system", async ({ page }) => {
     // 🔴 The guard worth testing. Coordinates are matched to atoms by index,
     // so a mismatched atom count does not mean "approximately right" -- the Cα
