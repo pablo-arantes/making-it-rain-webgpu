@@ -85,18 +85,51 @@ measurements these rest on.
 ## Acceptance thresholds
 
 The engine's target is OpenMM's mixed-precision GPU platform, not its
-double-precision Reference platform. Provisional, from
-`docs/measurements/calibration-M3Pro-opencl.json` on an equilibrated 1L2Y:
+double-precision Reference platform. Measured, on an equilibrated 1L2Y — each
+run equilibrates 10 ps first, because at a fixture's raw coordinates the
+relative force error reports on the input structure rather than on the platform:
 
 | | force rel. RMS vs Reference | total energy | NVE drift at 2 fs |
 | --- | ---: | ---: | ---: |
+| **OpenMM OpenCL mixed, NVIDIA L4** | **1.43e-05** | **+0.0136 kJ/mol** | **−0.0235 kJ/mol/ns/atom** |
+| OpenMM OpenCL single, NVIDIA L4 | 1.43e-05 | +0.0149 kJ/mol | +0.0479 kJ/mol/ns/atom |
+| OpenMM CPU double, L4 host | 1.03e-06 | −0.0071 kJ/mol | −0.0443 kJ/mol/ns/atom |
 | OpenMM OpenCL single, Apple M3 Pro | 1.05e-05 | −0.0019 kJ/mol | −0.168 kJ/mol/ns/atom |
-| OpenMM CPU, double | 8.6e-07 | −0.0046 kJ/mol | −0.123 kJ/mol/ns/atom |
+| OpenMM CPU double, Apple M3 Pro | 8.6e-07 | −0.0046 kJ/mol | −0.123 kJ/mol/ns/atom |
 
-So ~1e-5 relative force error is the floor for a legitimate single-precision
-implementation, and NVE drift at 2 fs is mostly algorithmic — single precision
-adds about 40% over double. **These are provisional**: the basis is single
-rather than mixed precision, because this machine's OpenMM has no
-mixed-precision GPU platform. The authoritative set comes from a Colab T4 run of
-`tools/calibrate_thresholds.py`, and raising a threshold is a reviewed change
-with a reason, never a convenience.
+The bold row is the basis. From
+`docs/measurements/calibration-L4-opencl-mixed.json`; the M3 Pro rows are from
+`docs/measurements/calibration-M3Pro-opencl.json` and are kept because
+agreement across two unrelated devices is what makes the force figure a floor
+rather than one machine's number.
+
+**~1e-5 relative force error is the floor for a legitimate single-precision
+implementation.** Two independent devices give 1.05e-05 and 1.43e-05, and their
+double-precision CPU rows give 8.6e-07 and 1.03e-06 — so this quantity
+reproduces to about 20% across hosts and can carry a tight threshold.
+
+🔴 **NVE drift cannot.** The *same* configuration — CPU, double precision,
+nominally the same fixture (2349 and 2355 atoms) — gives −0.123 and −0.0443
+kJ/mol/ns/atom on the two hosts, a factor of 2.8. Over a picosecond the total
+energy fluctuates by about as much as the trend, so the slope is a fit to noise
+as much as to drift. A drift threshold must therefore carry a factor-of-several
+tolerance; a tight one would fail a correct implementation, and tightening it
+after a passing run would be fitting the threshold to the engine.
+
+Two things this set does **not** establish, and neither is a reason to loosen
+it:
+
+* **CUDA is unmeasured.** All three CUDA precisions failed on the Colab host
+  with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`, so the basis is OpenCL/mixed.
+  Both are genuine mixed precision, but OpenMM's CUDA and OpenCL platforms are
+  separate implementations and may not agree to better than the spread above.
+* **The engine has not been compared against this basis under the same
+  protocol.** The 1.42e-6 force relative RMS in
+  `docs/measurements/prepared-system-verify-m3pro.json` was measured on a
+  freshly prepared, un-equilibrated system — the exact condition the
+  calibration tool equilibrates away — so it is not comparable with 1.43e-05
+  and must not be quoted against it. Re-measuring under the calibration's own
+  protocol is outstanding.
+
+`tools/calibrate_thresholds.py` produces this table, and raising a threshold is
+a reviewed change with a reason, never a convenience.

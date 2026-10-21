@@ -1,4 +1,4 @@
-# Calibrating the acceptance thresholds on a Colab T4
+# Calibrating the acceptance thresholds on a Colab GPU
 
 ## Why this is not optional
 
@@ -15,7 +15,12 @@ different precision class from the one the engine targets. Until this is run,
 every "inside tolerance" claim in the repository means inside a tolerance that
 nobody has validated against the right baseline.
 
-A T4 is the right machine because it is also where the notebook runs.
+A Colab GPU is the right machine because it is also where the notebook runs.
+
+**This has been done.** `docs/measurements/calibration-L4-opencl-mixed.json`
+holds the result and `AGENTS.md` now carries measured thresholds rather than
+provisional ones. What follows is how to repeat it — on CUDA, which still has
+not worked, or on another device.
 
 ## What to do
 
@@ -37,7 +42,10 @@ Six cells. The kernel restarts after the second one, which is normal.
 !nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 ```
 
-Expect `Tesla T4`. If this errors, the runtime is CPU-only: **Runtime → Change
+Expect an NVIDIA card — `Tesla T4`, `NVIDIA L4` or `A100`; Colab allocates
+whatever is free, and any of them is fine. **Note which one**, because the
+thresholds are named for the GPU that produced them: the run that set the
+current numbers got an L4, not a T4. If this errors, the runtime is CPU-only: **Runtime → Change
 runtime type → T4 GPU**, then start again. A CPU runtime will still produce a
 JSON file, and it will be worthless for this purpose — the whole point is the
 `CUDA/mixed` row.
