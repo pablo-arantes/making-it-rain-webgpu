@@ -131,5 +131,5 @@
    }
   }
  },
- "_note": "INCOMPLETE. CUDA appears in available_platforms but produced no row, so the mixed-precision basis the thresholds need is absent and no proposed_thresholds block was written. The reason CUDA failed was printed to the notebook and not recorded; tools/calibrate_thresholds.py now records it. Kept as the record of the first attempt."
+ "_note": "INCOMPLETE. CUDA appears in available_platforms but produced no row, so the mixed-precision basis the thresholds need is absent and no proposed_thresholds block was written. Diagnosed afterwards: `Error loading CUDA module: CUDA_ERROR_UNSUPPORTED_PTX_VERSION (222)` -- OpenMM's kernels were compiled to PTX by a CUDA toolkit newer than the Colab driver could load. The plugin itself loaded cleanly; the only getPluginLoadFailures entries were HIP/AMD libraries, which are unrelated noise. Fix is to pin cuda-version=12.0 when installing. Kept as the record of the first attempt and the reason the tool now records skipped_platforms."
 }
