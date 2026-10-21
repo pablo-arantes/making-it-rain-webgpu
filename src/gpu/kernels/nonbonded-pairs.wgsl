@@ -69,20 +69,25 @@ fn load_fixed_box() -> FixedBox {
 
 /// The pair vector, nearest image, wrapped in fixed point before conversion.
 ///
+/// 🔴 Reads *wrapped* positions -- binding 0 of this kernel is the `wrap` pass's
+/// output, not the integrator's buffer -- which is what lets this use
+/// `nearest_image_box` and its single shift. See that function, and the `wrap`
+/// entry point in cell-list.wgsl.
+///
 /// Deliberately not three `delta_image_axis` calls: the box would come from the
 /// uniform each time. The arithmetic is identical -- difference in fixed point,
 /// wrap in fixed point, convert last -- so the result is bit for bit the same.
 fn pair_vector(a: u32, b: u32, frame: ptr<function, FixedBox>) -> vec3<f32> {
   return vec3<f32>(
-    minimum_image64(
+    nearest_image_box(
       sub64(positions[b * 3u + 0u], positions[a * 3u + 0u]),
       (*frame).box[0], (*frame).half[0],
     ),
-    minimum_image64(
+    nearest_image_box(
       sub64(positions[b * 3u + 1u], positions[a * 3u + 1u]),
       (*frame).box[1], (*frame).half[1],
     ),
-    minimum_image64(
+    nearest_image_box(
       sub64(positions[b * 3u + 2u], positions[a * 3u + 2u]),
       (*frame).box[2], (*frame).half[2],
     ),

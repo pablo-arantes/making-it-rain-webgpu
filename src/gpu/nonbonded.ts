@@ -26,6 +26,7 @@ import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import {
   alignedBytes,
   planCellList,
+  planWrapPositions,
   prepareCellList,
   type CellListBuffers,
   type ListTarget,
@@ -457,7 +458,11 @@ export async function planDirect(
       entryPoint: "direct_pairs",
     },
     [
-      { binding: 0, resource: { buffer: accumulators.positions } },
+      // 🔴 Binding 0 is the *wrapped* positions, not the integrator's. Both
+      // endpoints inside the box is what lets the kernel's minimum image be a
+      // single conditional shift, which is 4x the whole kernel on 3HTB. The
+      // `wrap` pass that fills this runs first in `planCellList`.
+      { binding: 0, resource: { buffer: resident.cellList.wrapped } },
       { binding: 1, resource: { buffer: accumulators.forces } },
       { binding: 2, resource: { buffer: accumulators.energy } },
       { binding: 3, resource: { buffer: resident.particle } },
@@ -580,6 +585,11 @@ export async function evaluateDirectSpace(
 
     const cache = pipelineCacheFor(device);
     const resident = prepareDirect(pool, force, boxVectors, alpha);
+    // The fold runs either way: the pair kernel differences its output whether
+    // or not this device built the list.
+    await submitPasses(device, "wrap", [
+      await planWrapPositions(cache, resident.cellList, accumulators.positions),
+    ]);
     if (suppliedCellList === undefined) {
       const passes = await planCellList(cache, resident.cellList, accumulators.positions);
       await submitPasses(device, "cell list", passes);

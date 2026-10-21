@@ -33,6 +33,7 @@
 @group(0) @binding(4) var<storage, read_write> order: array<u32>;
 @group(0) @binding(5) var<uniform>             params: CellParams;
 @group(0) @binding(6) var<storage, read_write> sorted: array<u32>;
+@group(0) @binding(7) var<storage, read_write> wrapped_positions: array<vec2<u32>>;
 
 struct CellParams {
   particle_count: u32,
@@ -51,25 +52,61 @@ struct CellParams {
   cell_extent: array<vec4<u32>, 3>,
 }
 
-/// Which cell an atom falls in along one axis.
+/// One coordinate folded into [0, box), exactly.
 ///
-/// Wraps into [0, box) by adding or subtracting whole boxes -- exact, since
-/// `add64` and `sub64` are integer operations -- then counts how many cell
-/// extents fit. The loop runs at most `divisions` times, which the cell list
-/// keeps small: a 6.5 nm box at a 1 nm cutoff gives six.
-fn axis_cell(atom: u32, axis: u32) -> u32 {
-  let box = params.box[axis].xy;
-  var wrapped = positions[atom * 3u + axis];
+/// Adding or subtracting whole boxes is exact, since `add64` and `sub64` are
+/// integer operations, so the fold is exact however many boxes out the
+/// coordinate started. Bounded rather than unbounded so a wild coordinate
+/// cannot hang a dispatch.
+fn wrap_axis(value: vec2<u32>, box: vec2<u32>) -> vec2<u32> {
+  var folded = value;
   // A position may sit several boxes out: nothing wraps the coordinates during
   // a run, and OpenMM's own states do not either.
   for (var guard = 0u; guard < 64u; guard++) {
-    if (!negative64(wrapped)) { break; }
-    wrapped = add64(wrapped, box);
+    if (!negative64(folded)) { break; }
+    folded = add64(folded, box);
   }
   for (var guard = 0u; guard < 64u; guard++) {
-    if (less64(wrapped, box)) { break; }
-    wrapped = sub64(wrapped, box);
+    if (less64(folded, box)) { break; }
+    folded = sub64(folded, box);
   }
+  return folded;
+}
+
+/// Fold every coordinate into [0, box), for the pair kernel to difference.
+///
+/// 🔴 This pass exists to buy the pair kernel a *precondition*, not to save
+/// work here. Both endpoints inside the box means a difference inside one box,
+/// which means one conditional shift is the whole minimum image -- see
+/// `nearest_image_box` in fixed64.wgsl. The general wrap it replaces cost
+/// 74,662 us of a 3HTB step; folding costs three folds per atom per step
+/// instead of three per candidate pair, which on 3HTB is 80,247 of them against
+/// 268 million.
+///
+/// It shares `wrap_axis` with `axis_cell` deliberately. The pair kernel takes
+/// its home cell from this list and its pair vectors from this buffer, and if
+/// those two disagreed for an atom near a cell boundary it would scan a
+/// neighbourhood it is not listed in -- atom i missing j while j still finds i,
+/// which breaks Newton's third law and leaks momentum. One function means they
+/// agree by construction rather than by two implementations matching.
+@compute @workgroup_size(64)
+fn wrap(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let atom = gid.x;
+  if (atom >= params.particle_count) { return; }
+  for (var axis = 0u; axis < 3u; axis++) {
+    wrapped_positions[atom * 3u + axis] =
+      wrap_axis(positions[atom * 3u + axis], params.box[axis].xy);
+  }
+}
+
+/// Which cell an atom falls in along one axis.
+///
+/// Folds the coordinate, then counts how many cell extents fit. That loop runs
+/// at most `divisions` times, which the cell list keeps small: a 6.5 nm box at
+/// a 1 nm cutoff gives six.
+fn axis_cell(atom: u32, axis: u32) -> u32 {
+  let box = params.box[axis].xy;
+  let wrapped = wrap_axis(positions[atom * 3u + axis], box);
 
   let divisions = params.divisions[axis];
   let extent = params.cell_extent[axis].xy;

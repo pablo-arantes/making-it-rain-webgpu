@@ -76,6 +76,17 @@ measurements these rest on.
   cost nothing only because the test that found it was written to check it.
 
   Across devices bitwise agreement is not promised, and the reason is recorded.
+- **The pair kernel's positions are folded into `[0, box)` before it runs.**
+  `cell/wrap` does it once per step, and that precondition is the whole reason
+  the kernel's minimum image can be a single conditional shift instead of a
+  loop — worth 16x on 3HTB. Any path that encodes the pair pass has to encode
+  the fold first; skipping it makes the kernel difference a buffer of zeros,
+  which is a wrong answer and not an error. The fold and the cell list's own
+  bucketing share one function, so an atom's home cell and its pair vectors
+  cannot disagree.
+- **Measure performance on the largest fixture, not the smallest.** A step cost
+  4.8 ms on 1L2Y and 629 ms on 3HTB for 11x the atoms, and the two defects in
+  that gap were invisible on 1L2Y: one fix moved it 2% and moved 3HTB 18x.
 - **Validate shapes, dtypes and byte sizes at public boundaries**, and use a
   WebGPU error scope around every dispatch: a validation error otherwise appears
   as a console warning and a silently wrong result, which is the one failure a

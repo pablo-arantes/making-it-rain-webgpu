@@ -203,6 +203,50 @@ kernel at 2× the pair work. Do not act on this until it is measured on NVIDIA
 and on an integrated GPU; the determinism invariant is a separate argument for
 gather.
 
+🔴 **Profile the big fixture, not the small one.** 1L2Y is 2,373 atoms and
+3HTB is 26,749, and for a long time only 1L2Y had a measured speed. A step cost
+4.8 ms on 1L2Y and **629 ms** on 3HTB — 11× the atoms and 130× the time, with
+the same candidates per atom. Two separate defects were hiding in that gap and
+neither showed up on 1L2Y at all: one of the fixes moved 1L2Y by 2% and 3HTB by
+18×. `npm run bench` and the 1 ns gate both use 1L2Y, so neither would have
+caught it.
+
+🔴 **A loop in the pair kernel's innermost block costs 18×, however few times
+it runs.** `minimum_image64` subtracted one box at a time under a `for` bounded
+at 64. For a pair inside the cutoff it ran *zero* times, so counting iterations
+said it was free — and that reasoning is why it survived this long. The cost is
+not the iterations, it is that a nested loop stops the backend unrolling and
+pipelining the candidate loop around it. Making it loop-free took 3HTB's pair
+kernel from 437,782 µs a step to 27,319. Treat any loop, or any nested
+conditional block, inside that kernel as expensive until measured otherwise:
+putting the general wrap back behind an integer `|d| < box` guard, so the block
+almost never ran, bought **nothing** (72,171 → 72,688 µs).
+
+🔴 **One invocation per atom is not enough threads.** The pair kernel looped
+over the 27 cells of the neighbour shell, which left `particleCount` threads in
+flight — 2,373 on 1L2Y, 38 workgroups of 64. One invocation per (atom, cell)
+is the same work with 27× the threads and was worth 2.4× on 1L2Y. It is exact
+because the force accumulators are fixed-point atomics, so partial sums
+recombine bit for bit; `docs/measurements/profile-step-m3pro.json` has it.
+
+🔴 **A cheap pass's timestamp is contaminated by an expensive one beside it.**
+In the same submission as a 629 ms pair kernel, `cell/clear` — which clears a
+216-entry array — reported 15,383 µs; next to a 437 ms one it reported 852 µs,
+and with the kernel fixed, 6.7 µs. The pair kernel's own number was reproducible
+to 0.1% across runs, so read the big passes and ignore the small ones whenever
+one pass dominates the submission.
+
+🔴 **The pair kernel reads *wrapped* positions, binding 0 of its bind group.**
+`cell/wrap` folds every coordinate into `[0, box)` once per step, which is what
+makes `nearest_image_box`'s single conditional shift provably the whole minimum
+image. Two consequences. A new path that encodes the pair pass has to encode the
+fold first, or the kernel differences a buffer of zeros — a wrong answer, not an
+error; `planCellList` does it, and the host-supplied-list branch in
+`nonbonded.ts` has to do it by hand. And `axis_cell` shares `wrap_axis` with the
+fold on purpose: if the home cell and the pair vector disagreed for an atom near
+a boundary, atom *i* would miss *j* while *j* still found *i*, which leaks
+momentum.
+
 🔴 **`GPUBufferUsage` at module scope breaks the no-GPU lane.** It is a global
 that exists only where WebGPU does, so `const STORAGE = GPUBufferUsage.STORAGE`
 at the top of a file throws when the *module loads* — not when a buffer is made.

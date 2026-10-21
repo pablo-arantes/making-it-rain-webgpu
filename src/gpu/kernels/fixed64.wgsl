@@ -146,6 +146,33 @@ fn shift_whole_boxes(
   return sub64(d, shift);
 }
 
+/// The nearest image of a difference whose endpoints are both inside the box.
+///
+/// One conditional shift, and that is provably the whole minimum image: for
+/// `a` and `b` in [0, box) the difference lies in (-box, box), so adding or
+/// removing a single box lands it in [-half, half]. The pair kernel gets that
+/// precondition from the `wrap` pass in cell-list.wgsl, which folds every
+/// coordinate into [0, box) once per step.
+///
+/// 🔴 Never call this on raw positions. `minimum_image64` below takes any
+/// input and is what the exception and restraint kernels use. This is a
+/// separate function rather than a fast path inside that one because what the
+/// profile measured is control flow, not arithmetic: a conditional block nested
+/// in the pair kernel's innermost loop costs the backend's ability to unroll
+/// and pipeline the candidate loop around it, whether or not the block runs.
+///
+/// The tie at exactly half a box resolves on `!less64(half, d)` here too, so
+/// the two functions agree bit for bit wherever both are defined.
+fn nearest_image_box(difference: vec2<u32>, box: vec2<u32>, half: vec2<u32>) -> f32 {
+  var d = difference;
+  if (negative64(d)) {
+    if (less64(half, neg64(d))) { d = add64(d, box); }
+  } else {
+    if (less64(half, d)) { d = sub64(d, box); }
+  }
+  return from_fixed(d);
+}
+
 /// Shift a fixed-point difference into the nearest periodic image, exactly.
 ///
 /// 🔴 The order matters, and it is the first reason this function exists. The
@@ -167,22 +194,26 @@ fn shift_whole_boxes(
 /// is not the iterations but everything the compiler then cannot do.
 /// Measured through `web/validate.html` on an M3 Pro, 3HTB at 26,749 atoms:
 ///
-///   loop, one box at a time      437,782 us per step in the pair kernel
-///   two unrolled shifts only       24,111 us                      18x
-///   this, loop-free and general    72,171 us                       6x
-///   no wrap at all (diagnostic)     9,614 us
+///   loop, one box at a time          437,782 us per step in the pair kernel
+///   this, loop-free and general       72,171 us                       6x
+///   two unrolled shifts only          24,111 us                      18x
+///   `nearest_image_box`, one shift    27,319 us                      16x
+///   no wrap at all (diagnostic)        9,614 us
 ///
-/// The two-shift version is faster still and is what the hot pair kernel uses,
-/// through `nearest_image_box`, which can afford it because its inputs are
-/// wrapped into the box first. This one keeps no precondition at all, for the
-/// exception and restraint kernels, which read unwrapped positions and together
-/// cost under 100 us. Skipping the estimate behind an integer `|d| < box` test
-/// was measured too and bought nothing -- 72,688 us -- so there is no guard:
-/// the cost is the control flow the backend cannot schedule around, not the
-/// divide.
+/// The hot pair kernel does not call this at all any more: it reads positions
+/// already folded into the box and uses `nearest_image_box`, whose single shift
+/// is provably the whole wrap. This one keeps no precondition, for the exception
+/// and restraint kernels, which read unwrapped positions and together cost under
+/// 100 us -- so being 3x the unrolled version costs nothing that is measured.
 ///
-/// 1L2Y barely moved, which is why profiling only the small fixture missed it:
-/// 1,152 -> 1,036 us. docs/measurements/profile-step-*.json has both.
+/// Skipping the estimate behind an integer `|d| < box` test was measured too and
+/// bought nothing -- 72,688 us -- so there is no guard: the cost is the control
+/// flow the backend cannot schedule around, not the divide.
+///
+/// 1L2Y barely moved through all of this, which is why profiling only the small
+/// fixture missed it: 1,152 -> 1,036 us. The whole ladder, including the
+/// diagnostics that attributed it, is in
+/// docs/measurements/profile-step-m3pro.json.
 ///
 /// The box count is estimated in f32 and applied in integers, so the f32 only
 /// ever picks *which* multiple of the box to remove -- every operation that

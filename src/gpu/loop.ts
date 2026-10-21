@@ -85,7 +85,7 @@ import {
   type Accumulators,
   type ResidentDirect,
 } from "./nonbonded.js";
-import { planCellList, updateCellBox } from "./cell-list.js";
+import { planCellList, planWrapPositions, updateCellBox } from "./cell-list.js";
 import {
   packConvolveParams,
   packInterpolateParams,
@@ -237,6 +237,15 @@ export class StepLoop {
       | undefined,
     private readonly degreesOfFreedom: number,
     private readonly comFrequency: number,
+    /**
+     * Folding every coordinate into the box.
+     *
+     * Separate from `cellPasses` because it is encoded on *every* step while
+     * the rebuild honours `cellListInterval`. The pair kernel differences this
+     * pass's output, so skipping it would evaluate the forces at the
+     * coordinates of the last rebuild.
+     */
+    private readonly wrapPass: Pass,
     /** Rebuilding the cell list. */
     private readonly cellPasses: readonly Pass[],
     /** Clearing the accumulators, then every force. */
@@ -329,6 +338,7 @@ export class StepLoop {
         f.type === "PeriodicTorsionForce",
     );
 
+    const wrapPass = await planWrapPositions(cache, direct.cellList, buffers.positions);
     const cellPasses = await planCellList(cache, direct.cellList, buffers.positions);
 
     const forcePasses: Pass[] = [
@@ -485,6 +495,7 @@ export class StepLoop {
       ),
       degreesOfFreedom,
       remover === undefined ? 0 : remover.frequency,
+      wrapPass,
       cellPasses,
       forcePasses,
       comPasses,
@@ -669,6 +680,7 @@ export class StepLoop {
    */
   async profileStep(repeats = 20): Promise<Profile | undefined> {
     const passes = [
+      this.wrapPass,
       ...this.cellPasses,
       ...this.forcePasses,
       ...this.phaseBuilder(0),
@@ -697,6 +709,8 @@ export class StepLoop {
       if (this.comFrequency > 0 && removesOnStep(this.comFrequency, step)) {
         encodePasses(encoder, this.comPasses);
       }
+      // Unconditional, unlike the rebuild: see `wrapPass`.
+      encodePasses(encoder, [this.wrapPass]);
       if (step % interval === 0) encodePasses(encoder, this.cellPasses);
       encodePasses(encoder, this.forcePasses);
       encodePasses(encoder, this.phaseBuilder(i * STEP_PARAMS_STRIDE));
@@ -874,7 +888,11 @@ export class StepLoop {
    * report rather than to the step before.
    */
   async evaluateForces(): Promise<void> {
-    await this.submit("forces", [...this.cellPasses, ...this.forcePasses]);
+    await this.submit("forces", [
+      this.wrapPass,
+      ...this.cellPasses,
+      ...this.forcePasses,
+    ]);
   }
 
   private async submit(label: string, passes: readonly Pass[]): Promise<void> {

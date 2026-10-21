@@ -18,7 +18,7 @@ import { pipelineCacheFor, readBuffer } from "./compute.js";
 import { submitPasses, type Pass, type PipelineCache } from "./pipeline.js";
 import { CELL_LIST } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
-import { readableStorageUsage, uniformUsage } from "./usage.js";
+import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
 import { CellListTooCoarse, MINIMUM_CELLS_PER_AXIS } from "./nonbonded.js";
 import type { Vec3 } from "../engine/system.js";
@@ -155,6 +155,14 @@ export interface CellListBuffers {
   readonly counts: GPUBuffer;
   /** Whatever the atomic scatter produced. Scratch; nothing downstream reads it. */
   readonly scattered: GPUBuffer;
+  /**
+   * Every coordinate folded into [0, box), written by the `wrap` pass.
+   *
+   * This is what the pair kernel differences, rather than the integrator's
+   * positions. Both endpoints inside the box is the precondition that lets its
+   * minimum image be a single conditional shift; see `nearest_image_box`.
+   */
+  readonly wrapped: GPUBuffer;
   readonly params: GPUBuffer;
   readonly geometry: CellGeometry;
   readonly target: ListTarget;
@@ -229,6 +237,8 @@ export function prepareCellList(
   return {
     counts: named("cell/counts", geometry.cellCount * 4),
     scattered: named("cell/scattered", particleCount * 4),
+    // Two words per component, like the positions it folds.
+    wrapped: named("cell/wrapped", particleCount * 3 * 8, storageUsage()),
     params,
     geometry,
     target,
@@ -237,14 +247,45 @@ export function prepareCellList(
 }
 
 /**
+ * The fold on its own.
+ *
+ * 🔴 Every path that encodes the pair pass has to encode this first, and it is
+ * deliberately *not* part of `planCellList`, for two reasons that are easy to
+ * miss. The path that uploads a host-built list never calls `planCellList` at
+ * all, and would leave the kernel differencing a buffer of zeros. And a run
+ * with `cellListInterval` above 1 encodes the build on some steps only, which
+ * for the list itself means a stale partition and for this means forces at
+ * stale *coordinates* -- a much larger error, and silent either way.
+ */
+export async function planWrapPositions(
+  cache: PipelineCache,
+  buffers: CellListBuffers,
+  positions: GPUBuffer,
+): Promise<Pass> {
+  return cache.pass(
+    { label: "cell/wrap", code: CELL_LIST, entryPoint: "wrap" },
+    [
+      { binding: 0, resource: { buffer: positions } },
+      { binding: 5, resource: { buffer: buffers.params } },
+      { binding: 7, resource: { buffer: buffers.wrapped } },
+    ],
+    [Math.ceil(buffers.particleCount / 64)],
+  );
+}
+
+/**
  * Rebuild the list from the positions in `positions`.
  *
  * Five dispatches, no readback. `clear` is cheap and run every time rather than
  * relying on `scan` having left the counts at zero, so a build is correct
  * whatever ran before it. `sort_cells` is the fifth, and it is not optional:
- * the pair kernel sums one atom's neighbours in an f32 register, so the order
- * within a cell changes the answer -- measured at 1.89e-3 kJ/mol/nm, which is
- * small and is still run-to-run noise in a trajectory.
+ * the pair kernel sums one atom's neighbours in registers, so the order within
+ * a cell changed the answer -- measured at 1.89e-3 kJ/mol/nm, which is small
+ * and is still run-to-run noise in a trajectory.
+ *
+ * 🔴 It does **not** include `planWrapPositions`, and must not: the fold has to
+ * run every step even where the list is rebuilt less often, because the pair
+ * kernel differences the fold's output. Callers encode both.
  */
 export async function planCellList(
   cache: PipelineCache,
@@ -322,8 +363,11 @@ export async function buildCellListOnDevice(
   buffers: CellListBuffers,
   positions: GPUBuffer,
 ): Promise<void> {
-  const passes = await planCellList(pipelineCacheFor(pool.device), buffers, positions);
-  await submitPasses(pool.device, "cell list", passes);
+  const cache = pipelineCacheFor(pool.device);
+  await submitPasses(pool.device, "cell list", [
+    await planWrapPositions(cache, buffers, positions),
+    ...(await planCellList(cache, buffers, positions)),
+  ]);
 }
 
 /** Read the built list back, for validation and for the host force path. */
