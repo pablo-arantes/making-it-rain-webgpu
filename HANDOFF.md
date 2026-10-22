@@ -10,7 +10,7 @@ runnable `System` in the browser, protein or protein–ligand, runs on the GPU
 against OpenMM-calibrated thresholds, and comes back as a DCD with the
 notebook's figures.
 
-`npm run check` passes: typecheck, **628 unit and reference tests** over 45
+`npm run check` passes: typecheck, **662 unit and reference tests** over 48
 files, and the web build. `npm run test:browser` passes **13 tests** in Chrome —
 the device and precision checks, bonded forces on both fixtures, the three
 preparation paths, the step profile, and the run page end to end. The 1 ns gate
@@ -22,7 +22,9 @@ under `docs/measurements/`.
 its first step and that there were 45 tests, while Phase 4 landed and Phase 5
 started. A handoff that overstates what is left is survivable; one that
 *understates* it sends the next person to rebuild what already works. Check the
-section below against `git log` before trusting it.
+section below against `git log` before trusting it — and the test count has
+since gone 45, 566, 628, 662, so treat that number as the first thing to
+re-measure rather than quote.
 
 Done in Phase 1, which is where the engine's parity record lives:
 
@@ -484,93 +486,60 @@ agree with pytraj. `docs/PREPARATION.md` has the tables.
 
 **Phase 3 is closed.** ff99SB, DHFR (1RX2) and 1UBQ went through the parity
 gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
-`src/prep/prmtop.ts`. One item did not make it:
+`src/prep/prmtop.ts`. One item outlived the phase and is now also done, with a
+tail:
 
-1. **A non-rectangular box** (deviation 19). Two stages of it are done and the
-   rest is mapped.
+1. **✅ A non-rectangular box** (deviation 19) — **done, and a dodecahedron
+   runs on the GPU.** Kept here rather than deleted, because what it cost and
+   what it turned up are the useful parts.
 
-   Done: the numerics (`src/reference/triclinic.ts` — reduction, perpendicular
-   widths, minimum image, the cutoff bound), pinned against OpenMM by
-   `tools/dump_triclinic.py`; and a real fixture,
-   `tools/build_reference_system.py --box-shape dodecahedron`, which gives 1,855
-   atoms against the cube's 2,373. Our box construction reproduces OpenMM's
-   vectors *exactly*, and OpenMM's own default solvation satisfies the cutoff
-   bound with 8.9% headroom — live, not a formality, since the 1.2 nm cutoff some
-   protocols use would not fit.
-   `docs/measurements/triclinic-dodecahedron-1L2Y.json` has the numbers.
+   A 5,002-atom dodecahedral 1L2Y, through the same commands a cube goes
+   through: engine against its own f64 reference at 9.8e-7 energy and 8.3e-7
+   force relative RMS; the cell list agreeing host-to-device with 0 assignment
+   and 0 force differences; the neighbour list bit-identical to the cell-shell
+   path over all 15,006 force components, and the same trajectory over 49
+   rebuilds; 657 steps/s with the list against 281 without, both paths ending at
+   the same energy per atom. `docs/measurements/triclinic-gpu-dodecahedron.json`.
 
-   **The four reference files are done.** `potential.ts`,
-   `forces/nonbonded.ts`, `forces/pme.ts` and `forces/restraint.ts` all take a
-   triclinic box; `rectangularBox` is replaced by `usableBox`, which reduces the
-   vectors and refuses a cutoff the cell cannot carry. Against OpenMM's **CPU**
-   platform on the dodecahedral fixture: bonded terms exact, reciprocal space
-   1.2e-9, direct space 2.3e-6 (the CPU platform is single precision for
-   nonbonded). The rectangular path is unchanged — all 662 unit tests pass,
-   including the cubic parity fixtures.
+   The cube is unchanged throughout. The only numerical movement in six commits
+   was PME's, at the f32 ulp, because the kernels now compute `r · B⁻¹` where
+   they divided by an edge length — recorded in
+   `engine-force-error-equilibrated-m3pro.json` rather than left behind a stale
+   claim of exactness.
 
-   Still to do: the nine GPU files, then `solvate.ts`.
-   * GPU — nine TS files and six WGSL ones. **Surveyed and designed, not
-     started**; a half-converted force path would compute confident wrong
-     numbers on a system it no longer refuses, so it is all or nothing and it is
-     more than one sitting. Every `rectangularBox` call in `src/gpu/` is a
-     marker for an unconverted kernel.
+   🔴 **The surprise, and the thing deviation 19 got wrong for months.** A
+   dodecahedron holds 70.7% of the enclosing cube's water *for the same
+   padding*, which is what made it look worth having. But it cannot use the same
+   padding: the 27-cell scan needs three cells an axis across the
+   **perpendicular** widths, and a rhombic dodecahedron's narrowest width is
+   0.707 of its edge, so it needs `d >= 3*sqrt(2)*cutoff` — 4.24 nm at a 1 nm
+   cutoff against the cube's 3.0. 1L2Y at the notebook's 0.4 nm padding gives
+   2x2x2 cells and is refused where the cube at the same padding is accepted. At
+   1.5 nm it runs, at 5,002 atoms against the cube's 2,373. **So the saving is
+   real only for a solute large enough that `3*sqrt(2)*cutoff` is not the binding
+   constraint, and a small one is better off in a cube.** The refusal names the
+   widths and the cell count so a user is told which case they are in.
 
-     The design, settled by doing the reference:
+   Two findings worth more than the feature:
 
-     **Represent the cell twice in the uniforms, and both are necessary.** The
-     three off-diagonal lattice components (`b.x`, `c.x`, `c.y`) in **fixed
-     point**, because the shift they produce lands on a position difference that
-     has to stay exact; and the inverse box in **f32**, because it is only used
-     to *decide* which image to take. `PAIR_PARAMS_BYTES` grows from 160 to
-     about 256.
+   * **OpenMM's *Reference* platform is wrong for a skewed cell** — it reports
+     pairs genuinely inside the cutoff as non-interacting, 72 of 689 on a
+     dodecahedron and 0 of 850 on a cube, and the loss scales with skew. It is
+     the oracle everywhere else in this project, so the CPU platform has to be
+     used instead. Finding it meant eliminating the minimum image, the cell
+     list, alpha, the dispersion correction, the exceptions and the exclusion
+     correction one at a time first. `CLAUDE.md` and
+     `triclinic-reference-parity.json`.
+   * **OpenMM 7.7 cannot solvate a dodecahedron** — it removes clashes across a
+     *rectangular* boundary and produces a 9.6e10 kJ/mol structure, silently,
+     with the cube unaffected. Build triclinic fixtures with the oracle
+     environment.
 
-     **The minimum image is `Δf_u -= round(Δf_u)` per fractional axis, and those
-     three are independent.** Subtracting lattice vector `c` changes only
-     `f_c`, so the Cartesian "reduce against c, then b, then a" is the same
-     thing as rounding each fractional component — no ordering, no search. For
-     positions folded into the cell `|Δf| < 1`, so `round` is one of -1, 0, 1
-     and the shift is an exact fixed-point add or subtract with **no multiply**.
-     An f32 estimate of `Δf` picks that integer correctly unless the pair is
-     within 1.6e-7 of the half-cell boundary, where the two images are
-     equidistant.
-
-     🔴 **Do not store positions in fractional fixed point**, which is the
-     obvious simplification. A fractional unit is the whole cell, so 2^-32 is
-     7e-10 nm in a 3 nm box against 2.3e-10 for Cartesian, and converting
-     `Δf · B` in f32 would put 1.5e-7 nm on the pair vector — the error
-     `minimum_image64` exists to avoid. Doing that product in fixed point needs
-     nine 64-bit multiplies per pair, in the kernel that is 39% of a step.
-
-     For a rectangular box every one of these collapses to the current code, so
-     the conversion is verifiable in stages by "rectangular unchanged" — but
-     nothing is verifiable *end to end* until the cell list and PME are both
-     done, and only the browser lane can verify any of it.
-
-     The pieces, in dependency order: the box uniforms; the fold into a skewed
-     cell in `cell-list.wgsl`'s `wrap`; fractional bucketing in `axis_cell` and
-     in the host builder in `nonbonded.ts`; the minimum image in
-     `nonbonded-pairs.wgsl`, `nonbonded-exceptions.wgsl` and `restraint.wgsl`;
-     the neighbour list's cell sizing by perpendicular width; then PME's three
-     kernels — spread from fractional coordinates, `k` from the reciprocal
-     lattice rather than per axis, and the force back through `B⁻¹`.
-
-     The oracle is **OpenMM's CPU platform**, not Reference — see `CLAUDE.md`
-     and `docs/measurements/triclinic-reference-parity.json`. The converted
-     reference is the specification: anything the kernels produce has to match
-     it, and it is already pinned.
-   * and then `src/prep/solvate.ts`, whose `PeriodicGrid` buckets in Cartesian
-     space and would have to bucket in fractional space instead.
-
-   🔴 **PME's reciprocal lattice turned out not to be the hard part.** The
-   charge grid is laid out in fractional coordinates, so the transform is the
-   same transform whatever the cell shape and only three things change. The hard
-   part was that there was nothing to check it against, and then that the thing
-   everyone would reach for -- OpenMM's Reference platform -- is wrong for
-   triclinic cells. `src/reference/forces/ewald.ts` is the independent oracle
-   now, and `CLAUDE.md` has the Reference-platform trap. `UnsupportedBoxShape` in
-   `src/prep/solvate.ts` is where preparation refuses, and
-   `TriclinicBoxUnsupported` in `src/reference/forces/nonbonded.ts` is where the
-   engine does.
+   Still open, and smaller than it was: `src/prep/solvate.ts` still refuses a
+   non-cubic `boxShape`, so the *engine* runs one but the *preparation* path
+   will not build one. `PeriodicGrid` buckets in Cartesian space and needs
+   fractional, exactly as the device and host cell lists now do. Until that
+   lands, a triclinic system has to come from OpenMM.
 
 **Phase 4 is done**, and it was half the project's stated scope:
 protein–ligand. A heterogen picker that asks which residue is the ligand rather
