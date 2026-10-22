@@ -33,8 +33,8 @@
 import { parseState } from "../engine/state.js";
 import { parseSystem, type OpenMMSystem, type NonbondedForce } from "../engine/system.js";
 import { ewaldAlpha } from "../engine/units.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
 import { BufferPool } from "./allocator.js";
+import { isRectangular } from "../reference/triclinic.js";
 import { buildCellListOnDevice, readCellList } from "./cell-list.js";
 import {
   buildCellList,
@@ -78,7 +78,6 @@ export async function validateCellList(
     (f): f is NonbondedForce => f.type === "NonbondedForce",
   );
   if (force === undefined) throw new Error("the fixture has no NonbondedForce");
-  const box = rectangularBox(state.boxVectors);
   const particleCount = system.particleCount;
   const positionWords = packPositions(state.positions);
 
@@ -89,6 +88,18 @@ export async function validateCellList(
     const alpha = ewaldAlpha(force.cutoff, force.ewaldTolerance);
     // No list: this check is about the cell list, and the shell path is what
     // reads it.
+    //
+    // 🔴 `assignmentDifferences` is required to be zero only for a rectangular
+    // cell, where both builders bucket with exact integer arithmetic. A skewed
+    // cell buckets from an f32 fractional coordinate on the device and an f64
+    // one here, so an atom within an ulp of a boundary can land either side --
+    // and that is *allowed*, because it cannot change the physics: the 27-cell
+    // shell reaches a whole cell width past the home cell against a cutoff at
+    // most that wide, so either assignment finds the same pairs inside the
+    // cutoff. The invariant that matters is the one below it, that feeding
+    // either list to the same kernel gives bit-identical forces, and that is
+    // still required of both shapes.
+    const rectangular = isRectangular(state.boxVectors as never);
     const resident = prepareDirect(pool, force, state.boxVectors, alpha, 0);
     const positions = pool.buffer({
       label: "cell/positions",
@@ -102,7 +113,7 @@ export async function validateCellList(
     );
     await buildCellListOnDevice(pool, resident.cellList, positions);
     const built = await readCellList(pool, resident.cellList);
-    const host = buildCellList(state.positions, box, force.cutoff);
+    const host = buildCellList(state.positions, state.boxVectors, force.cutoff);
 
     let assignmentDifferences = 0;
     for (let atom = 0; atom < particleCount; atom++) {
@@ -191,7 +202,7 @@ export async function validateCellList(
       deviceEnergy: withDevice.energy,
       forceDifference,
       ok:
-        assignmentDifferences === 0 &&
+        (rectangular ? assignmentDifferences === 0 : true) &&
         populationDifferences === 0 &&
         permutationValid &&
         spansValid &&

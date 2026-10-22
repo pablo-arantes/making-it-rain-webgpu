@@ -38,7 +38,13 @@ import {
   dispersionCorrection,
   rectangularBox,
 } from "../reference/forces/nonbonded.js";
-import { inverseBox, type BoxVectors } from "../reference/triclinic.js";
+import {
+  fractionalOf,
+  inverseBox,
+  isRectangular,
+  perpendicularWidths,
+  type BoxVectors,
+} from "../reference/triclinic.js";
 import type { NonbondedForce, Vec3 } from "../engine/system.js";
 
 /** Three or more cells an axis, or the 27-cell scan would visit one twice. */
@@ -67,30 +73,59 @@ export interface CellList {
 
 export function buildCellList(
   positions: Float64Array,
-  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   cutoff: number,
 ): CellList {
   const particleCount = positions.length / 3;
+  const vectors = boxVectors as unknown as BoxVectors;
+  const skewed = !isRectangular(vectors);
+  // 🔴 Cells are counted against the *perpendicular* widths, not the edge
+  // lengths. A 27-cell scan reaches one cell width, so sizing a skewed cell's
+  // slabs by an edge would make them thinner than the cutoff across the faces
+  // and lose pairs. For a rectangular cell the two are the same number.
+  const widths = skewed
+    ? (perpendicularWidths(vectors) as unknown as Vec3)
+    : ([
+        (boxVectors[0] as Vec3)[0] as number,
+        (boxVectors[1] as Vec3)[1] as number,
+        (boxVectors[2] as Vec3)[2] as number,
+      ] as Vec3);
   const cells: Vec3 = [
-    Math.max(1, Math.floor((box[0] as number) / cutoff)),
-    Math.max(1, Math.floor((box[1] as number) / cutoff)),
-    Math.max(1, Math.floor((box[2] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[0] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[1] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[2] as number) / cutoff)),
   ];
   if (cells.some((n) => n < MINIMUM_CELLS_PER_AXIS)) {
-    throw new CellListTooCoarse(cells, box, cutoff);
+    throw new CellListTooCoarse(cells, widths, cutoff);
   }
   const cellCount = (cells[0] as number) * (cells[1] as number) * (cells[2] as number);
   const cellOf = new Int32Array(particleCount);
   const starts = new Uint32Array(cellCount + 1);
-  const index = (value: number, extent: number, divisions: number): number => {
-    const fraction = value / extent - Math.floor(value / extent);
-    const i = Math.floor(fraction * divisions);
+  const inverse = skewed ? inverseBox(vectors) : undefined;
+  const bucket = (fraction: number, divisions: number): number => {
+    const wrapped = fraction - Math.floor(fraction);
+    const i = Math.floor(wrapped * divisions);
     return i === divisions ? divisions - 1 : i;
   };
   for (let i = 0; i < particleCount; i++) {
-    const cx = index(positions[i * 3] as number, box[0] as number, cells[0] as number);
-    const cy = index(positions[i * 3 + 1] as number, box[1] as number, cells[1] as number);
-    const cz = index(positions[i * 3 + 2] as number, box[2] as number, cells[2] as number);
+    const x = positions[i * 3] as number;
+    const y = positions[i * 3 + 1] as number;
+    const z = positions[i * 3 + 2] as number;
+    let cx: number;
+    let cy: number;
+    let cz: number;
+    if (inverse === undefined) {
+      cx = bucket(x / (widths[0] as number), cells[0] as number);
+      cy = bucket(y / (widths[1] as number), cells[1] as number);
+      cz = bucket(z / (widths[2] as number), cells[2] as number);
+    } else {
+      // Fractional coordinates: a cell is a parallelepiped of the box, and
+      // `f - floor(f)` wraps it however skewed it is.
+      const fractional = fractionalOf(x, y, z, inverse);
+      cx = bucket(fractional[0] as number, cells[0] as number);
+      cy = bucket(fractional[1] as number, cells[1] as number);
+      cz = bucket(fractional[2] as number, cells[2] as number);
+    }
     const cell = (cx * (cells[1] as number) + cy) * (cells[2] as number) + cz;
     cellOf[i] = cell;
     starts[cell + 1] = (starts[cell + 1] as number) + 1;
