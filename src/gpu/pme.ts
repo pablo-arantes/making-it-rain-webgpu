@@ -27,6 +27,7 @@ import { planFft, type FftPlan } from "../reference/fft.js";
 import { bsplineModuli } from "../reference/forces/bspline.js";
 import { PME_ORDER } from "../reference/forces/pme.js";
 import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { writeInverseBox } from "./nonbonded.js";
 import { ONE_4PI_EPS0 } from "../engine/units.js";
 import type { NonbondedForce, Vec3 } from "../engine/system.js";
 
@@ -174,9 +175,10 @@ export function packPmeParams(
   particleCount: number,
   grid: Vec3,
   box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
 ): Uint8Array {
-  const bytes = new ArrayBuffer(64);
+  const bytes = new ArrayBuffer(112);
   const u32 = new Uint32Array(bytes);
   const f32 = new Float32Array(bytes);
   u32[0] = particleCount;
@@ -188,6 +190,7 @@ export function packPmeParams(
   f32[10] = box[2] as number;
   f32[11] = alpha;
   f32[12] = reciprocalPrefactor(box);
+  writeInverseBox(f32, 16, boxVectors);
   return new Uint8Array(bytes);
 }
 
@@ -196,8 +199,13 @@ export function packPmeParams(
  * f32 alpha; f32 prefactor }` -- grid 0, offsets 16, box 32, alpha 44,
  * prefactor 48.
  */
-export function packConvolveParams(grid: Vec3, box: Vec3, alpha: number): Uint8Array {
-  const bytes = new ArrayBuffer(64);
+export function packConvolveParams(
+  grid: Vec3,
+  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+  alpha: number,
+): Uint8Array {
+  const bytes = new ArrayBuffer(112);
   const u32 = new Uint32Array(bytes);
   const f32 = new Float32Array(bytes);
   const [nx, ny, nz] = grid as unknown as [number, number, number];
@@ -211,16 +219,21 @@ export function packConvolveParams(grid: Vec3, box: Vec3, alpha: number): Uint8A
   f32[10] = box[2] as number;
   f32[11] = alpha;
   f32[12] = reciprocalPrefactor(box);
+  writeInverseBox(f32, 16, boxVectors);
   return new Uint8Array(bytes);
 }
 
-/** `struct Pme { u32 count; vec3<u32> grid; vec3<f32> box }` -- 48 bytes. */
+/**
+ * `struct Pme { u32 count; vec3<u32> grid; vec3<f32> box; mat3 inverse }` --
+ * the box ends at word 11, so the inverse takes its 16-byte boundary at 12.
+ */
 export function packInterpolateParams(
   particleCount: number,
   grid: Vec3,
   box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
 ): Uint8Array {
-  const bytes = new ArrayBuffer(48);
+  const bytes = new ArrayBuffer(96);
   const u32 = new Uint32Array(bytes);
   const f32 = new Float32Array(bytes);
   u32[0] = particleCount;
@@ -230,6 +243,7 @@ export function packInterpolateParams(
   f32[8] = box[0] as number;
   f32[9] = box[1] as number;
   f32[10] = box[2] as number;
+  writeInverseBox(f32, 12, boxVectors);
   return new Uint8Array(bytes);
 }
 
@@ -300,12 +314,20 @@ export function preparePme(
       ]),
       storageUsage(),
     ),
-    pmeParams: put("params", packPmeParams(n, grid, box, alpha), uniformUsage()),
+    pmeParams: put(
+      "params",
+      packPmeParams(n, grid, box, boxVectors, alpha),
+      uniformUsage(),
+    ),
     sizeParams: put("size", new Uint32Array([total]), uniformUsage()),
-    convolveParams: put("convolveParams", packConvolveParams(grid, box, alpha), uniformUsage()),
+    convolveParams: put(
+      "convolveParams",
+      packConvolveParams(grid, box, boxVectors, alpha),
+      uniformUsage(),
+    ),
     interpolateParams: put(
       "interpolateParams",
-      packInterpolateParams(n, grid, box),
+      packInterpolateParams(n, grid, box, boxVectors),
       uniformUsage(),
     ),
   };

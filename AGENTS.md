@@ -174,9 +174,17 @@ an incomparable structure. 1L2Y, 2373 particles,
 and do not take a passing threshold as the answer. It was produced by hand once,
 then four kernel changes went past it — the shell split, the loop-free minimum
 image, the position fold and the neighbour list — with no way to tell whether it
-still described what ships. Re-measured afterwards it is **bit-identical to all
-17 digits**, forces and energy both, which says those changes were *exact* and
-not merely inside tolerance. A threshold could not have told the difference.
+still described what ships. Re-measured afterwards it was **bit-identical to all
+17 digits**, forces and energy both, which said those four changes were *exact*
+and not merely inside tolerance. A threshold could not have told the difference.
+
+PME's triclinic conversion then moved it, at the f32 ulp: the kernels compute a
+fractional coordinate as `r · B⁻¹` where they divided by an edge length, and
+`r * (1/L)` is not `r / L` in f32. 1.1046e-06 to **1.0959e-06**, which is 0.8%
+*better* and still 13× inside the basis. Accepted rather than branched around,
+because the reference computes `r · B⁻¹` too — the kernel and the thing it is
+tested against now do the same arithmetic, which is worth more than preserving a
+digit.
 
 The engine is **12.9× inside** the single-precision basis on forces, and sits
 nearer OpenMM's *double*-precision CPU platform (1.27× its error) than its

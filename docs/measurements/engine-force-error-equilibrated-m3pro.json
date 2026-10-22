@@ -7,20 +7,20 @@
  "equilibrated_state": "fixtures/equilibrated/1L2Y-state.xml",
  "force_relative_rms": {
   "_definition": "sqrt(sum((a-b)^2) / sum(b^2)) over all 3N components; identical formula in src/gpu/verify.ts and tools/calibrate_thresholds.py, which is what makes these comparable",
-  "webgpu_engine_vs_our_f64_reference": 1.1045629923585429e-06,
+  "webgpu_engine_vs_our_f64_reference": 1.0958857596079082e-06,
   "openmm_opencl_single_vs_openmm_reference": 1.429296137442784e-05,
   "openmm_cpu_double_vs_openmm_reference": 1.0345659102701044e-06,
-  "engine_better_than_openmm_single_by": 12.94,
-  "engine_worse_than_openmm_double_by": 1.07,
+  "engine_better_than_openmm_single_by": 13.04,
+  "engine_worse_than_openmm_double_by": 1.06,
   "basis_from": "docs/measurements/calibration-L4-opencl-mixed.json"
  },
  "total_energy": {
-  "webgpu_engine_relative": 2.7686721315911786e-07,
-  "webgpu_engine_absolute_kJ_mol": 0.008369844003027538,
+  "webgpu_engine_relative": 2.712994090970507e-07,
+  "webgpu_engine_absolute_kJ_mol": 0.008201526306947926,
   "openmm_opencl_single_absolute_kJ_mol": 0.004391132464661496,
   "openmm_cpu_double_absolute_kJ_mol": 0.002325666770047974,
   "note": "The asymmetry between forces and total energy is real and is not a defect: forces accumulate exactly in 64-bit fixed point, whereas the total is a difference of two large cancelling PME terms, so its relative error is amplified by the cancellation.",
-  "device_kJ_mol": -30230.52672142128,
+  "device_kJ_mol": -30230.526889738976,
   "our_f64_reference_kJ_mol": -30230.535091265283
  },
  "reference_cross_check": {
@@ -39,12 +39,13 @@
  "alpha": 2.628260884878466,
  "cutoff": 1,
  "unchanged_across": {
-  "note": "Re-measured after the kernel work and **bit-identical to all 17 digits**, forces and energy both. That is the result worth keeping: the optimisations were exact rather than merely within tolerance, which is what AGENTS.md's 'a faster kernel passes the same differential test' asks for and what a threshold alone cannot show.",
+  "note": "\ud83d\udd34 Was bit-identical to all 17 digits across four kernel changes -- the shell split, the loop-free minimum image, the position fold and the neighbour list -- which was the point of this entry. PME's triclinic conversion broke that, at the f32 ulp and for a reason worth keeping: the kernels now compute a fractional coordinate as `r \u00b7 B\u207b\u00b9` where they divided by an edge length, and `r * (1/L)` is not `r / L` in f32. The force error moved from 1.104563e-06 to 1.095886e-06, which is 0.8% *better* and still 13x inside the single-precision basis. Accepted rather than branched around: the reference computes `r \u00b7 B\u207b\u00b9` too, so the kernel and the thing it is differentially tested against now do the same arithmetic, which matters more for parity than preserving a digit.",
   "changes": [
    "the pair kernel's 27-cell neighbour shell split across the dispatch",
    "a loop-free minimum image",
    "positions folded into the box so the wrap is one conditional shift",
-   "a Verlet neighbour list with a device-side rebuild"
+   "a Verlet neighbour list with a device-side rebuild",
+   "PME's triclinic conversion -- moved the figure at the ulp, see the note"
   ],
   "speedup_over_the_same_period": "1L2Y 208 -> 1,213 steps/s; 3HTB 82 -> 151",
   "before": {

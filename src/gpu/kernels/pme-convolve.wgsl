@@ -24,6 +24,8 @@ struct Convolution {
   box: vec3<f32>,
   alpha: f32,
   prefactor: f32,
+  /// The inverse box, row-major. Appended so no existing offset moves.
+  inverse: array<vec4<f32>, 3>,
 }
 
 const TWO_PI: f32 = 6.283185307179586;
@@ -53,7 +55,18 @@ fn convolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     select(i32(my) - i32(n.y), i32(my), my * 2u <= n.y),
     select(i32(mz) - i32(n.z), i32(mz), mz * 2u <= n.z),
   );
-  let k = TWO_PI * vec3<f32>(signed) / convolution.box;
+  // 🔴 `k` is a *vector on the reciprocal lattice*, not three independent
+  // per-axis terms: `g_i · a_j = 2π δ_ij` makes the reciprocal vectors the rows
+  // of `2π B⁻ᵀ`, so `k = 2π m · B⁻ᵀ` and the components mix. Treating them
+  // independently is the mistake that reads as a small shift in the total
+  // rather than as a wrong answer, because the direct and reciprocal terms
+  // cancel to four digits. For a rectangular cell this is `2π m_u / L_u`.
+  let m = vec3<f32>(signed);
+  let k = TWO_PI * vec3<f32>(
+    dot(m, convolution.inverse[0].xyz),
+    dot(m, convolution.inverse[1].xyz),
+    dot(m, convolution.inverse[2].xyz),
+  );
   let k_squared = dot(k, k);
   let modulus = moduli[mx]
               * moduli[convolution.modulus_offset.x + my]

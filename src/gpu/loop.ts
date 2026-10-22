@@ -1051,12 +1051,21 @@ export class StepLoop {
     );
     write(
       this.pme.pmeParams,
-      packPmeParams(this.system.particleCount, this.pme.grid, box, this.alpha),
+      packPmeParams(
+        this.system.particleCount,
+        this.pme.grid,
+        box,
+        boxVectors,
+        this.alpha,
+      ),
     );
-    write(this.pme.convolveParams, packConvolveParams(this.pme.grid, box, this.alpha));
+    write(
+      this.pme.convolveParams,
+      packConvolveParams(this.pme.grid, box, boxVectors, this.alpha),
+    );
     write(
       this.pme.interpolateParams,
-      packInterpolateParams(this.system.particleCount, this.pme.grid, box),
+      packInterpolateParams(this.system.particleCount, this.pme.grid, box, boxVectors),
     );
     // The radius `prepareDirect` actually sized the cells by, which is clamped
     // for a small box and so is not always `cutoff + skin`.
