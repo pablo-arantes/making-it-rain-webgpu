@@ -115,6 +115,14 @@ open("ligand.xml", "w").write(
             <input id="padding" type="number" value="4" step="1" min="0" />
           </p>
           <p>
+            <label for="box-shape">Box shape</label>
+            <select id="box-shape">
+              <option value="cube" selected>Cube</option>
+              <option value="dodecahedron">Rhombic dodecahedron</option>
+              <option value="octahedron">Truncated octahedron</option>
+            </select>
+          </p>
+          <p>
             <label for="concentration">Ionic strength (M)</label>
             <input id="concentration" type="number" value="0.15" step="0.01" min="0" />
           </p>

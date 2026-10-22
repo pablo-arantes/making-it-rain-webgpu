@@ -38,6 +38,7 @@ import {
   boxVectorsForShape,
   isReducedForm,
   NotReducedForm,
+  perpendicularWidths,
 } from "../reference/triclinic.js";
 import type { AssignedAtom } from "./assign.js";
 import type { Pair } from "./bonded.js";
@@ -73,6 +74,55 @@ export class UnsupportedBoxShape extends Error {
     );
     this.name = "UnsupportedBoxShape";
   }
+}
+
+/**
+ * Cells an axis the engine's 27-cell shell needs, and so the box's real floor.
+ *
+ * 🔴 Mirrors `MINIMUM_CELLS_PER_AXIS` in `src/gpu/nonbonded.ts` **by value and
+ * not by import**, so that the preparation page does not pull the kernels into
+ * its bundle for one integer. `test/prep-solvate.test.ts` asserts the two are
+ * equal, which is what keeps them from drifting.
+ */
+export const SHELL_CELLS_PER_AXIS = 3;
+
+/**
+ * Whether the engine will accept this cell, and what it would take.
+ *
+ * 🔴 Measured across the **perpendicular widths**, never the edges. A rhombic
+ * dodecahedron's narrowest width is 0.707 of its edge, so it needs
+ * `3*sqrt(2)*cutoff` -- 4.24 nm at a 1 nm cutoff against the cube's 3.0 -- and
+ * 1L2Y at the notebook's 0.4 nm padding is refused where the cube is accepted.
+ * Worth asking here rather than at run time: the alternative is a user
+ * preparing a system, downloading it, and finding out on another page.
+ *
+ * The cutoff alone is the right radius to ask about even though the cell list
+ * prefers cells of `cutoff + skin`: the engine falls back to cutoff-sized cells
+ * when the wider ones would not give three an axis, and at exactly three the
+ * shell spans the whole box, so nothing is out of reach.
+ */
+export function cellListFits(
+  vectors: BoxVectors,
+  cutoff: number,
+): {
+  readonly fits: boolean;
+  /** nm, the narrowest perpendicular width. */
+  readonly narrowest: number;
+  /** nm, what that width has to reach. */
+  readonly needed: number;
+  /** nm, the box width that would satisfy it for this shape. */
+  readonly width: number;
+} {
+  const narrowest = Math.min(...perpendicularWidths(vectors));
+  const needed = SHELL_CELLS_PER_AXIS * cutoff;
+  const edge = (vectors[0] as readonly number[])[0] as number;
+  return {
+    fits: narrowest >= needed,
+    narrowest,
+    needed,
+    // The widths scale with the box, so the shape's own ratio gives the answer.
+    width: (needed * edge) / narrowest,
+  };
 }
 
 export interface SolvateOptions {

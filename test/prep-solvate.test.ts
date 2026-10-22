@@ -27,7 +27,9 @@ import { totalCharge } from "../src/prep/assign.js";
 import { NonbondedMethod } from "../src/engine/system.js";
 import {
   boxWidthForPadding,
+  cellListFits,
   KNOWN_BOX_SHAPES,
+  SHELL_CELLS_PER_AXIS,
   solvate,
   squaredPeriodicDistance,
   UnsupportedBoxShape,
@@ -511,5 +513,49 @@ describe.skipIf(!dodecaPresent)("solvating 1L2Y in a dodecahedron", () => {
     expect(maximumCutoff(result.boxVectors)).toBeCloseTo(0.5 * Math.min(...widths), 12);
     // Three cells across the narrowest width at a 1 nm cutoff needs 4.243 nm.
     expect(edge).toBeLessThan(3 * Math.SQRT2 * 1.0);
+  });
+});
+
+/**
+ * The box floor the engine imposes, asked at preparation time.
+ *
+ * Needs no fixture, so it runs in every lane. The point of the first assertion
+ * is that `src/prep/` states this constant itself rather than importing it from
+ * `src/gpu/`, which would put the kernels in the preparation page's bundle for
+ * one integer -- so something has to hold the two equal, and this is it.
+ */
+describe("the cell list's box floor", () => {
+  it("mirrors the engine's own minimum, by value", async () => {
+    const { MINIMUM_CELLS_PER_AXIS } = await import("../src/gpu/nonbonded.js");
+    expect(SHELL_CELLS_PER_AXIS).toBe(MINIMUM_CELLS_PER_AXIS);
+  });
+
+  it("measures the perpendicular widths, so a cube and a dodecahedron differ", () => {
+    // 🔴 Deviation 19, as arithmetic. The same 3.08 nm width -- 1L2Y at the
+    // notebook's 0.4 nm padding -- is a legal cube and an illegal
+    // dodecahedron, because the dodecahedron's narrowest perpendicular width
+    // is 0.707 of its edge and the shell has to reach across that.
+    const width = 3.0806;
+    expect(cellListFits(boxVectorsForShape("cube", width), 1).fits).toBe(true);
+    expect(cellListFits(boxVectorsForShape("dodecahedron", width), 1).fits).toBe(false);
+
+    // And what it would take: 3*sqrt(2)*cutoff for a dodecahedron, 3 for a cube.
+    expect(cellListFits(boxVectorsForShape("dodecahedron", width), 1).width).toBeCloseTo(
+      3 * Math.SQRT2,
+      9,
+    );
+    expect(cellListFits(boxVectorsForShape("cube", width), 1).width).toBeCloseTo(3, 9);
+    // A box at exactly the returned width fits, which is what the page tells
+    // the user to aim for.
+    for (const shape of KNOWN_BOX_SHAPES) {
+      const needed = cellListFits(boxVectorsForShape(shape, width), 1).width;
+      expect(cellListFits(boxVectorsForShape(shape, needed), 1).fits).toBe(true);
+    }
+  });
+
+  it("scales with the cutoff, not with the shape alone", () => {
+    const octahedron = boxVectorsForShape("octahedron", 4.0);
+    expect(cellListFits(octahedron, 1).fits).toBe(true);
+    expect(cellListFits(octahedron, 1.2).fits).toBe(false);
   });
 });

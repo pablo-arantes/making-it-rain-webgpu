@@ -28,7 +28,11 @@
  */
 
 import { writePdb, readPdb, type PdbTopology } from "../src/analysis/pdb.js";
-import { type BoxVectors, isRectangular } from "../src/reference/triclinic.js";
+import {
+  type BoxVectors,
+  isRectangular,
+  perpendicularWidths,
+} from "../src/reference/triclinic.js";
 import { serialiseState } from "../src/engine/state.js";
 import {
   NonbondedMethod,
@@ -59,6 +63,7 @@ import { findLigandCandidates } from "../src/prep/ligand.js";
 import { prepareSystem } from "../src/prep/prepare.js";
 import {
   boundingSphereRadius,
+  cellListFits,
   solvate,
   type SolvateResult,
 } from "../src/prep/solvate.js";
@@ -455,12 +460,31 @@ function showDeviations(solvated: SolvateResult, variants: readonly (string | nu
     );
   }
 
-  entries.push(
-    "<li><strong>The box is a cube</strong> (deviation 19). A rhombic " +
-      "dodecahedron would hold about 70% of the water for the same padding, " +
-      "and needs a triclinic minimum image that is not implemented. It is " +
-      "refused rather than quietly substituted.</li>",
-  );
+  if (isRectangular(solvated.boxVectors)) {
+    entries.push(
+      "<li><strong>The box is a cube</strong> (deviation 19). A rhombic " +
+        "dodecahedron holds 70.7% of the water for the same box width, so it " +
+        "is about a quarter off a run's time and memory — but it needs a wider " +
+        "box to be legal at all, so the saving is real only for a solute large " +
+        "enough that the cell count is not what binds.</li>",
+    );
+  } else {
+    const widths = perpendicularWidths(solvated.boxVectors);
+    entries.push(
+      "<li><strong>The box is not a cube</strong> (deviation 19). Its " +
+        `narrowest perpendicular width is ${Math.min(...widths).toFixed(3)} nm, ` +
+        "and that — not any edge length — is what bounds the cutoff and the " +
+        "cell count. The water is OpenMM's exactly: every oxygen of a " +
+        "dodecahedral 1L2Y matches <code>addSolvent</code> to within 1e-12 nm." +
+        "</li>",
+      "<li><strong><code>system.pdb</code> says the box is rectangular</strong> " +
+        "(deviation 24). A PDB <code>CRYST1</code> here carries three lengths " +
+        "and right angles, so the shape does not survive that file. The run is " +
+        "unaffected — <code>state.xml</code> carries the real vectors, and that " +
+        "is what the engine reads — but anything opening the PDB on its own, " +
+        "including a viewer, will draw the wrong cell.</li>",
+    );
+  }
 
   deviations.innerHTML = `<ul class="note">${entries.join("")}</ul>`;
 }
@@ -506,6 +530,7 @@ prepareButton.addEventListener("click", () => {
       const water = el<HTMLSelectElement>("water").value;
       const ph = Number(el<HTMLInputElement>("ph").value);
       const padding = Number(el<HTMLInputElement>("padding").value) / 10;
+      const boxShape = el<HTMLSelectElement>("box-shape").value;
       const concentration = Number(el<HTMLInputElement>("concentration").value);
       const positiveIon = el<HTMLSelectElement>("positive-ion").value;
       const seed = Number(el<HTMLInputElement>("prep-seed").value);
@@ -571,6 +596,7 @@ prepareButton.addEventListener("click", () => {
         data.box,
         {
           padding,
+          boxShape,
           model: water,
           ionicStrength: concentration,
           neutralize: true,
@@ -657,6 +683,23 @@ prepareButton.addEventListener("click", () => {
           ? '<p class="bad-box">The system is not neutral. That is a bug — ' +
             "neutralisation is on — and it should be reported rather than run.</p>"
           : '<p class="note">Neutral, as it should be.</p>');
+
+      // 🔴 The engine's floor, asked here rather than on the run page. A
+      // dodecahedron at the notebook's padding is refused while the cube of the
+      // same padding runs, and finding that out after downloading three files
+      // is the worst place to find it out.
+      const fit = cellListFits(solvated.boxVectors, 1);
+      if (!fit.fits) {
+        const needed = Math.ceil((fit.width - 2 * radius) * 10);
+        report.innerHTML +=
+          '<p class="bad-box">This box is too narrow for the engine: its ' +
+          `narrowest perpendicular width is ${fit.narrowest.toFixed(3)} nm, and ` +
+          `the 27-cell neighbour scan needs ${fit.needed.toFixed(3)} nm — three ` +
+          "cells of the 1 nm cutoff. Prepare it again with at least " +
+          `${needed} Å of padding, or choose a cube. The perpendicular widths ` +
+          "of a non-rectangular cell are smaller than its edges, so it needs a " +
+          "<em>wider</em> box for the same cutoff, not a narrower one.</p>";
+      }
 
       showDeviations(solvated, hydrogenated.variants);
 
