@@ -509,11 +509,55 @@ gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
    including the cubic parity fixtures.
 
    Still to do: the nine GPU files, then `solvate.ts`.
-   * GPU — `nonbonded.ts`, `pme.ts`, `loop.ts`, `restraint.ts`, `verify.ts`,
-     `validate.ts`, `validate-cell-list.ts`, `validate-pbc.ts`,
-     `validate-protocol.ts`. The reference is the map for all of them: spread in
-     fractional coordinates, build `k` from the reciprocal lattice rather than
-     per axis, and bring the force back through `B⁻¹`.
+   * GPU — nine TS files and six WGSL ones. **Surveyed and designed, not
+     started**; a half-converted force path would compute confident wrong
+     numbers on a system it no longer refuses, so it is all or nothing and it is
+     more than one sitting. Every `rectangularBox` call in `src/gpu/` is a
+     marker for an unconverted kernel.
+
+     The design, settled by doing the reference:
+
+     **Represent the cell twice in the uniforms, and both are necessary.** The
+     three off-diagonal lattice components (`b.x`, `c.x`, `c.y`) in **fixed
+     point**, because the shift they produce lands on a position difference that
+     has to stay exact; and the inverse box in **f32**, because it is only used
+     to *decide* which image to take. `PAIR_PARAMS_BYTES` grows from 160 to
+     about 256.
+
+     **The minimum image is `Δf_u -= round(Δf_u)` per fractional axis, and those
+     three are independent.** Subtracting lattice vector `c` changes only
+     `f_c`, so the Cartesian "reduce against c, then b, then a" is the same
+     thing as rounding each fractional component — no ordering, no search. For
+     positions folded into the cell `|Δf| < 1`, so `round` is one of -1, 0, 1
+     and the shift is an exact fixed-point add or subtract with **no multiply**.
+     An f32 estimate of `Δf` picks that integer correctly unless the pair is
+     within 1.6e-7 of the half-cell boundary, where the two images are
+     equidistant.
+
+     🔴 **Do not store positions in fractional fixed point**, which is the
+     obvious simplification. A fractional unit is the whole cell, so 2^-32 is
+     7e-10 nm in a 3 nm box against 2.3e-10 for Cartesian, and converting
+     `Δf · B` in f32 would put 1.5e-7 nm on the pair vector — the error
+     `minimum_image64` exists to avoid. Doing that product in fixed point needs
+     nine 64-bit multiplies per pair, in the kernel that is 39% of a step.
+
+     For a rectangular box every one of these collapses to the current code, so
+     the conversion is verifiable in stages by "rectangular unchanged" — but
+     nothing is verifiable *end to end* until the cell list and PME are both
+     done, and only the browser lane can verify any of it.
+
+     The pieces, in dependency order: the box uniforms; the fold into a skewed
+     cell in `cell-list.wgsl`'s `wrap`; fractional bucketing in `axis_cell` and
+     in the host builder in `nonbonded.ts`; the minimum image in
+     `nonbonded-pairs.wgsl`, `nonbonded-exceptions.wgsl` and `restraint.wgsl`;
+     the neighbour list's cell sizing by perpendicular width; then PME's three
+     kernels — spread from fractional coordinates, `k` from the reciprocal
+     lattice rather than per axis, and the force back through `B⁻¹`.
+
+     The oracle is **OpenMM's CPU platform**, not Reference — see `CLAUDE.md`
+     and `docs/measurements/triclinic-reference-parity.json`. The converted
+     reference is the specification: anything the kernels produce has to match
+     it, and it is already pinned.
    * and then `src/prep/solvate.ts`, whose `PeriodicGrid` buckets in Cartesian
      space and would have to bucket in fractional space instead.
 

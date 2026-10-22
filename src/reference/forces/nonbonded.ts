@@ -43,16 +43,28 @@ import { erf, erfc, erfDerivative } from "../erf.js";
 export class TriclinicBoxUnsupported extends Error {
   constructor(vectors: readonly Vec3[]) {
     super(
-      "the reference nonbonded implementation handles rectangular boxes only, " +
-        `and these vectors are triclinic: ${JSON.stringify(vectors)}. ` +
+      "the GPU engine handles rectangular boxes only, and these vectors are " +
+        `triclinic: ${JSON.stringify(vectors)}. ` +
+        "The *reference* does handle them — src/reference/triclinic.ts, verified " +
+        "against OpenMM's CPU platform on a dodecahedral fixture — so this is a " +
+        "kernel gap and not a physics one. What is missing is listed in " +
+        "HANDOFF.md under deviation 19: the fractional cell list, PME's " +
+        "reciprocal lattice in WGSL, and the fold into a skewed cell. " +
         "Modeller.addSolvent defaults to a cubic box, which is what the " +
-        "notebook produces; a triclinic box needs the general minimum image.",
+        "notebook produces unless `boxShape` is changed.",
     );
     this.name = "TriclinicBoxUnsupported";
   }
 }
 
-/** The box edge lengths, after checking the box really is rectangular. */
+/**
+ * The box edge lengths, after checking the box really is rectangular.
+ *
+ * 🔴 Kept for the **GPU** paths only. The reference no longer needs it —
+ * `usableBox` is what the reference force terms take — so a call to this is a
+ * marker for a kernel that has not been converted yet, and the nine of them are
+ * listed in HANDOFF.md. Do not use it in new reference code.
+ */
 export function rectangularBox(vectors: readonly [Vec3, Vec3, Vec3]): Vec3 {
   const offDiagonal = [
     vectors[0][1], vectors[0][2],
