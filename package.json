@@ -21,6 +21,7 @@
     "bench": "tsx tools/bench.ts",
     "report:adapter": "tsx tools/report-adapter.ts",
     "report:engine-error": "tsx tools/report-engine-error.ts",
+    "report:verify": "tsx tools/report-verify.ts",
     "check": "npm run build && npm run test && npm run build:web",
     "test:slow": "vitest run --config vitest.slow.config.ts"
   },

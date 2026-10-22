@@ -170,6 +170,8 @@ npm run report:adapter                                    # to stdout
 npm run report:adapter -- docs/measurements/device-<x>.json
 npm run bench -- docs/measurements/bench-<x>.json
 npm run report:engine-error -- docs/measurements/engine-force-error-equilibrated-m3pro.json
+npm run report:verify -- 1L2Y                             # ~2 s, any fixture
+npm run report:verify -- 1L2Y-dodecahedron
 ```
 
 🔴 **Run `report:engine-error` after touching a kernel.** It is the figure
@@ -188,6 +190,50 @@ Anything in `docs/` that quotes a number should be traceable to a file in
 `docs/measurements/`, and `test/units.test.ts` asserts our PME parameters
 against the committed OpenMM output, so a drift between the two fails a test
 rather than going unnoticed.
+
+## A tight GPU loop
+
+🔴 **Do not use `npm run test:browser` while iterating.** It is 6.5 minutes and
+5.9 of those are `bonded.spec.ts`, the 3HTB parity, which cannot tell you
+anything about the kernel you just changed. Measured alternatives:
+
+| | |
+| --- | --- |
+| `npm run report:verify -- <fixture>` | **~2 s** — does the GPU agree with the reference |
+| `npx playwright test test/browser/checks.spec.ts` | 1.9 s |
+| `npx playwright test test/browser/profile.spec.ts` | 23 s, includes the GPU checks |
+| `npx playwright test --ui` | watch mode, re-runs on save |
+| `npm run test:browser` | 6.5 min — for the end, not the loop |
+
+`--ui` is what keeps a browser and a dev server up across edits. It needs
+`channel: "chrome"`, which `playwright.config.ts` already sets: Playwright's
+bundled Chromium exposes no WebGPU at all.
+
+🔴 **`web/validate.html` runs every check in sequence, and the late ones are the
+slow ones** — so waiting on a late global pays for all the earlier ones, which
+on 3HTB is minutes an iteration. `?only=` fixes that:
+
+```
+/validate.html?fixture=1L2Y-dodecahedron&only=verify
+/validate.html?fixture=3HTB&only=neighbours,cells
+```
+
+Names: `bonded`, `constraints`, `cells`, `verify`, `engine-error`,
+`neighbours`, `profile`, `random`, and `dynamics` for the whole interdependent
+tail (integrators, loop, minimiser, restraints, persistence, PBC, protocol,
+barostat) — those share fixtures and devices, so they are one unit rather than
+eight. A skipped check records `{ skipped: true }` instead of staying
+undefined, so a misspelled filter resolves rather than hanging a probe for
+fifteen minutes.
+
+**Before any browser run**: `pkill -f "Google Chrome"; pkill -f vite`. And
+build the fixtures once up front with the **oracle** environment, so the loop
+never waits on OpenMM:
+
+```sh
+~/miniforge3/envs/parametrizani_env/bin/python -I tools/build_triclinic_fixture.py \
+    --shape dodecahedron --out fixtures/1L2Y-dodecahedron
+```
 
 ## Findings, in the order they would cost time again
 

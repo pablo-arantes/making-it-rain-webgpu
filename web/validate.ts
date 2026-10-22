@@ -53,6 +53,7 @@ import {
   validateEngineError,
   type EngineErrorReport,
 } from "../src/gpu/validate-engine-error.js";
+import { verifySystem, type VerifyReport } from "../src/gpu/verify.js";
 
 import {
   validatePersistence,
@@ -68,6 +69,7 @@ declare global {
     __mirCellList?: CellListComparison | { error: string };
     __mirProfile?: ProfileComparison;
     __mirNeighbours?: NeighbourComparison | { error: string };
+    __mirVerify?: VerifyReport | { error: string };
     __mirEngineError?: EngineErrorReport | { error: string; absent?: boolean };
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
@@ -80,6 +82,10 @@ declare global {
 }
 
 const body = document.querySelector<HTMLElement>("#body");
+
+/** Escape text bound for `innerHTML`: a refusal quotes paths and JSON. */
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const exponential = (value: number): string => value.toExponential(2);
 
 function render(report: ValidationReport): string {
@@ -471,8 +477,39 @@ function renderLoop(loop: LoopComparison): string {
     </table>`;
 }
 
+/**
+ * Which checks to run, from `?only=`.
+ *
+ * 🔴 This page runs every check in sequence and the later ones are the
+ * expensive ones, so a loop that waits on a late global pays for every earlier
+ * check first -- which on a large fixture is minutes per iteration.
+ * `?only=verify` makes that seconds, and that is what makes a kernel
+ * conversion tractable.
+ *
+ * A skipped check records `{ skipped: true }` rather than being left
+ * undefined, so a probe waiting on its global resolves instead of hanging when
+ * the filter is misspelled. With no `?only=` everything runs, which is what the
+ * browser lane and a person reading the page both want.
+ */
+function checkFilter(): (check: string) => boolean {
+  const requested = new URLSearchParams(location.search).get("only");
+  if (requested === null || requested.trim() === "") return () => true;
+  const wanted = new Set(
+    requested.split(",").map((part) => part.trim().toLowerCase()).filter((p) => p !== ""),
+  );
+  return (check: string) => wanted.has(check.toLowerCase());
+}
+
 async function main(): Promise<void> {
   const name = new URLSearchParams(location.search).get("fixture") ?? "1L2Y";
+  const wanted = checkFilter();
+  const skip = (check: string): boolean => {
+    if (wanted(check)) return false;
+    if (body) {
+      body.innerHTML += `<p class="note">skipped <code>${check}</code></p>`;
+    }
+    return true;
+  };
   try {
     const fetchText = async (file: string): Promise<string> => {
       const response = await fetch(`/fixtures/${name}/${file}`);
@@ -492,203 +529,283 @@ async function main(): Promise<void> {
     ]);
     const adapter = await requestEngineAdapter();
     const device = await requestEngineDevice(adapter);
-    const report = await validateBonded(device, { name, systemXml, stateXml, factsJson });
-    if (body) body.innerHTML = render(report);
-    window.__mirValidation = report;
-
-    const constraints = await validateConstraints(device, { systemXml, stateXml });
-    if (body) {
-      body.innerHTML += `<h2>Constraints</h2><p class="note">
-        ${constraints.settleClusters.toLocaleString("en-US")} SETTLE clusters and
-        ${constraints.iterativeClusters.toLocaleString("en-US")} iterative, largest
-        ${constraints.largestCluster.atoms} atoms and
-        ${constraints.largestCluster.constraints} constraints. Compared against
-        the reference solver at the same coordinates.
-      </p>
-      <table>
-        <tr><th>Worst difference from reference</th>
-            <td class="num">${constraints.worstDifference.toExponential(2)} nm</td></tr>
-        <tr><th>Device worst relative constraint error</th>
-            <td class="num">${constraints.deviceWorstRelativeError.toExponential(2)}</td></tr>
-        <tr><th>Reference worst relative constraint error</th>
-            <td class="num">${constraints.referenceWorstRelativeError.toExponential(2)}</td></tr>
-        <tr><th>Tolerance</th>
-            <td class="num">${constraints.tolerance.toExponential(0)}</td></tr>
-        <tr><th></th><td><span class="badge ${constraints.ok ? "ok" : "bad"}">
-            ${constraints.ok ? "pass" : "fail"}</span></td></tr>
-      </table>`;
+    if (skip("bonded")) {
+      window.__mirValidation = { skipped: true } as never;
+    } else {
+  const report = await validateBonded(device, { name, systemXml, stateXml, factsJson });
+      if (body) body.innerHTML = render(report);
+      window.__mirValidation = report;
     }
-    window.__mirConstraints = constraints;
+
+    if (skip("constraints")) {
+      window.__mirConstraints = { skipped: true } as never;
+    } else {
+  const constraints = await validateConstraints(device, { systemXml, stateXml });
+      if (body) {
+        body.innerHTML += `<h2>Constraints</h2><p class="note">
+          ${constraints.settleClusters.toLocaleString("en-US")} SETTLE clusters and
+          ${constraints.iterativeClusters.toLocaleString("en-US")} iterative, largest
+          ${constraints.largestCluster.atoms} atoms and
+          ${constraints.largestCluster.constraints} constraints. Compared against
+          the reference solver at the same coordinates.
+        </p>
+        <table>
+          <tr><th>Worst difference from reference</th>
+              <td class="num">${constraints.worstDifference.toExponential(2)} nm</td></tr>
+          <tr><th>Device worst relative constraint error</th>
+              <td class="num">${constraints.deviceWorstRelativeError.toExponential(2)}</td></tr>
+          <tr><th>Reference worst relative constraint error</th>
+              <td class="num">${constraints.referenceWorstRelativeError.toExponential(2)}</td></tr>
+          <tr><th>Tolerance</th>
+              <td class="num">${constraints.tolerance.toExponential(0)}</td></tr>
+          <tr><th></th><td><span class="badge ${constraints.ok ? "ok" : "bad"}">
+              ${constraints.ok ? "pass" : "fail"}</span></td></tr>
+        </table>`;
+      }
+      window.__mirConstraints = constraints;
+    }
 
     // The captured trajectories are a separate tool's output, so a fixture can
     // have a system without them. Say which command produces them rather than
     // failing the force checks that already passed.
-    const cells = await validateCellList(device, { systemXml, stateXml });
-    if (body) {
-      body.innerHTML += `<h2>Cell list</h2><p class="note">
-        ${cells.divisions.join(" x ")} cells, ${cells.cellCount} in all, built on
-        the device from the position buffer with no readback.
-        ${cells.assignmentDifferences} atoms assigned differently from the host
-        builder and ${cells.populationDifferences} cells populated differently;
-        ${cells.orderDifferences.toLocaleString("en-US")} of
-        ${cells.particleCount.toLocaleString("en-US")} ordered differently
-        <em>within</em> their cell, which the atomics decide and which must not
-        matter. It does not: the same kernel fed both lists gives
-        ${cells.hostEnergy.toFixed(4)} and ${cells.deviceEnergy.toFixed(4)} kJ/mol
-        and a worst force difference of ${cells.forceDifference}, bit for bit,
-        because the accumulator is exact.
-        <span class="badge ${cells.ok ? "ok" : "bad"}">${cells.ok ? "pass" : "fail"}</span>
-      </p>`;
-    }
-    window.__mirCellList = cells;
-
-    // Where a step's GPU time goes. Development-only, like the rest of this
-    // page: it needs `timestamp-query` and reports its absence rather than
-    // failing when a device does not offer it.
-    // The figure AGENTS.md cites, at the frame the thresholds are defined at.
-    // Absent unless the equilibrated fixture has been captured, which only
-    // 1L2Y has; a missing fixture is reported rather than silently skipped.
-    const equilibratedPath = `/fixtures/equilibrated/${name}-state.xml`;
-    const equilibratedResponse = await fetch(equilibratedPath);
-    if (!equilibratedResponse.ok) {
-      window.__mirEngineError = {
-        error:
-          `${equilibratedPath} returned ${equilibratedResponse.status}. ` +
-          "Capture it with `tools/calibrate_thresholds.py --save-equilibrated`; " +
-          "the force error has to be measured at the frame the thresholds were.",
-        absent: true,
-      };
+    if (skip("cells")) {
+      window.__mirCellList = { skipped: true } as never;
     } else {
-      const engineError = await validateEngineError(device, {
-        systemXml,
-        equilibratedStateXml: await equilibratedResponse.text(),
-        state: equilibratedPath,
-      });
+  const cells = await validateCellList(device, { systemXml, stateXml });
       if (body) {
-        body.innerHTML += `<div class="check"><h3>The engine against the threshold basis</h3>
+        body.innerHTML += `<h2>Cell list</h2><p class="note">
+          ${cells.divisions.join(" x ")} cells, ${cells.cellCount} in all, built on
+          the device from the position buffer with no readback.
+          ${cells.assignmentDifferences} atoms assigned differently from the host
+          builder and ${cells.populationDifferences} cells populated differently;
+          ${cells.orderDifferences.toLocaleString("en-US")} of
+          ${cells.particleCount.toLocaleString("en-US")} ordered differently
+          <em>within</em> their cell, which the atomics decide and which must not
+          matter. It does not: the same kernel fed both lists gives
+          ${cells.hostEnergy.toFixed(4)} and ${cells.deviceEnergy.toFixed(4)} kJ/mol
+          and a worst force difference of ${cells.forceDifference}, bit for bit,
+          because the accumulator is exact.
+          <span class="badge ${cells.ok ? "ok" : "bad"}">${cells.ok ? "pass" : "fail"}</span>
+        </p>`;
+      }
+      window.__mirCellList = cells;
+    }
+
+// 🔴 The engine against its own f64 reference, at this fixture's own
+    // coordinates. One question per iteration, through the same code path as
+    // the "verify this system" button rather than a harness built for the
+    // occasion -- `?only=verify` plus `npm run report:verify` is the loop the
+    // triclinic kernel conversion needs.
+    //
+    // A refusal is recorded as a result rather than thrown, because while the
+    // kernels are rectangular-only a refusal *is* the answer, and the command
+    // that prints it is how the conversion's progress gets measured.
+    if (skip("verify")) {
+      window.__mirVerify = { skipped: true } as never;
+    } else {
+      try {
+        const verified = await verifySystem(device, { systemXml, stateXml });
+        if (body) {
+          body.innerHTML += `<div class="check"><h3>The engine against the reference</h3>
+            <p class="note">
+              ${verified.particleCount.toLocaleString("en-US")} particles, box
+              ${verified.box.map((v) => v.toFixed(3)).join(" x ")} nm, mesh
+              ${verified.mesh.join(" x ")}: energy
+              ${exponential(verified.energyRelativeError)} relative, force
+              ${exponential(verified.forceRelativeRms)} relative RMS.
+              <span class="badge ${verified.ok ? "ok" : "bad"}">${
+                verified.ok ? "pass" : "fail"
+              }</span>
+            </p></div>`;
+        }
+        window.__mirVerify = verified;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (body) {
+          body.innerHTML += `<div class="check"><h3>The engine against the reference</h3>
+            <p class="bad-box">refused: ${escapeHtml(message)}</p></div>`;
+        }
+        window.__mirVerify = { error: message };
+      }
+    }
+
+    if (skip("engine-error")) {
+      window.__mirEngineError = { skipped: true } as never;
+    } else {
+  // The figure AGENTS.md cites, at the frame the thresholds are defined at.
+      // Absent unless the equilibrated fixture has been captured, which only
+      // 1L2Y has; a missing fixture is reported rather than silently skipped.
+      const equilibratedPath = `/fixtures/equilibrated/${name}-state.xml`;
+      const equilibratedResponse = await fetch(equilibratedPath);
+      if (!equilibratedResponse.ok) {
+        window.__mirEngineError = {
+          error:
+            `${equilibratedPath} returned ${equilibratedResponse.status}. ` +
+            "Capture it with `tools/calibrate_thresholds.py --save-equilibrated`; " +
+            "the force error has to be measured at the frame the thresholds were.",
+          absent: true,
+        };
+      } else {
+        const engineError = await validateEngineError(device, {
+          systemXml,
+          equilibratedStateXml: await equilibratedResponse.text(),
+          state: equilibratedPath,
+        });
+        if (body) {
+          body.innerHTML += `<div class="check"><h3>The engine against the threshold basis</h3>
+            <p class="claim">
+              Measured at the saved frame
+              <code>${equilibratedPath}</code> that
+              <code>tools/calibrate_thresholds.py</code> measured OpenMM's
+              platforms at, because equilibration is stochastic and a re-run gives
+              an incomparable structure — and because at a fixture's raw
+              coordinates a relative force error reports on the input structure
+              rather than on the platform.
+            </p>
+            <p class="note">
+              ${engineError.particleCount.toLocaleString("en-US")} particles:
+              force relative RMS
+              <strong>${exponential(engineError.forceRelativeRms)}</strong> against
+              our own f64 reference, total energy
+              ${engineError.deviceEnergy.toFixed(4)} against
+              ${engineError.referenceEnergy.toFixed(4)} kJ/mol
+              (${exponential(engineError.energyRelativeError)} relative,
+              ${engineError.absoluteEnergyError.toFixed(4)} absolute).
+              AGENTS.md's basis is 1.43e-05 for OpenMM's own single-precision
+              platform and 8.67e-07 for its double-precision CPU one.
+              <span class="badge ${engineError.ok ? "ok" : "bad"}">${
+                engineError.ok ? "pass" : "fail"
+              }</span>
+            </p></div>`;
+        }
+        window.__mirEngineError = engineError;
+      }
+    }
+
+    if (skip("neighbours")) {
+      window.__mirNeighbours = { skipped: true } as never;
+    } else {
+  const neighbours = await validateNeighbours(device, { systemXml, stateXml });
+      if (body) {
+        body.innerHTML += `<div class="check"><h3>The neighbour list against the cell shell</h3>
           <p class="claim">
-            Measured at the saved frame
-            <code>${equilibratedPath}</code> that
-            <code>tools/calibrate_thresholds.py</code> measured OpenMM's
-            platforms at, because equilibration is stochastic and a re-run gives
-            an incomparable structure — and because at a fixture's raw
-            coordinates a relative force error reports on the input structure
-            rather than on the platform.
+            The two find the same pairs by different routes and the arithmetic
+            after a candidate is accepted is the same function, so one evaluation
+            of each at the same coordinates has to agree <em>to the bit</em>. A
+            tolerance here would hide the only failure that matters: a pair the
+            list never found, which is a discontinuity in the force rather than a
+            small error.
           </p>
           <p class="note">
-            ${engineError.particleCount.toLocaleString("en-US")} particles:
-            force relative RMS
-            <strong>${exponential(engineError.forceRelativeRms)}</strong> against
-            our own f64 reference, total energy
-            ${engineError.deviceEnergy.toFixed(4)} against
-            ${engineError.referenceEnergy.toFixed(4)} kJ/mol
-            (${exponential(engineError.energyRelativeError)} relative,
-            ${engineError.absoluteEnergyError.toFixed(4)} absolute).
-            AGENTS.md's basis is 1.43e-05 for OpenMM's own single-precision
-            platform and 8.67e-07 for its double-precision CPU one.
-            <span class="badge ${engineError.ok ? "ok" : "bad"}">${
-              engineError.ok ? "pass" : "fail"
+            ${neighbours.cells.join(" x ")} cells of
+            ${neighbours.cellExtent.map((v: number) => v.toFixed(3)).join(" x ")} nm, and the
+            shell has to reach ${neighbours.searchRadius.toFixed(3)} nm. Room for
+            ${neighbours.capacity} neighbours an atom at a
+            ${neighbours.skin.toFixed(2)} nm skin.
+            Shell ${neighbours.shellEnergy.toFixed(4)} against list
+            ${neighbours.listEnergy.toFixed(4)} kJ/mol;
+            ${neighbours.differing} of
+            ${(neighbours.particleCount * 3).toLocaleString("en-US")} force
+            components differ, worst by ${neighbours.worstForceDifference};
+            overflowed ${String(neighbours.overflowed)}.
+          </p>
+          <p class="note">
+            And over a trajectory, which is the part one evaluation cannot check:
+            a list is correct when it is built whatever the rebuild criterion
+            says, and a wrong criterion loses pairs <em>between</em> rebuilds.
+            NVE drift over ${neighbours.driftSteps} steps from the same minimised
+            state — list
+            ${neighbours.listDriftPerAtomPerNs.toExponential(2)}, shell
+            ${neighbours.shellDriftPerAtomPerNs.toExponential(2)} kJ/mol per atom
+            per ns, after ${neighbours.listRebuilds} rebuilds against the shell
+            path's ${neighbours.shellRebuilds} — which is what stops this being a
+            comparison of a path with itself. Equal to five figures means the two
+            produce the same trajectory bit for bit, not just the same forces
+            once. The slope is not the engine's drift figure: this is NVE from an
+            unequilibrated structure, and the calibrated gate is the loop check.
+            <span class="badge ${neighbours.ok ? "ok" : "bad"}">${
+              neighbours.ok ? "pass" : "fail"
             }</span>
           </p></div>`;
       }
-      window.__mirEngineError = engineError;
+      window.__mirNeighbours = neighbours;
     }
 
-    const neighbours = await validateNeighbours(device, { systemXml, stateXml });
-    if (body) {
-      body.innerHTML += `<div class="check"><h3>The neighbour list against the cell shell</h3>
-        <p class="claim">
-          The two find the same pairs by different routes and the arithmetic
-          after a candidate is accepted is the same function, so one evaluation
-          of each at the same coordinates has to agree <em>to the bit</em>. A
-          tolerance here would hide the only failure that matters: a pair the
-          list never found, which is a discontinuity in the force rather than a
-          small error.
-        </p>
-        <p class="note">
-          ${neighbours.cells.join(" x ")} cells of
-          ${neighbours.cellExtent.map((v: number) => v.toFixed(3)).join(" x ")} nm, and the
-          shell has to reach ${neighbours.searchRadius.toFixed(3)} nm. Room for
-          ${neighbours.capacity} neighbours an atom at a
-          ${neighbours.skin.toFixed(2)} nm skin.
-          Shell ${neighbours.shellEnergy.toFixed(4)} against list
-          ${neighbours.listEnergy.toFixed(4)} kJ/mol;
-          ${neighbours.differing} of
-          ${(neighbours.particleCount * 3).toLocaleString("en-US")} force
-          components differ, worst by ${neighbours.worstForceDifference};
-          overflowed ${String(neighbours.overflowed)}.
-        </p>
-        <p class="note">
-          And over a trajectory, which is the part one evaluation cannot check:
-          a list is correct when it is built whatever the rebuild criterion
-          says, and a wrong criterion loses pairs <em>between</em> rebuilds.
-          NVE drift over ${neighbours.driftSteps} steps from the same minimised
-          state — list
-          ${neighbours.listDriftPerAtomPerNs.toExponential(2)}, shell
-          ${neighbours.shellDriftPerAtomPerNs.toExponential(2)} kJ/mol per atom
-          per ns, after ${neighbours.listRebuilds} rebuilds against the shell
-          path's ${neighbours.shellRebuilds} — which is what stops this being a
-          comparison of a path with itself. Equal to five figures means the two
-          produce the same trajectory bit for bit, not just the same forces
-          once. The slope is not the engine's drift figure: this is NVE from an
-          unequilibrated structure, and the calibrated gate is the loop check.
-          <span class="badge ${neighbours.ok ? "ok" : "bad"}">${
-            neighbours.ok ? "pass" : "fail"
+    if (skip("profile")) {
+      window.__mirProfile = { skipped: true } as never;
+    } else {
+  // Where a step's GPU time goes. Development-only, like the rest of this
+      // page: it needs `timestamp-query` and reports its absence rather than
+      // failing when a device does not offer it.
+      const profile = await validateProfile(device, { systemXml, stateXml });
+      if (body) {
+        body.innerHTML += !profile.available
+          ? `<div class="check"><h3>Where a step's time goes</h3>
+             <p class="note">${profile.reason ?? "unavailable"}</p></div>`
+          : `<div class="check"><h3>Where a step's time goes</h3>
+          <p class="claim">
+            Per-kernel GPU time through <code>timestamp-query</code>. Summed GPU
+            time is what the kernels cost; wall-clock is what the caller waited.
+            The gap is launch overhead and queue bubbles, and no kernel change
+            will move it — which is why both are shown.
+          </p>
+          <p class="note">
+            ${profile.particleCount.toLocaleString("en-US")} particles over
+            ${profile.repeats} steps in one submission:
+            <strong>${profile.perStepGpuMicroseconds.toFixed(1)} µs</strong> of GPU
+            time per step against
+            <strong>${profile.perStepWallMicroseconds.toFixed(1)} µs</strong> of
+            wall-clock, so ${(profile.overheadShare * 100).toFixed(0)}% of the
+            time is outside every kernel. Implied
+            ${profile.impliedStepsPerSecond.toFixed(0)} steps/s.
+          </p>
+          <table><tr><th>Kernel</th><th>Share</th><th>µs/step</th></tr>` +
+            profile.kernels
+              .map(
+                (kernel) =>
+                  `<tr><td><code>${kernel.label}</code></td>` +
+                  `<td>${(kernel.share * 100).toFixed(1)}%</td>` +
+                  `<td>${kernel.microseconds.toFixed(2)}</td></tr>`,
+              )
+              .join("") +
+            "</table></div>";
+      }
+      window.__mirProfile = profile;
+    }
+
+    if (skip("random")) {
+      window.__mirRandom = { skipped: true } as never;
+    } else {
+  const randomness = await validateRandom(device);
+      if (body) {
+        body.innerHTML += `<h2>Thermostat noise</h2><p class="note">
+          Threefry-2x32-20 over ${randomness.particles.toLocaleString("en-US")}
+          particles: ${randomness.bitMismatches} raw-output mismatches against the
+          host, worst deviate difference ${exponential(randomness.worstDeviate)}
+          (host ${randomness.worstHost.toFixed(6)}, device
+          ${randomness.worstDevice.toFixed(6)}, Box-Muller radius
+          ${randomness.worstRadius.toExponential(3)}).
+          <span class="badge ${randomness.ok ? "ok" : "bad"}">${
+            randomness.ok ? "pass" : "fail"
           }</span>
-        </p></div>`;
+        </p>`;
+      }
+      window.__mirRandom = randomness;
     }
-    window.__mirNeighbours = neighbours;
 
-    const profile = await validateProfile(device, { systemXml, stateXml });
-    if (body) {
-      body.innerHTML += !profile.available
-        ? `<div class="check"><h3>Where a step's time goes</h3>
-           <p class="note">${profile.reason ?? "unavailable"}</p></div>`
-        : `<div class="check"><h3>Where a step's time goes</h3>
-        <p class="claim">
-          Per-kernel GPU time through <code>timestamp-query</code>. Summed GPU
-          time is what the kernels cost; wall-clock is what the caller waited.
-          The gap is launch overhead and queue bubbles, and no kernel change
-          will move it — which is why both are shown.
-        </p>
-        <p class="note">
-          ${profile.particleCount.toLocaleString("en-US")} particles over
-          ${profile.repeats} steps in one submission:
-          <strong>${profile.perStepGpuMicroseconds.toFixed(1)} µs</strong> of GPU
-          time per step against
-          <strong>${profile.perStepWallMicroseconds.toFixed(1)} µs</strong> of
-          wall-clock, so ${(profile.overheadShare * 100).toFixed(0)}% of the
-          time is outside every kernel. Implied
-          ${profile.impliedStepsPerSecond.toFixed(0)} steps/s.
-        </p>
-        <table><tr><th>Kernel</th><th>Share</th><th>µs/step</th></tr>` +
-          profile.kernels
-            .map(
-              (kernel) =>
-                `<tr><td><code>${kernel.label}</code></td>` +
-                `<td>${(kernel.share * 100).toFixed(1)}%</td>` +
-                `<td>${kernel.microseconds.toFixed(2)}</td></tr>`,
-            )
-            .join("") +
-          "</table></div>";
+    // 🔴 One group, not eight. These share the dynamics fixture, the restrained
+    // system and in two places a device of their own, and they are where almost
+    // all of this page's time goes -- so `?only=` treats them as a unit rather
+    // than pretending they are independent.
+    if (skip("dynamics")) {
+      for (const global of [
+        "__mirIntegrators", "__mirLoop", "__mirMinimise", "__mirRestraint",
+        "__mirBarostat", "__mirProtocol", "__mirPbc", "__mirPersistence",
+      ] as const) {
+        (window as unknown as Record<string, unknown>)[global] = { skipped: true };
+      }
+      return;
     }
-    window.__mirProfile = profile;
-
-    const randomness = await validateRandom(device);
-    if (body) {
-      body.innerHTML += `<h2>Thermostat noise</h2><p class="note">
-        Threefry-2x32-20 over ${randomness.particles.toLocaleString("en-US")}
-        particles: ${randomness.bitMismatches} raw-output mismatches against the
-        host, worst deviate difference ${exponential(randomness.worstDeviate)}
-        (host ${randomness.worstHost.toFixed(6)}, device
-        ${randomness.worstDevice.toFixed(6)}, Box-Muller radius
-        ${randomness.worstRadius.toExponential(3)}).
-        <span class="badge ${randomness.ok ? "ok" : "bad"}">${
-          randomness.ok ? "pass" : "fail"
-        }</span>
-      </p>`;
-    }
-    window.__mirRandom = randomness;
 
     const dynamicsResponse = await fetch(`/fixtures/${name}/dynamics-facts.json`);
     if (!dynamicsResponse.ok) {
