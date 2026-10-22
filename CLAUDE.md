@@ -298,6 +298,26 @@ fold on purpose: if the home cell and the pair vector disagreed for an atom near
 a boundary, atom *i* would miss *j* while *j* still found *i*, which leaks
 momentum.
 
+🔴 **For a triclinic cell the oracle is OpenMM's CPU platform, not Reference.**
+The Reference platform's neighbour list reports pairs that are genuinely inside
+the cutoff as non-interacting — 72 of 689 counted directly on a dodecahedral
+1L2Y, zero on a cube. The loss sits in a thin shell at the cutoff and lands with
+opposite sign in Coulomb and Lennard-Jones (ours read 7.0 kJ/mol low on LJ, 11.0
+high on Coulomb, cancelling to 3.9 in the total), so it reads as a small
+implementation difference rather than as missing pairs. Everywhere else in this
+project Reference *is* the oracle, which is what makes this a trap: the minimum
+image, the cell list, alpha and the dispersion correction were each eliminated
+before the oracle came under suspicion. `docs/measurements/
+triclinic-reference-parity.json` has the whole chain.
+
+🔴 **Build triclinic fixtures with the oracle environment, OpenMM 8.4+.**
+`addSolvent(boxShape="dodecahedron")` on OpenMM 7.7 removes clashes across a
+*rectangular* boundary: atoms end up 0.0168 nm apart and the potential energy is
+9.6e10 kJ/mol. The cube is unaffected, so nothing warns you — the fixture simply
+encodes a structure no force field can describe. `~/miniforge3/envs/openmm` is
+7.7 and is **not** the oracle; `docs/measurements/README.md` names the one that
+is.
+
 🔴 **A triclinic cell's cutoff is bounded by its narrowest *perpendicular*
 width, not by any edge length.** For a 3 nm dodecahedron the edges are 3, 3 and
 3.67 nm while the widths are 2.12, 2.12 and 3 — so an edge-based bound passes a

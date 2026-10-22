@@ -23,7 +23,21 @@
  * measured, not assumed: tools/build_nonbonded_fixture.py reproduces OpenMM's
  * own two groups from first principles and agrees to 2e-9 kJ/mol.
  *
- * Rectangular boxes only, like the rest of the reference.
+ * 🔴 Triclinic cells work, and the reason the conversion is small is worth
+ * stating: the charge grid is laid out in **fractional** coordinates, so the
+ * transform is the same transform whatever the cell shape -- `exp(ik·r)` is
+ * `exp(2πi m·f)` by construction. Only three things depend on the shape: the
+ * fractional coordinate the spline is evaluated at, the squared length of the
+ * reciprocal vector in the convolution, and the chain rule that takes the
+ * force from fractional back to Cartesian. For a rectangular box all three
+ * collapse to what they were, so existing fixtures are unchanged bit for bit.
+ *
+ * The risk was never the algebra, it was having nothing to check it against:
+ * the direct and reciprocal terms cancel to four or five digits, so a wrong
+ * reciprocal lattice reads as a slightly different total rather than as an
+ * error. `src/reference/forces/ewald.ts` is the answer -- an exact Ewald sum
+ * with no mesh, no spline and no transform, which shares nothing with this but
+ * the physics.
  */
 
 import { ONE_4PI_EPS0 } from "../../engine/units.js";
@@ -31,7 +45,13 @@ import type { NonbondedForce, Vec3 } from "../../engine/system.js";
 import { complexGrid, forward3d, inverse3d } from "../dft.js";
 import { fft3d, planFft } from "../fft.js";
 import { bsplineModuli, bsplineWeightsAndDerivatives } from "./bspline.js";
-import { rectangularBox } from "./nonbonded.js";
+import { usableBox } from "./nonbonded.js";
+import {
+  boxVolume,
+  fractionalOf,
+  inverseBox,
+  reciprocalVector,
+} from "../triclinic.js";
 
 /** The B-spline order OpenMM uses, and the engine with it. */
 export const PME_ORDER = 5;
@@ -53,12 +73,12 @@ export interface ReciprocalResult {
  * which is why both go through this one function.
  */
 function splineFor(
-  coordinate: number,
-  extent: number,
+  fractional: number,
   gridSize: number,
 ): { base: number; weights: Float64Array; derivatives: Float64Array } {
-  // Wrapped fractional coordinate, scaled to the grid.
-  const fraction = coordinate / extent - Math.floor(coordinate / extent);
+  // The caller supplies the fractional coordinate, which is `r / L` for a
+  // rectangular box and `r · B⁻¹` in general; this only has to wrap it.
+  const fraction = fractional - Math.floor(fractional);
   const scaled = fraction * gridSize;
   const cell = Math.floor(scaled);
   const { weights, derivatives } = bsplineWeightsAndDerivatives(scaled - cell, PME_ORDER);
@@ -78,7 +98,8 @@ export function reciprocalSpace(
   gridSize: Vec3,
   forces?: Float64Array,
 ): ReciprocalResult {
-  const box = rectangularBox(boxVectors);
+  const box = usableBox(boxVectors, force.cutoff);
+  const inverse = inverseBox(box);
   const [nx, ny, nz] = gridSize as unknown as [number, number, number];
   const n = force.particleCount;
   const grid = complexGrid([nx, ny, nz]);
@@ -108,9 +129,15 @@ export function reciprocalSpace(
   const splines: Array<ReturnType<typeof splineFor>[]> = [];
   for (let i = 0; i < n; i++) {
     const charge = force.charge[i] as number;
-    const sx = splineFor(positions[i * 3] as number, box[0] as number, nx);
-    const sy = splineFor(positions[i * 3 + 1] as number, box[1] as number, ny);
-    const sz = splineFor(positions[i * 3 + 2] as number, box[2] as number, nz);
+    const fractional = fractionalOf(
+      positions[i * 3] as number,
+      positions[i * 3 + 1] as number,
+      positions[i * 3 + 2] as number,
+      inverse,
+    );
+    const sx = splineFor(fractional[0] as number, nx);
+    const sy = splineFor(fractional[1] as number, ny);
+    const sz = splineFor(fractional[2] as number, nz);
     splines.push([sx, sy, sz]);
     if (charge === 0) continue;
     for (let a = 0; a < PME_ORDER; a++) {
@@ -134,7 +161,7 @@ export function reciprocalSpace(
   const moduliX = bsplineModuli(nx, PME_ORDER);
   const moduliY = bsplineModuli(ny, PME_ORDER);
   const moduliZ = bsplineModuli(nz, PME_ORDER);
-  const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
+  const volume = boxVolume(box);
   // E = ONE_4PI_EPS0 * (2 pi / V) * sum_{k != 0} exp(-k^2/4 alpha^2)/k^2 |S(k)|^2,
   // which is the form tools/build_nonbonded_fixture.py checked against OpenMM's
   // exact Ewald. Here |S(k)|^2 is approximated by |Q(m)|^2 / |b(m)|^2.
@@ -144,9 +171,9 @@ export function reciprocalSpace(
 
   for (let mx = 0; mx < nx; mx++) {
     // Frequencies above the midpoint are the negative ones.
-    const kx = ((mx <= nx / 2 ? mx : mx - nx) * 2 * Math.PI) / (box[0] as number);
+    const ma = mx <= nx / 2 ? mx : mx - nx;
     for (let my = 0; my < ny; my++) {
-      const ky = ((my <= ny / 2 ? my : my - ny) * 2 * Math.PI) / (box[1] as number);
+      const mb = my <= ny / 2 ? my : my - ny;
       for (let mz = 0; mz < nz; mz++) {
         const at = ((mx * ny + my) * nz + mz) * 2;
         if (mx === 0 && my === 0 && mz === 0) {
@@ -156,7 +183,16 @@ export function reciprocalSpace(
           grid.data[at + 1] = 0;
           continue;
         }
-        const kz = ((mz <= nz / 2 ? mz : mz - nz) * 2 * Math.PI) / (box[2] as number);
+        const mc = mz <= nz / 2 ? mz : mz - nz;
+        // 🔴 `k` is a *vector* on the reciprocal lattice, not three independent
+        // per-axis terms. For a rectangular box it is `2π m_u / L_u` per axis
+        // and this is the same number; for a skewed one the components mix, and
+        // treating them independently is the mistake that would read as a small
+        // shift in the total rather than as a wrong answer.
+        const k = reciprocalVector(ma, mb, mc, inverse);
+        const kx = k[0] as number;
+        const ky = k[1] as number;
+        const kz = k[2] as number;
         const kSquared = kx * kx + ky * ky + kz * kz;
         const modulus =
           (moduliX[mx] as number) * (moduliY[my] as number) * (moduliZ[mz] as number);
@@ -210,11 +246,18 @@ export function reciprocalSpace(
     // reciprocal-space force exactly twice too small, which the numerical
     // derivative caught as a relative error of 0.5.
     const scale = -charge;
-    forces[i * 3] = (forces[i * 3] as number) + (scale * fx * nx) / (box[0] as number);
-    forces[i * 3 + 1] =
-      (forces[i * 3 + 1] as number) + (scale * fy * ny) / (box[1] as number);
-    forces[i * 3 + 2] =
-      (forces[i * 3 + 2] as number) + (scale * fz * nz) / (box[2] as number);
+    // The spline derivatives are with respect to the *fractional* coordinate,
+    // so the chain rule brings them back: `dE/dr_v = Σ_u dE/df_u · B⁻¹[v][u]`.
+    // For a rectangular box `B⁻¹` is diagonal and this is the division by the
+    // edge length it replaced.
+    const df: [number, number, number] = [scale * fx * nx, scale * fy * ny, scale * fz * nz];
+    for (let axis = 0; axis < 3; axis++) {
+      forces[i * 3 + axis] =
+        (forces[i * 3 + axis] as number) +
+        (df[0] as number) * ((inverse[axis] as Vec3)[0] as number) +
+        (df[1] as number) * ((inverse[axis] as Vec3)[1] as number) +
+        (df[2] as number) * ((inverse[axis] as Vec3)[2] as number);
+    }
   }
   return { energy, grid: gridSize, smoothGrid: smooth };
 }

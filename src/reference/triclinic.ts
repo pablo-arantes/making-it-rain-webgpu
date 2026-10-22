@@ -278,3 +278,94 @@ export function boxVectorsForShape(
       ];
   }
 }
+
+/**
+ * The inverse box, as the matrix `M` with `f = r · M`.
+ *
+ * A point `r` is `fa·a + fb·b + fc·c`, so with the box vectors as the rows of
+ * `B`, `r = f·B` and `f = r·B⁻¹`. For a reduced box `B` is lower triangular, so
+ * the inverse comes out of back-substitution rather than a general solve and is
+ * lower triangular too.
+ *
+ * Fractional coordinates are what make a triclinic PME possible at all: the
+ * charge grid is laid out in `f`, so the FFT is the same transform whatever the
+ * cell shape, and only the reciprocal vectors in the convolution change. The
+ * alternative -- resampling a skewed grid -- is not a thing anyone does.
+ */
+export function inverseBox(box: BoxVectors): readonly [Vec3, Vec3, Vec3] {
+  if (!isReducedForm(box)) throw new NotReducedForm(box);
+  const ax = (box[0] as Vec3)[0] as number;
+  const bx = (box[1] as Vec3)[0] as number;
+  const by = (box[1] as Vec3)[1] as number;
+  const cx = (box[2] as Vec3)[0] as number;
+  const cy = (box[2] as Vec3)[1] as number;
+  const cz = (box[2] as Vec3)[2] as number;
+  // f_c = r_z / cz
+  // f_b = (r_y - f_c cy) / by
+  // f_a = (r_x - f_b bx - f_c cx) / ax
+  return [
+    [1 / ax, 0, 0],
+    [-bx / (ax * by), 1 / by, 0],
+    [((bx * cy) / (by * cz) - cx / cz) / ax, -cy / (by * cz), 1 / cz],
+  ];
+}
+
+/** `f = r · M`, the fractional coordinate of a Cartesian point. */
+export function fractionalOf(
+  x: number,
+  y: number,
+  z: number,
+  inverse: readonly [Vec3, Vec3, Vec3],
+): Vec3 {
+  return [
+    x * ((inverse[0] as Vec3)[0] as number) +
+      y * ((inverse[1] as Vec3)[0] as number) +
+      z * ((inverse[2] as Vec3)[0] as number),
+    x * ((inverse[0] as Vec3)[1] as number) +
+      y * ((inverse[1] as Vec3)[1] as number) +
+      z * ((inverse[2] as Vec3)[1] as number),
+    x * ((inverse[0] as Vec3)[2] as number) +
+      y * ((inverse[1] as Vec3)[2] as number) +
+      z * ((inverse[2] as Vec3)[2] as number),
+  ];
+}
+
+/**
+ * The reciprocal-lattice vector for mesh indices `(ma, mb, mc)`, in nm⁻¹.
+ *
+ * `g_i · a_j = 2π δ_ij`, so the reciprocal vectors are the rows of `2π B⁻ᵀ` and
+ * `k = m · 2π B⁻ᵀ`. For a rectangular box that collapses to `2π m_u / L_u` per
+ * axis, which is what the rectangular code computes — so this is a
+ * generalisation and not a replacement, and the rectangular results are
+ * unchanged bit for bit.
+ */
+export function reciprocalVector(
+  ma: number,
+  mb: number,
+  mc: number,
+  inverse: readonly [Vec3, Vec3, Vec3],
+): Vec3 {
+  const twoPi = 2 * Math.PI;
+  return [
+    twoPi * ma * ((inverse[0] as Vec3)[0] as number),
+    twoPi *
+      (ma * ((inverse[1] as Vec3)[0] as number) +
+        mb * ((inverse[1] as Vec3)[1] as number)),
+    twoPi *
+      (ma * ((inverse[2] as Vec3)[0] as number) +
+        mb * ((inverse[2] as Vec3)[1] as number) +
+        mc * ((inverse[2] as Vec3)[2] as number)),
+  ];
+}
+
+/** Whether a box is rectangular, in which case the simpler paths all apply. */
+export function isRectangular(box: BoxVectors, tolerance = 1e-12): boolean {
+  return (
+    Math.abs((box[0] as Vec3)[1] as number) <= tolerance &&
+    Math.abs((box[0] as Vec3)[2] as number) <= tolerance &&
+    Math.abs((box[1] as Vec3)[0] as number) <= tolerance &&
+    Math.abs((box[1] as Vec3)[2] as number) <= tolerance &&
+    Math.abs((box[2] as Vec3)[0] as number) <= tolerance &&
+    Math.abs((box[2] as Vec3)[1] as number) <= tolerance
+  );
+}

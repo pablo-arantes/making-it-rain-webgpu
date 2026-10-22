@@ -27,11 +27,11 @@ import { harmonicAngle, harmonicBond, periodicTorsion } from "./forces/bonded.js
 import {
   directSpace,
   netChargeCorrection,
-  rectangularBox,
   selfEnergy,
 } from "./forces/nonbonded.js";
 import { reciprocalSpace } from "./forces/pme.js";
 import { positionRestraint } from "./forces/restraint.js";
+import { boxVolume, type BoxVectors } from "./triclinic.js";
 
 export interface PotentialResult {
   /** kJ/mol. */
@@ -65,13 +65,30 @@ export const splittingParameter = (force: NonbondedForce): number =>
   force.alpha !== 0 ? force.alpha : ewaldAlpha(force.cutoff, force.ewaldTolerance);
 
 /** The mesh the engine would use for a box. */
+/**
+ * The mesh, from the box's **diagonal** elements.
+ *
+ * 🔴 Not the perpendicular widths, and not the edge lengths. Measured against
+ * what OpenMM itself chooses for a dodecahedral 1L2Y: it reports (26, 26, 18),
+ * and 18/26 = 0.692 matches the diagonal ratio 2.2272/3.1498 = 0.707 rather
+ * than the perpendicular ratio 0.866 or the edges, which for a rhombic
+ * dodecahedron are all equal. Comparing against OpenMM's Reference platform
+ * means choosing the grid it chooses, so this follows it rather than the
+ * argument about uniform real-space resolution that would prefer the widths.
+ */
 export const defaultGrid = (
   force: NonbondedForce,
-  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
 ): Vec3 =>
-  box.map((extent) =>
-    smoothFftSize(pmeMinimumGridSize(alpha, extent, force.ewaldTolerance)),
+  [0, 1, 2].map((axis) =>
+    smoothFftSize(
+      pmeMinimumGridSize(
+        alpha,
+        (boxVectors[axis] as Vec3)[axis] as number,
+        force.ewaldTolerance,
+      ),
+    ),
   ) as unknown as Vec3;
 
 export function evaluatePotential(
@@ -100,11 +117,10 @@ export function evaluatePotential(
         add(force.type, periodicTorsion(force, positions, forces));
         break;
       case "NonbondedForce": {
-        const box = rectangularBox(boxVectors);
         const alpha = splittingParameter(force);
         const direct = directSpace(force, positions, boxVectors, alpha, forces);
         add("NonbondedForce[direct]", direct.total);
-        const grid = options.grid ?? defaultGrid(force, box, alpha);
+        const grid = options.grid ?? defaultGrid(force, boxVectors, alpha);
         const reciprocal = reciprocalSpace(
           force,
           positions,
@@ -113,7 +129,7 @@ export function evaluatePotential(
           grid,
           forces,
         );
-        const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
+        const volume = boxVolume(boxVectors as BoxVectors);
         // The self energy and the net-charge term are constants of the
         // parameters and the volume, and OpenMM reports both in the reciprocal
         // group. They move the energy and not the forces.

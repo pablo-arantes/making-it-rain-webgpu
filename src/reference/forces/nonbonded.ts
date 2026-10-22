@@ -26,6 +26,17 @@
  */
 
 import { ONE_4PI_EPS0 } from "../../engine/units.js";
+import {
+  boxVolume,
+  CutoffTooLargeForBox,
+  fractionalOf,
+  inverseBox,
+  maximumCutoff,
+  perpendicularWidths,
+  reduceBox,
+  isReducedForm,
+  type BoxVectors,
+} from "../triclinic.js";
 import type { NonbondedForce, Vec3 } from "../../engine/system.js";
 import { erf, erfc, erfDerivative } from "../erf.js";
 
@@ -184,10 +195,70 @@ function exclusionSet(force: NonbondedForce): Set<number> {
 interface PairContext {
   readonly alpha: number;
   readonly cutoffSquared: number;
-  readonly box: Vec3;
+  /**
+   * The box vectors, reduced. Not the three edge lengths.
+   *
+   * 🔴 The minimum image below is the triclinic sequential reduction, and on a
+   * rectangular box it is **bit-identical** to the three independent
+   * `d -= L * round(d / L)` lines it replaced: with `b.x = c.x = c.y = 0` every
+   * cross term is multiplied by zero, and the axes are independent so the order
+   * the three are done in cannot matter. That is what makes this conversion
+   * safe for every existing fixture, and `test/triclinic-reference.test.ts`
+   * asserts it rather than assuming it.
+   *
+   * It is exact only for separations below `maximumCutoff(box)`, which is half
+   * the narrowest *perpendicular* width -- shorter than half any edge for a
+   * skewed cell. `directSpaceEnergy` checks the force's cutoff against it.
+   */
+  readonly box: BoxVectors;
   readonly positions: Float64Array;
   readonly force: NonbondedForce;
   readonly forces?: Float64Array | undefined;
+}
+
+/**
+ * The nearest-image separation, reduced against c then b then a.
+ *
+ * One copy, shared by the pair loop and the exception loop. On a rectangular
+ * box every cross term is multiplied by zero and this is bit-identical to the
+ * three independent `d -= L * round(d / L)` lines it replaced; see the note on
+ * `PairContext.box`.
+ */
+function nearestImage(
+  box: BoxVectors,
+  dx: number,
+  dy: number,
+  dz: number,
+): [number, number, number] {
+  const kc = Math.round(dz / ((box[2] as Vec3)[2] as number));
+  let x = dx - kc * ((box[2] as Vec3)[0] as number);
+  let y = dy - kc * ((box[2] as Vec3)[1] as number);
+  const z = dz - kc * ((box[2] as Vec3)[2] as number);
+  const kb = Math.round(y / ((box[1] as Vec3)[1] as number));
+  x -= kb * ((box[1] as Vec3)[0] as number);
+  y -= kb * ((box[1] as Vec3)[1] as number);
+  x -= Math.round(x / ((box[0] as Vec3)[0] as number)) * ((box[0] as Vec3)[0] as number);
+  return [x, y, z];
+}
+
+/**
+ * The box a force may use: reduced, and wide enough for its cutoff.
+ *
+ * 🔴 Replaces `rectangularBox`, which refused every triclinic cell. The two
+ * things it checks are the two that make the minimum image above correct --
+ * reduced form, and a cutoff below half the narrowest perpendicular width --
+ * and it refuses rather than approximating, because the failure it would
+ * otherwise produce is a silently missing pair.
+ */
+export function usableBox(
+  vectors: readonly [Vec3, Vec3, Vec3],
+  cutoff: number,
+): BoxVectors {
+  const box = isReducedForm(vectors as BoxVectors)
+    ? (vectors as BoxVectors)
+    : reduceBox(vectors as BoxVectors);
+  if (cutoff > maximumCutoff(box)) throw new CutoffTooLargeForBox(box, cutoff);
+  return box;
 }
 
 /** One non-excluded pair: erfc Coulomb plus LJ, with its force. */
@@ -198,9 +269,7 @@ function pairInteraction(context: PairContext, i: number, j: number): [number, n
   let dx = (positions[jx] as number) - (positions[ix] as number);
   let dy = (positions[jx + 1] as number) - (positions[ix + 1] as number);
   let dz = (positions[jx + 2] as number) - (positions[ix + 2] as number);
-  dx -= (box[0] as number) * Math.round(dx / (box[0] as number));
-  dy -= (box[1] as number) * Math.round(dy / (box[1] as number));
-  dz -= (box[2] as number) * Math.round(dz / (box[2] as number));
+  [dx, dy, dz] = nearestImage(box, dx, dy, dz);
   const rSquared = dx * dx + dy * dy + dz * dz;
   if (rSquared >= context.cutoffSquared) return [0, 0];
   const r = Math.sqrt(rSquared);
@@ -258,9 +327,7 @@ function exceptionTerms(
     let dx = (positions[jx] as number) - (positions[ix] as number);
     let dy = (positions[jx + 1] as number) - (positions[ix + 1] as number);
     let dz = (positions[jx + 2] as number) - (positions[ix + 2] as number);
-    dx -= (box[0] as number) * Math.round(dx / (box[0] as number));
-    dy -= (box[1] as number) * Math.round(dy / (box[1] as number));
-    dz -= (box[2] as number) * Math.round(dz / (box[2] as number));
+    [dx, dy, dz] = nearestImage(box, dx, dy, dz);
     const rSquared = dx * dx + dy * dy + dz * dz;
     const r = Math.sqrt(rSquared);
     const alphaR = alpha * r;
@@ -317,7 +384,7 @@ export function directSpaceNaive(
   alpha: number,
   forces?: Float64Array,
 ): DirectSpaceEnergy {
-  const box = rectangularBox(boxVectors);
+  const box = usableBox(boxVectors, force.cutoff);
   const context: PairContext = {
     alpha,
     cutoffSquared: force.cutoff * force.cutoff,
@@ -342,7 +409,7 @@ export function directSpaceNaive(
   }
   const { exclusionCorrection, exceptions } = exceptionTerms(context);
   const dispersion = force.useDispersionCorrection
-    ? dispersionCorrection(force, box[0] * box[1] * box[2])
+    ? dispersionCorrection(force, boxVolume(box))
     : 0;
   return {
     coulomb,
@@ -370,13 +437,18 @@ export function directSpace(
   alpha: number,
   forces?: Float64Array,
 ): DirectSpaceEnergy {
-  const box = rectangularBox(boxVectors);
+  const box = usableBox(boxVectors, force.cutoff);
   const cutoff = force.cutoff;
   const n = force.particleCount;
+  // 🔴 Cells are counted against the *perpendicular* widths, not the edge
+  // lengths. A 27-cell scan reaches one cell width, so sizing cells by an edge
+  // would make a skewed cell's slab thinner than the cutoff across the faces
+  // and lose pairs -- the same trap the cutoff bound exists for, one level up.
+  const widths = perpendicularWidths(box);
   const counts: [number, number, number] = [
-    Math.max(1, Math.floor((box[0] as number) / cutoff)),
-    Math.max(1, Math.floor((box[1] as number) / cutoff)),
-    Math.max(1, Math.floor((box[2] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[0] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[1] as number) / cutoff)),
+    Math.max(1, Math.floor((widths[2] as number) / cutoff)),
   ];
   // Fewer than three cells on an axis means the 27-cell scan would visit the
   // same cell twice and double-count; fall back to the honest O(N^2) loop.
@@ -387,15 +459,26 @@ export function directSpace(
   const cellCount = counts[0] * counts[1] * counts[2];
   const cellOf = new Int32Array(n);
   const population = new Int32Array(cellCount + 1);
-  const wrapped = (value: number, extent: number, divisions: number): number => {
-    const fraction = value / extent - Math.floor(value / extent);
-    const index = Math.floor(fraction * divisions);
+  // Bucketing happens in fractional coordinates, which is what makes this
+  // shape-agnostic: a cell is a parallelepiped of the box rather than a cube,
+  // and `(f - floor(f))` wraps it however skewed the cell is. For a rectangular
+  // box `f` is `r / L` and this is the calculation it replaced.
+  const inverse = inverseBox(box);
+  const bucket = (fraction: number, divisions: number): number => {
+    const wrappedFraction = fraction - Math.floor(fraction);
+    const index = Math.floor(wrappedFraction * divisions);
     return index === divisions ? divisions - 1 : index;
   };
   for (let i = 0; i < n; i++) {
-    const cx = wrapped(positions[i * 3] as number, box[0] as number, counts[0]);
-    const cy = wrapped(positions[i * 3 + 1] as number, box[1] as number, counts[1]);
-    const cz = wrapped(positions[i * 3 + 2] as number, box[2] as number, counts[2]);
+    const fractional = fractionalOf(
+      positions[i * 3] as number,
+      positions[i * 3 + 1] as number,
+      positions[i * 3 + 2] as number,
+      inverse,
+    );
+    const cx = bucket(fractional[0] as number, counts[0]);
+    const cy = bucket(fractional[1] as number, counts[1]);
+    const cz = bucket(fractional[2] as number, counts[2]);
     const cell = (cx * counts[1] + cy) * counts[2] + cz;
     cellOf[i] = cell;
     population[cell + 1] = (population[cell + 1] as number) + 1;
@@ -464,7 +547,7 @@ export function directSpace(
 
   const { exclusionCorrection, exceptions } = exceptionTerms(context);
   const dispersion = force.useDispersionCorrection
-    ? dispersionCorrection(force, (box[0] as number) * (box[1] as number) * (box[2] as number))
+    ? dispersionCorrection(force, boxVolume(box))
     : 0;
   return {
     coulomb,

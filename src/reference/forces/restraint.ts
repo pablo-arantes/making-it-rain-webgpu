@@ -27,7 +27,7 @@
  */
 
 import type { PositionRestraintForce, Vec3 } from "../../engine/system.js";
-import { rectangularBox } from "./nonbonded.js";
+import { minimumImage, reduceBox, isReducedForm, type BoxVectors } from "../triclinic.js";
 
 /**
  * The restraint energy, accumulating forces into `forces` when given.
@@ -41,7 +41,14 @@ export function positionRestraint(
   boxVectors: readonly [Vec3, Vec3, Vec3],
   forces?: Float64Array,
 ): number {
-  const box = rectangularBox(boxVectors);
+  // 🔴 No cutoff bound here, unlike the nonbonded forces: a restraint's
+  // displacement is meant to be small -- it is how far an atom has drifted from
+  // where it is held -- so the nearest image is the whole answer and there is
+  // no cutoff to exceed. `minimumImage` handles a skewed cell; on a rectangular
+  // one it is the same arithmetic per axis that was here before.
+  const box: BoxVectors = isReducedForm(boxVectors as BoxVectors)
+    ? (boxVectors as BoxVectors)
+    : reduceBox(boxVectors as BoxVectors);
   let energy = 0;
   for (let term = 0; term < force.count; term++) {
     const particle = force.particle[term] as number;
@@ -51,17 +58,21 @@ export function positionRestraint(
       force.y0[term] as number,
       force.z0[term] as number,
     ];
-    let squared = 0;
-    const delta = [0, 0, 0];
-    for (let axis = 0; axis < 3; axis++) {
-      const extent = box[axis] as number;
-      const raw = (positions[particle * 3 + axis] as number) - (reference[axis] as number);
-      // Nearest image. `Math.round` resolves a tie upward and OpenMM's
-      // `floor(x + 0.5)` does the same, so the two agree on the boundary.
-      const wrapped = raw - extent * Math.round(raw / extent);
-      delta[axis] = wrapped;
-      squared += wrapped * wrapped;
-    }
+    // Nearest image. `Math.round` resolves a tie upward inside `minimumImage`
+    // and OpenMM's `floor(x + 0.5)` does the same, so the two agree on the
+    // boundary.
+    const image = minimumImage(
+      [reference[0] as number, reference[1] as number, reference[2] as number],
+      [
+        positions[particle * 3] as number,
+        positions[particle * 3 + 1] as number,
+        positions[particle * 3 + 2] as number,
+      ],
+      box,
+    );
+    const delta = [image[0] as number, image[1] as number, image[2] as number];
+    const squared =
+      (delta[0] as number) ** 2 + (delta[1] as number) ** 2 + (delta[2] as number) ** 2;
     energy += k * squared;
     if (forces !== undefined) {
       for (let axis = 0; axis < 3; axis++) {

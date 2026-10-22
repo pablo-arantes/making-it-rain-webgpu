@@ -1,0 +1,49 @@
+{
+ "what": "The reference's triclinic path against OpenMM, and which OpenMM to ask.",
+ "date": "2026-10-22",
+ "produced_by": "tools/build_triclinic_fixture.py; pinned by test/triclinic-fixture.test.ts",
+ "openmm": "8.4.0.dev-4768436",
+ "fixture": {
+  "shape": "dodecahedron",
+  "atoms": 1723,
+  "waters": 472,
+  "volume_nm3": 22.096658845617803,
+  "cutoff_nm": 1.0
+ },
+ "engine_vs_openmm_cpu": {
+  "HarmonicBondForce": "exact",
+  "PeriodicTorsionForce": "exact",
+  "HarmonicAngleForce": "exact",
+  "NonbondedForce[reciprocal]_relative": 1.2e-09,
+  "NonbondedForce[direct]_relative": 2.3e-06,
+  "note": "2e-6 rather than the 1e-11 the cubic fixtures reach because the CPU platform computes nonbonded terms in single precision. The reciprocal term is the one that needed the triclinic reciprocal lattice and it agrees to 1.2e-9."
+ },
+ "openmm_reference_platform_loses_pairs": {
+  "finding": "For a triclinic cell OpenMM's **Reference** platform reports pairs that are genuinely inside the cutoff as non-interacting. Counted by asking it for the separation of pairs whose true nearest image is inside the cutoff: 72 of 689 missed on this box. Zero on a cube.",
+  "pair_loss": {
+   "sampled_inside_cutoff": 689,
+   "missed_by_reference_platform": 72,
+   "closest_missed_nm": 0.6393860296356539,
+   "note": "Pairs whose true nearest-image separation is inside the cutoff that the Reference platform reports as non-interacting. Zero on a cube."
+  },
+  "energies": {
+   "Reference": 83168.88920244135,
+   "CPU": 83172.78541625915,
+   "gap_kJ_mol": 3.8962138178030727
+  },
+  "why_it_was_hard_to_see": "The loss is concentrated in a thin shell at the cutoff, where each pair contributes little, and it lands with opposite sign in Coulomb and Lennard-Jones: ours read 7.0 kJ/mol low on LJ and 11.0 high on Coulomb, cancelling to 3.9 in the total. So it reads as a small implementation difference rather than as missing pairs, and the obvious suspects -- the minimum image, the cell list, alpha, the dispersion correction -- were all eliminated one at a time before the oracle itself came under suspicion.",
+  "consequence": "The Reference platform is the oracle everywhere else in this project. For triclinic direct space it must not be. The CPU platform is, and src/reference/forces/ewald.ts is the independent check on the reciprocal space."
+ },
+ "openmm_7_7_cannot_solvate_a_dodecahedron": {
+  "finding": "addSolvent(boxShape='dodecahedron') on OpenMM 7.7.0.dev removes clashes across a rectangular boundary, giving atoms 0.0168 nm apart and a potential energy of 9.6e10 kJ/mol. The cube is unaffected, so nothing warns you. On 8.4 the same call gives 0.0636 nm and -7,633 kJ/mol.",
+  "consequence": "Build triclinic fixtures with the oracle environment (OpenMM 8.4+), which docs/measurements/README.md names. The first fixture built here used 7.7 and encoded a structure no force field can describe."
+ },
+ "ewald_oracle": {
+  "what": "src/reference/forces/ewald.ts, an exact reciprocal-space sum with no mesh, spline or transform.",
+  "validated_against_mesh_pme_on_a_cube": {
+   "energy_relative": "<1e-4",
+   "force_relative_rms": "<1e-3"
+  },
+  "reciprocal_vectors_checked": "g_i . a_j = 2 pi delta_ij directly on a dodecahedron, rather than trusting the algebra"
+ }
+}

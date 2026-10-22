@@ -499,21 +499,31 @@ gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
    protocols use would not fit.
    `docs/measurements/triclinic-dodecahedron-1L2Y.json` has the numbers.
 
-   Next, and the reason the refusal stays: every one of these calls
-   `rectangularBox`, which throws.
+   **The four reference files are done.** `potential.ts`,
+   `forces/nonbonded.ts`, `forces/pme.ts` and `forces/restraint.ts` all take a
+   triclinic box; `rectangularBox` is replaced by `usableBox`, which reduces the
+   vectors and refuses a cutoff the cell cannot carry. Against OpenMM's **CPU**
+   platform on the dodecahedral fixture: bonded terms exact, reciprocal space
+   1.2e-9, direct space 2.3e-6 (the CPU platform is single precision for
+   nonbonded). The rectangular path is unchanged — all 662 unit tests pass,
+   including the cubic parity fixtures.
 
-   * reference — `potential.ts`, `forces/nonbonded.ts`, `forces/pme.ts`,
-     `forces/restraint.ts`. Do these first: they are testable in the no-GPU lane
-     against OpenMM's energy for the dodecahedral fixture, which is a real
-     differential test and not a self-consistency one.
+   Still to do: the nine GPU files, then `solvate.ts`.
    * GPU — `nonbonded.ts`, `pme.ts`, `loop.ts`, `restraint.ts`, `verify.ts`,
      `validate.ts`, `validate-cell-list.ts`, `validate-pbc.ts`,
-     `validate-protocol.ts`.
+     `validate-protocol.ts`. The reference is the map for all of them: spread in
+     fractional coordinates, build `k` from the reciprocal lattice rather than
+     per axis, and bring the force back through `B⁻¹`.
    * and then `src/prep/solvate.ts`, whose `PeriodicGrid` buckets in Cartesian
      space and would have to bucket in fractional space instead.
 
-   **PME's reciprocal lattice is the hard part** and is where the risk is; the
-   direct space is now a solved problem. `UnsupportedBoxShape` in
+   🔴 **PME's reciprocal lattice turned out not to be the hard part.** The
+   charge grid is laid out in fractional coordinates, so the transform is the
+   same transform whatever the cell shape and only three things change. The hard
+   part was that there was nothing to check it against, and then that the thing
+   everyone would reach for -- OpenMM's Reference platform -- is wrong for
+   triclinic cells. `src/reference/forces/ewald.ts` is the independent oracle
+   now, and `CLAUDE.md` has the Reference-platform trap. `UnsupportedBoxShape` in
    `src/prep/solvate.ts` is where preparation refuses, and
    `TriclinicBoxUnsupported` in `src/reference/forces/nonbonded.ts` is where the
    engine does.

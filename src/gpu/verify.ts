@@ -119,7 +119,7 @@ export async function verifySystem(
     );
   }
   const alpha = splittingParameter(nonbonded);
-  const mesh = defaultGrid(nonbonded, box, alpha);
+  const mesh = defaultGrid(nonbonded, state.boxVectors, alpha);
 
   const loop = await StepLoop.fromParsed(device, system, state, {
     timeStep: 0.002,
