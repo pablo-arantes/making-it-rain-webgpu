@@ -49,8 +49,6 @@ import { centreOfMassRemover, removesOnStep } from "../reference/com-motion.js";
 import {
   barostatActsAfterSteps,
   barostatAttempt,
-  boxLengths,
-  diagonalBox,
   initialBarostatState,
   type BarostatState,
 } from "../reference/barostat.js";
@@ -230,7 +228,15 @@ export class StepLoop {
     private readonly accumulators: Accumulators,
     private readonly buffers: IntegratorBuffers,
     private offsets: EnergyOffsets,
-    private box: Vec3,
+    /**
+     * The cell, as vectors rather than three edge lengths.
+     *
+     * 🔴 It held `Vec3` and the barostat flattened its trial vectors into it
+     * with `boxLengths`, which silently assumes a rectangular cell: the
+     * off-diagonals were discarded on every rescale. Holding the vectors is
+     * what lets a skewed cell be rescaled at all.
+     */
+    private boxVectors: readonly [Vec3, Vec3, Vec3],
     private readonly alpha: number,
     private readonly nonbonded: NonbondedForce,
     private readonly direct: ResidentDirect,
@@ -501,7 +507,7 @@ export class StepLoop {
         self: selfEnergy(nonbonded, alpha),
         netCharge: netChargeCorrection(nonbonded, alpha, volume),
       },
-      box,
+      state.boxVectors,
       alpha,
       nonbonded,
       direct,
@@ -615,10 +621,10 @@ export class StepLoop {
       this.system,
       barostat,
       state,
-      diagonalBox(this.box),
+      this.boxVectors,
       positions,
       async (trial, trialBox) => {
-        this.setBox(boxLengths(trialBox));
+        this.setBox(trialBox);
         return (await this.potential(trial)).energy;
       },
       uniform,
@@ -628,7 +634,7 @@ export class StepLoop {
     // `barostatAttempt` leaves the caller to commit, so whichever
     // configuration won is written back -- including on rejection, because the
     // trial was already on the device.
-    this.setBox(boxLengths(attempt.boxVectors));
+    this.setBox(attempt.boxVectors);
     this.setPositions(attempt.positions);
     this.barostatAttempts++;
     if (attempt.accepted) this.barostatAccepted++;
@@ -974,9 +980,24 @@ export class StepLoop {
     return this.pme.grid;
   }
 
-  /** The current box, nm along each axis. */
+  /**
+   * The current box's diagonal, nm.
+   *
+   * The diagonal, not the edge lengths: for a skewed cell those differ, and
+   * what the DCD header and the protocol want is the former. `boxVectorsNow`
+   * is the whole cell.
+   */
   get boxLengths(): Vec3 {
-    return this.box;
+    return [
+      (this.boxVectors[0] as Vec3)[0] as number,
+      (this.boxVectors[1] as Vec3)[1] as number,
+      (this.boxVectors[2] as Vec3)[2] as number,
+    ];
+  }
+
+  /** The whole cell, for anything that cannot assume a rectangular one. */
+  get boxVectorsNow(): readonly [Vec3, Vec3, Vec3] {
+    return this.boxVectors;
   }
 
   /**
@@ -1002,7 +1023,12 @@ export class StepLoop {
    * cutoff wide; `updateCellBox` throws `BoxTooSmallForCells` rather than
    * quietly returning a list that misses pairs.
    */
-  setBox(box: Vec3): void {
+  setBox(boxVectors: readonly [Vec3, Vec3, Vec3]): void {
+    const box = [
+      (boxVectors[0] as Vec3)[0] as number,
+      (boxVectors[1] as Vec3)[1] as number,
+      (boxVectors[2] as Vec3)[2] as number,
+    ] as Vec3;
     const queue = this.device.queue;
     const write = (buffer: GPUBuffer, data: ArrayBufferView): void =>
       queue.writeBuffer(buffer, 0, data as unknown as BufferSource);
@@ -1014,6 +1040,7 @@ export class StepLoop {
         this.direct.sections,
         this.direct.cellList.geometry.divisions,
         box,
+        boxVectors,
         this.alpha,
         this.direct.verlet,
       ),
@@ -1047,7 +1074,7 @@ export class StepLoop {
       self: this.offsets.self,
       netCharge: netChargeCorrection(this.nonbonded, this.alpha, volume),
     };
-    this.box = box;
+    this.boxVectors = boxVectors;
   }
 
   /** The shared force accumulator, for a validator that needs to read it. */

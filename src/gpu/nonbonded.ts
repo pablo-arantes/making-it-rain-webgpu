@@ -38,6 +38,7 @@ import {
   dispersionCorrection,
   rectangularBox,
 } from "../reference/forces/nonbonded.js";
+import { inverseBox, type BoxVectors } from "../reference/triclinic.js";
 import type { NonbondedForce, Vec3 } from "../engine/system.js";
 
 /** Three or more cells an axis, or the 27-cell scan would visit one twice. */
@@ -274,12 +275,58 @@ export function writeFixedBox(words: Uint32Array, offset: number, box: Vec3): vo
 }
 
 /**
- * 160 bytes. Five u32 word offsets fill 0..19; `cells` takes its 16-byte
- * boundary at 32 and the cutoff follows at 44; the f32 box takes the next one
- * at 48 with alpha at 60; then the fixed-point box at 64 and half the box at
- * 112, three `vec4<u32>` each at WGSL's 16-byte array stride.
+ * The three off-diagonal lattice components, in fixed point: `b.x`, `c.x`,
+ * `c.y`.
+ *
+ * 🔴 All a general cell adds. The diagonal is already in `writeFixedBox`, and a
+ * rectangular cell has nothing else — so these are zero for every fixture this
+ * project was built on, which is what makes the conversion verifiable by
+ * "rectangular unchanged".
  */
-export const PAIR_PARAMS_BYTES = 160;
+export function writeOffDiagonalBox(
+  words: Uint32Array,
+  offset: number,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+): void {
+  const components = [
+    (boxVectors[1] as Vec3)[0] as number,
+    (boxVectors[2] as Vec3)[0] as number,
+    (boxVectors[2] as Vec3)[1] as number,
+  ];
+  for (const [slot, value] of components.entries()) {
+    const packed = fixedWords(value);
+    words[offset + slot * 4] = packed.lo;
+    words[offset + slot * 4 + 1] = packed.hi;
+  }
+}
+
+/**
+ * The inverse box, as three `vec3<f32>` rows at a 16-byte stride.
+ *
+ * f32 is deliberate: this only ever *decides* which image to take, never
+ * carries a result. See `nearest_image_triclinic`.
+ */
+export function writeInverseBox(
+  floats: Float32Array,
+  offset: number,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+): void {
+  const inverse = inverseBox(boxVectors as unknown as BoxVectors);
+  for (let row = 0; row < 3; row++) {
+    for (let column = 0; column < 3; column++) {
+      floats[offset + row * 4 + column] = (inverse[row] as Vec3)[column] as number;
+    }
+  }
+}
+
+/**
+ * 256 bytes. Five u32 word offsets fill 0..19; `cells` takes its 16-byte
+ * boundary at 32 and the cutoff follows at 44; the f32 box takes the next one
+ * at 48 with alpha at 60; the fixed-point diagonal at 64 and half of it at 112;
+ * then the three off-diagonals at 160 and the inverse box at 208, three
+ * `vec4`-strided rows each.
+ */
+export const PAIR_PARAMS_BYTES = 256;
 
 /** 32 bytes of struct, then the fixed-point box and half box to 128. */
 export const EXCEPTION_PARAMS_BYTES = 128;
@@ -296,6 +343,7 @@ export function packPairParams(
   sections: ListSections,
   divisions: Vec3,
   box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
   verlet: { capacity: number; skin: number } = { capacity: 0, skin: 0 },
 ): Uint8Array {
@@ -320,6 +368,8 @@ export function packPairParams(
   f32[14] = box[2] as number;
   f32[15] = alpha;
   writeFixedBox(u32, 16, box);
+  writeOffDiagonalBox(u32, 40, boxVectors);
+  writeInverseBox(f32, 52, boxVectors);
   return new Uint8Array(bytes);
 }
 
@@ -586,6 +636,7 @@ export function prepareDirect(
       sections,
       probe.geometry.divisions,
       box,
+      boxVectors,
       alpha,
       verlet,
     ) as unknown as BufferSource,

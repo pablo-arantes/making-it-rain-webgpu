@@ -257,3 +257,120 @@ fn minimum_image64(difference: vec2<u32>, box: vec2<u32>, half: vec2<u32>) -> f3
   }
   return from_fixed(d);
 }
+
+/// The nearest image of a fixed-point difference, for a general cell.
+///
+/// 🔴 Two representations of the cell, and both are necessary. The lattice
+/// components arrive in **fixed point**, because the shift they produce lands
+/// on a position difference that has to stay exact -- that is the whole reason
+/// positions are integers. The inverse box arrives in **f32**, because it is
+/// only used to *decide* which image to take.
+///
+/// The decision is `round(d · B⁻¹)` per fractional axis. Subtracting lattice
+/// vector `c` changes only `f_c`, so the three fractional axes are independent
+/// and there is no ordering and no search -- the Cartesian "reduce against c,
+/// then b, then a" is exactly this. For positions folded into the cell
+/// `|Δf| < 1`, so each shift is one of -1, 0, 1 and applies as an exact
+/// `add64`/`sub64` with **no multiply at all**.
+///
+/// An f32 estimate picks that integer wrongly only within about 1.6e-7 of the
+/// half-cell boundary, where the two images are equidistant anyway. The
+/// comparison is strict, `> 0.5`, which is the same tie behaviour as the
+/// rectangular `nearest_image_box` it generalises: at exactly half a cell the
+/// reduction keeps its own image rather than alternating.
+///
+/// For a rectangular cell `off` is all zero, the inverse is diagonal, and this
+/// reduces to one conditional shift per axis -- bit for bit what
+/// `nearest_image_box` produced.
+fn nearest_image_triclinic(
+  d: array<vec2<u32>, 3>,
+  diag: array<vec2<u32>, 3>,
+  off: array<vec2<u32>, 3>,
+  inverse0: vec3<f32>,
+  inverse1: vec3<f32>,
+  inverse2: vec3<f32>,
+) -> vec3<f32> {
+  var x = d[0];
+  var y = d[1];
+  var z = d[2];
+
+  // f = r . M, from the f32 difference. Only the integer it implies is used.
+  let rx = from_fixed(x);
+  let ry = from_fixed(y);
+  let rz = from_fixed(z);
+  let fa = rx * inverse0.x + ry * inverse1.x + rz * inverse2.x;
+  let fb = rx * inverse0.y + ry * inverse1.y + rz * inverse2.y;
+  let fc = rx * inverse0.z + ry * inverse1.z + rz * inverse2.z;
+
+  // c = (off[1], off[2], diag[2]); b = (off[0], diag[1], 0); a = (diag[0], 0, 0).
+  if (fc > 0.5) {
+    x = sub64(x, off[1]);
+    y = sub64(y, off[2]);
+    z = sub64(z, diag[2]);
+  } else if (fc < -0.5) {
+    x = add64(x, off[1]);
+    y = add64(y, off[2]);
+    z = add64(z, diag[2]);
+  }
+  if (fb > 0.5) {
+    x = sub64(x, off[0]);
+    y = sub64(y, diag[1]);
+  } else if (fb < -0.5) {
+    x = add64(x, off[0]);
+    y = add64(y, diag[1]);
+  }
+  if (fa > 0.5) {
+    x = sub64(x, diag[0]);
+  } else if (fa < -0.5) {
+    x = add64(x, diag[0]);
+  }
+  return vec3<f32>(from_fixed(x), from_fixed(y), from_fixed(z));
+}
+
+/// One coordinate folded into the cell, so `|Δf| < 1` holds for every pair.
+///
+/// Subtracts whole lattice vectors until the fractional coordinate is in
+/// [0, 1). The count comes from an f32 `floor`, which only has to be close
+/// because the loop checks its own work; the subtraction is exact.
+fn fold_into_cell(
+  r: array<vec2<u32>, 3>,
+  diag: array<vec2<u32>, 3>,
+  off: array<vec2<u32>, 3>,
+  inverse0: vec3<f32>,
+  inverse1: vec3<f32>,
+  inverse2: vec3<f32>,
+) -> array<vec2<u32>, 3> {
+  var x = r[0];
+  var y = r[1];
+  var z = r[2];
+  // Bounded rather than unbounded: a wild coordinate must not hang a dispatch.
+  // Three axes, outermost first, because folding `c` moves `a` and `b`.
+  for (var guard = 0u; guard < 64u; guard++) {
+    let rx = from_fixed(x);
+    let ry = from_fixed(y);
+    let rz = from_fixed(z);
+    let fc = rx * inverse0.z + ry * inverse1.z + rz * inverse2.z;
+    if (fc >= 1.0) {
+      x = sub64(x, off[1]); y = sub64(y, off[2]); z = sub64(z, diag[2]);
+    } else if (fc < 0.0) {
+      x = add64(x, off[1]); y = add64(y, off[2]); z = add64(z, diag[2]);
+    } else { break; }
+  }
+  for (var guard = 0u; guard < 64u; guard++) {
+    let fb = from_fixed(x) * inverse0.y + from_fixed(y) * inverse1.y
+           + from_fixed(z) * inverse2.y;
+    if (fb >= 1.0) {
+      x = sub64(x, off[0]); y = sub64(y, diag[1]);
+    } else if (fb < 0.0) {
+      x = add64(x, off[0]); y = add64(y, diag[1]);
+    } else { break; }
+  }
+  for (var guard = 0u; guard < 64u; guard++) {
+    let fa = from_fixed(x) * inverse0.x + from_fixed(y) * inverse1.x
+           + from_fixed(z) * inverse2.x;
+    if (fa >= 1.0) { x = sub64(x, diag[0]); }
+    else if (fa < 0.0) { x = add64(x, diag[0]); }
+    else { break; }
+  }
+  return array<vec2<u32>, 3>(x, y, z);
+}

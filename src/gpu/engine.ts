@@ -47,8 +47,24 @@ export class LoopEngine implements ProtocolEngine {
     this.loop.setVelocities(velocities);
   }
 
+  /**
+   * Rescale the cell.
+   *
+   * Takes the diagonal, which is what the protocol has, and keeps the cell's
+   * shape: a skewed cell is scaled component-wise so its off-diagonals move
+   * with it. Passing three edge lengths and reconstructing a rectangular cell
+   * -- which is what this did -- discarded the shape on every call.
+   */
   setBox(box: Vec3): void {
-    this.loop.setBox(box);
+    const current = this.loop.boxVectorsNow;
+    const scale = [0, 1, 2].map(
+      (axis) => (box[axis] as number) / ((current[axis] as Vec3)[axis] as number),
+    );
+    this.loop.setBox(
+      current.map((row, axis) =>
+        (row as Vec3).map((value) => value * (scale[axis] as number)),
+      ) as unknown as readonly [Vec3, Vec3, Vec3],
+    );
   }
 
   run(steps: number): Promise<void> {

@@ -38,7 +38,7 @@ import {
   type OpenMMSystem,
 } from "../engine/system.js";
 import { findMolecules } from "../engine/molecules.js";
-import { boxLengths, scaleBox, scaleMolecules } from "../reference/barostat.js";
+import { scaleBox, scaleMolecules } from "../reference/barostat.js";
 import { maxConstraintError } from "../reference/minimise.js";
 import { StepLoop, type RunOptions } from "./loop.js";
 
@@ -156,14 +156,16 @@ export async function validateBarostat(
   // cannot hide inside the agreement.
   for (const lengthScale of [1.02, 0.98]) {
     const trialBox = scaleBox(state.boxVectors, lengthScale);
-    const trialLengths = boxLengths(trialBox);
     const trialPositions = Float64Array.from(state.positions);
     scaleMolecules(trialPositions, molecules, lengthScale);
 
     const changed = await StepLoop.fromParsed(device, system, state, options);
     let afterSetBox: number;
     try {
-      changed.setBox(trialLengths);
+      // The trial *vectors*, not their diagonal: flattening them here would
+      // have discarded a skewed cell's shape, which is what `setBox` used to do
+      // for every caller.
+      changed.setBox(trialBox);
       afterSetBox = (await changed.potential(trialPositions)).energy;
     } finally {
       changed.destroy();
