@@ -87,11 +87,9 @@ writeFileSync(
     openmmVersion: "8.4",
     stepCount: 0,
     time: 0,
-    boxVectors: [
-      [box[0], 0, 0],
-      [0, box[1], 0],
-      [0, 0, box[2]],
-    ],
+    // The vectors solvation produced, which for a non-cubic shape are not a
+    // diagonal. Rebuilding one here would write the wrong cell shape.
+    boxVectors: box,
     particleCount: solvated.topology.atoms.length,
     positions: solvated.topology.positions,
   }),
@@ -104,6 +102,6 @@ writeFileSync(
 console.log(
   `  ${solvated.topology.atoms.length} atoms, ${solvated.waters} waters, ` +
     `${solvated.positiveIons} Na+, ${solvated.negativeIons} Cl-, ` +
-    `box ${box[0].toFixed(5)} nm, charge ${totalCharge(prepared.assignment).toFixed(6)} e`,
+    `box ${box[0]![0]!.toFixed(5)} nm, charge ${totalCharge(prepared.assignment).toFixed(6)} e`,
 );
 console.log(`  wrote system.xml, state.xml and system.pdb to ${outDir}`);

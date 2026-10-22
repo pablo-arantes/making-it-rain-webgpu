@@ -141,6 +141,21 @@ the water placement is deterministic and every molecule is comparable; with the
 notebook's 0.15 M NaCl, only the counts are, because `_addIons` picks the waters
 to replace with `random.choice`. Deviations 18 and 19 in `docs/DEVIATIONS.md`.
 
+`--shape` dumps a non-cubic cell, which `test/prep-solvate.test.ts` compares
+oxygen by oxygen the same way:
+
+```sh
+python tools/dump_solvent.py --pdb fixtures/prep/1L2Y.pdb \
+    --shape dodecahedron --out fixtures/prep/1L2Y-solvent-dodecahedron.json
+```
+
+🔴 **Use the oracle environment for this one**, OpenMM 8.4 or newer: 7.7's
+`addSolvent(boxShape=...)` removes clashes across a *rectangular* boundary and
+leaves atoms 0.0168 nm apart, so the dump would encode a structure no force
+field can describe. `docs/measurements/README.md` names the environment. The
+shape reaches `addSolvent` through the padding branch only -- given a box size
+outright, OpenMM ignores it -- and that is the branch this tool uses.
+
 The pre-equilibrated water boxes live in `vendor/water/` (`tip3p.pdb`,
 `spce.pdb`, 3 nm cubes of 895 molecules each) and are recorded in
 `THIRD_PARTY.md`.

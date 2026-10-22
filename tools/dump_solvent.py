@@ -38,6 +38,10 @@ def main() -> None:
     # The notebook's defaults: 4 angstrom of padding, 0.15 M NaCl.
     parser.add_argument("--padding", type=float, default=4.0, help="angstrom")
     parser.add_argument("--concentration", type=float, default=0.15, help="molar")
+    # 🔴 The shape reaches `addSolvent` only through the padding branch, which
+    # is the branch this tool uses. OpenMM ignores it for an explicit box size.
+    parser.add_argument("--shape", default="cube",
+                        choices=["cube", "dodecahedron", "octahedron"])
     parser.add_argument("--out", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
@@ -51,6 +55,7 @@ def main() -> None:
             field,
             model=args.water,
             padding=args.padding * unit.angstrom,
+            boxShape=args.shape,
             ionicStrength=(args.concentration if ions else 0.0) * unit.molar,
             neutralize=ions,
             positiveIon="Na+",
@@ -82,6 +87,7 @@ def main() -> None:
         "openmm": openmm.version.version,
         "water": args.water,
         "padding_nm": args.padding / 10.0,
+        "boxShape": args.shape,
         "concentration_molar": args.concentration,
         "soluteAtoms": solute,
         "noIons": {

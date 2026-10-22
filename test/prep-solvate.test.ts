@@ -27,13 +27,25 @@ import { totalCharge } from "../src/prep/assign.js";
 import { NonbondedMethod } from "../src/engine/system.js";
 import {
   boxWidthForPadding,
+  KNOWN_BOX_SHAPES,
   solvate,
+  squaredPeriodicDistance,
   UnsupportedBoxShape,
   VDW_RADIUS_PER_SIGMA,
 } from "../src/prep/solvate.js";
+import {
+  type BoxVectors,
+  boxVectorsForShape,
+  boxVolume,
+  isReducedForm,
+  maximumCutoff,
+  minimumImage,
+  perpendicularWidths,
+} from "../src/reference/triclinic.js";
 
 interface Dump {
   readonly padding_nm: number;
+  readonly boxShape?: string;
   readonly concentration_molar: number;
   readonly soluteAtoms: number;
   readonly noIons: {
@@ -307,21 +319,197 @@ describe.skipIf(!present)("solvating 1L2Y", () => {
       constraints: "h-bonds",
     });
     expect(system.particleCount).toBe(solvated.topology.atoms.length);
-    expect(system.boxVectors[0]![0]).toBeCloseTo(solvated.boxVectors[0], 12);
+    expect(system.boxVectors[0]![0]).toBeCloseTo(solvated.boxVectors[0]![0]!, 12);
     // Every water's two O-H bonds become constraints under h-bonds, so the
     // force keeps only what is left.
     expect(system.constraintCount).toBeGreaterThan(2 * solvated.waters);
   });
 
-  it("uses OpenMM's radius constant and refuses shapes it cannot do", () => {
+  it("uses OpenMM's radius constant, and refuses only what OpenMM lacks", () => {
     expect(VDW_RADIUS_PER_SIGMA).toBeCloseTo(0.5612310241546864907, 15);
-    // A dodecahedron needs a triclinic minimum image that is not written.
-    // Quietly producing a cube would change the density.
+    expect(KNOWN_BOX_SHAPES).toEqual(["cube", "dodecahedron", "octahedron"]);
+    for (const shape of KNOWN_BOX_SHAPES) {
+      expect(() =>
+        solvate(topology!, bonds!, atoms!, waterBox!, { padding: 0.4, boxShape: shape }),
+      ).not.toThrow();
+    }
+    // 🔴 Still a refusal rather than a fallback. Silently producing a cube for
+    // a shape OpenMM does not have would change the volume by 30%, and the
+    // density with it, which nothing downstream would report.
     expect(() =>
       solvate(topology!, bonds!, atoms!, waterBox!, {
         padding: 0.4,
-        boxShape: "dodecahedron",
+        boxShape: "hexagonal-prism",
       }),
     ).toThrow(UnsupportedBoxShape);
+  });
+
+  it("applies the shape to a padding and never to a box given outright", () => {
+    // 🔴 `addSolvent` consults `boxShape` in the padding branch alone. A caller
+    // who asks for a 3 nm box and a dodecahedron gets the 3 nm box, because
+    // reshaping a size they stated would cut the volume they asked for by 30%.
+    const explicit = solvate(topology!, bonds!, atoms!, waterBox!, {
+      boxSize: [3, 3, 3],
+      boxShape: "dodecahedron",
+    });
+    expect(explicit.boxVectors).toEqual([
+      [3, 0, 0],
+      [0, 3, 0],
+      [0, 0, 3],
+    ]);
+  });
+
+  it("reduces clash distances exactly as the reference does", () => {
+    // Pins the copy in `squaredPeriodicDistance` to `minimumImage`, which is
+    // the tested one. The copy exists only to drop the returned array from a
+    // loop that runs millions of times, so any difference is a bug.
+    for (const shape of KNOWN_BOX_SHAPES) {
+      const box: BoxVectors = boxVectorsForShape(shape, 3.1763);
+      let worst = 0;
+      let seed = 1;
+      const next = () => {
+        // A plain LCG, so the comparison is the same on every run.
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return (seed / 0x7fffffff) * 9 - 3;
+      };
+      for (let trial = 0; trial < 4000; trial++) {
+        const a: [number, number, number] = [next(), next(), next()];
+        const b: [number, number, number] = [next(), next(), next()];
+        const [dx, dy, dz] = minimumImage(b, a, box);
+        const expected = dx! * dx! + dy! * dy! + dz! * dz!;
+        worst = Math.max(worst, Math.abs(squaredPeriodicDistance(a, b, box) - expected));
+      }
+      expect(worst).toBe(0);
+    }
+  });
+});
+
+const dodecaDumpPath = "fixtures/prep/1L2Y-solvent-dodecahedron.json";
+const dodecaPresent = present && existsSync(dodecaDumpPath);
+
+/**
+ * The same comparison as the cube, in a cell that is not rectangular.
+ *
+ * 🔴 Worth its own block because the cube cannot test any of what makes a
+ * skewed cell different. `addSolvent` tiles water over the rectangle the box
+ * vectors' **diagonal** spans -- which for a lower-triangular cell is a
+ * fundamental domain of the lattice, same volume, one image per point -- and
+ * the only places the skew is visible at all are the clash distance and the
+ * neighbour grid's fold. Both are wrong in ways a cube never exercises: the
+ * grid used to step cell indices to find the 27 neighbours, which wraps z
+ * without the x and y shift that crossing the `c` face carries.
+ */
+describe.skipIf(!dodecaPresent)("solvating 1L2Y in a dodecahedron", () => {
+  const dump = dodecaPresent
+    ? (JSON.parse(readFileSync(dodecaDumpPath, "utf8")) as Dump)
+    : undefined;
+  const field = dodecaPresent
+    ? mergeForceFields([
+        parseForceField(readFileSync("vendor/ffxml/protein.ff14SB.xml", "utf8")),
+        parseForceField(readFileSync("vendor/ffxml/amber14-tip3p.xml", "utf8")),
+      ])
+    : undefined;
+  const topology = dodecaPresent ? readPdb(readFileSync(pdbPath, "utf8")) : undefined;
+  const bonds = dodecaPresent
+    ? inferBonds(
+        topology!,
+        parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+      )
+    : undefined;
+  const atoms = dodecaPresent ? assignAtoms(topology!, bonds!, field!).atoms : undefined;
+  const waterBox = dodecaPresent ? readPdb(readFileSync(waterPath, "utf8")) : undefined;
+
+  const run = (ions: boolean) =>
+    solvate(topology!, bonds!, atoms!, waterBox!, {
+      padding: dump!.padding_nm,
+      boxShape: "dodecahedron",
+      ionicStrength: ions ? dump!.concentration_molar : 0,
+      neutralize: ions,
+      seed: 24301,
+    });
+
+  it("builds the vectors OpenMM builds, in reduced form", () => {
+    expect(dump!.boxShape).toBe("dodecahedron");
+    const result = run(false);
+    for (let row = 0; row < 3; row++) {
+      for (let axis = 0; axis < 3; axis++) {
+        expect(result.boxVectors[row]![axis]!).toBeCloseTo(
+          dump!.noIons.boxVectors[row]![axis]!,
+          12,
+        );
+      }
+    }
+    // The engine's kernels require this, and both shapes sit exactly on the
+    // |cx| <= ax/2 boundary rather than inside it.
+    expect(isReducedForm(result.boxVectors)).toBe(true);
+    // 70.711% of the enclosing cube, which is the whole reason for the shape.
+    const width = result.boxVectors[0]![0]!;
+    expect(boxVolume(result.boxVectors) / width ** 3).toBeCloseTo(Math.SQRT1_2, 12);
+  });
+
+  it("keeps exactly the waters OpenMM kept, in the same places", () => {
+    const result = run(false);
+    expect(result.waters).toBe(dump!.noIons.waters);
+    expect(result.topology.atoms).toHaveLength(dump!.noIons.atoms);
+
+    const ours: number[][] = [];
+    for (const residue of result.topology.residues) {
+      if (residue.name !== "HOH") continue;
+      const oxygen = residue.atoms.find(
+        (a) => (result.topology.atoms[a] as { element: string }).element === "O",
+      )!;
+      ours.push([
+        result.topology.positions[oxygen * 3]!,
+        result.topology.positions[oxygen * 3 + 1]!,
+        result.topology.positions[oxygen * 3 + 2]!,
+      ]);
+    }
+    ours.sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!);
+    expect(ours).toHaveLength(dump!.noIons.oxygens.length);
+    let worst = 0;
+    for (const [index, oxygen] of ours.entries()) {
+      const theirs = dump!.noIons.oxygens[index]!;
+      for (let axis = 0; axis < 3; axis++) {
+        worst = Math.max(worst, Math.abs(oxygen[axis]! - theirs[axis]!));
+      }
+    }
+    expect(worst).toBeLessThan(1e-12);
+  });
+
+  it("adds the ions OpenMM added", () => {
+    const result = run(true);
+    expect(result.positiveIons).toBe(dump!.withIons.ionCounts["NA"]);
+    expect(result.negativeIons).toBe(dump!.withIons.ionCounts["CL"]);
+    expect(result.waters).toBe(dump!.withIons.waters);
+    expect(result.topology.atoms).toHaveLength(dump!.withIons.atoms);
+  });
+
+  it("holds less water than the cube, in proportion to the volume", () => {
+    // Not a parity check -- a statement of what the shape buys. The water
+    // *density* has to survive the change of shape, because a wrong minimum
+    // image in the clash tests shows up there and nowhere else.
+    const cube = JSON.parse(readFileSync(dumpPath, "utf8")) as Dump;
+    const volumeOf = (v: readonly (readonly number[])[]) =>
+      v[0]![0]! * v[1]![1]! * v[2]![2]!;
+    const dodecaDensity = dump!.noIons.waters / volumeOf(dump!.noIons.boxVectors);
+    const cubeDensity = cube.noIons.waters / volumeOf(cube.noIons.boxVectors);
+    expect(dodecaDensity / cubeDensity).toBeGreaterThan(0.95);
+    expect(dodecaDensity / cubeDensity).toBeLessThan(1.05);
+  });
+
+  it("carries a cutoff for its narrowest perpendicular width, not its edge", () => {
+    // 🔴 The padding trap, as a test. This cell's cutoff bound is comfortable,
+    // but its narrowest *perpendicular* width is 0.707 of its edge -- so the
+    // engine's 27-cell shell, which needs three cells across each width, needs
+    // a far wider box than the cube does. At the notebook's 0.4 nm padding a
+    // dodecahedron is refused by the engine while the cube of the same padding
+    // runs; `docs/DEVIATIONS.md` deviation 19 has the arithmetic.
+    const result = run(false);
+    const widths = perpendicularWidths(result.boxVectors);
+    const edge = result.boxVectors[0]![0]!;
+    expect(Math.min(...widths) / edge).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(maximumCutoff(result.boxVectors)).toBeCloseTo(0.5 * Math.min(...widths), 12);
+    // Three cells across the narrowest width at a 1 nm cutoff needs 4.243 nm.
+    expect(edge).toBeLessThan(3 * Math.SQRT2 * 1.0);
   });
 });

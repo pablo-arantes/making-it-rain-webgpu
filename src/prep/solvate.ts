@@ -33,6 +33,12 @@
 
 import type { PdbAtom, PdbResidue, PdbTopology } from "../analysis/pdb.js";
 import { threefry2x32 } from "../reference/random.js";
+import {
+  type BoxVectors,
+  boxVectorsForShape,
+  isReducedForm,
+  NotReducedForm,
+} from "../reference/triclinic.js";
 import type { AssignedAtom } from "./assign.js";
 import type { Pair } from "./bonded.js";
 
@@ -54,15 +60,16 @@ export const WATER_MOLARITY = 55.4;
 /** A counter-based domain, so ion choice cannot correlate with the thermostat. */
 export const SOLVENT_DOMAIN = 0x3c6ef372;
 
+/** The shapes `Modeller._computeBoxVectors` knows, and so the ones we know. */
+export const KNOWN_BOX_SHAPES = ["cube", "dodecahedron", "octahedron"] as const;
+
+export type BoxShape = (typeof KNOWN_BOX_SHAPES)[number];
+
 export class UnsupportedBoxShape extends Error {
   constructor(shape: string) {
     super(
-      `box shape "${shape}" is not implemented. Only "cube" is, because a ` +
-        "non-rectangular box needs a triclinic minimum image in the clash " +
-        "tests and in the engine's cell list, and neither is written. A " +
-        "dodecahedron would hold 70.7% of the water for the same padding, so " +
-        "this is worth adding — but silently producing a cube instead would " +
-        "change the density.",
+      `box shape "${shape}" is not one OpenMM knows. Known: ` +
+        `${KNOWN_BOX_SHAPES.join(", ")}.`,
     );
     this.name = "UnsupportedBoxShape";
   }
@@ -86,7 +93,12 @@ export interface SolvateOptions {
 export interface SolvateResult {
   readonly topology: PdbTopology;
   readonly bonds: readonly Pair[];
-  readonly boxVectors: readonly [number, number, number];
+  /**
+   * 🔴 The full 3x3, because a diagonal cannot describe a dodecahedron and a
+   * caller that built one from this field would get a rectangular cell of the
+   * right volume and the wrong shape -- which no error would ever report.
+   */
+  readonly boxVectors: BoxVectors;
   readonly waters: number;
   readonly positiveIons: number;
   readonly negativeIons: number;
@@ -129,6 +141,32 @@ function elementOf(ion: string): string {
  * The grid is aligned to the box rather than to the origin, with at least three
  * cells per axis so the 27-cell scan never wraps onto itself.
  */
+/**
+ * The neighbour grid `addSolvent` uses for its clash tests.
+ *
+ * 🔴 Bucketing is **rectangular, on positions folded into the cell**, and the
+ * cells are sized from the box vectors' diagonal -- not from the perpendicular
+ * widths the engine's cell list has to use. That is `_CellList` in OpenMM's
+ * `modeller.py`, and copying it is the point rather than an economy: the water
+ * this keeps has to be the water OpenMM keeps, so a better grid that survives
+ * a different set of molecules is a worse grid here.
+ *
+ * The fold is the sequential triangular one -- subtract `c` by the floored
+ * fractional z, then `b`, then `a` -- so a point lands in the rectangle the
+ * diagonal spans. `near` then has to offset the *position* by a cell width and
+ * fold again, rather than stepping the cell index as this did while the box was
+ * always rectangular: stepping the index wraps z without the x and y shift that
+ * crossing the `c` face carries, so a point by that face would be tested
+ * against the wrong column and a clash there would go unseen. For a rectangular
+ * cell the two are identical, which is why it only mattered once the box could
+ * skew.
+ *
+ * Measured, by putting the index-stepping version back: a 1L2Y dodecahedron
+ * keeps **488 waters where OpenMM keeps 483**, so five waters sit on top of the
+ * solute's image across the `c` face. Nothing reports it -- the box is the
+ * right shape and the right volume, the water is 1% too dense, and the run
+ * starts normally. The cube is bit-identical under either version.
+ */
 class PeriodicGrid {
   private readonly cells = new Map<number, number[]>();
   private readonly counts: [number, number, number];
@@ -138,17 +176,22 @@ class PeriodicGrid {
     private readonly points: readonly (readonly [number, number, number])[],
     spacing: number,
     private readonly origin: readonly [number, number, number],
-    box: readonly [number, number, number],
+    private readonly vectors: BoxVectors,
   ) {
+    const diagonal: [number, number, number] = [
+      (vectors[0] as readonly number[])[0] as number,
+      (vectors[1] as readonly number[])[1] as number,
+      (vectors[2] as readonly number[])[2] as number,
+    ];
     this.counts = [
-      Math.max(3, Math.floor((box[0] as number) / spacing)),
-      Math.max(3, Math.floor((box[1] as number) / spacing)),
-      Math.max(3, Math.floor((box[2] as number) / spacing)),
+      Math.max(3, Math.floor((diagonal[0] as number) / spacing)),
+      Math.max(3, Math.floor((diagonal[1] as number) / spacing)),
+      Math.max(3, Math.floor((diagonal[2] as number) / spacing)),
     ];
     this.sizes = [
-      (box[0] as number) / this.counts[0],
-      (box[1] as number) / this.counts[1],
-      (box[2] as number) / this.counts[2],
+      (diagonal[0] as number) / this.counts[0],
+      (diagonal[1] as number) / this.counts[1],
+      (diagonal[2] as number) / this.counts[2],
     ];
     for (const [index, point] of points.entries()) {
       const key = this.keyOf(this.cellOf(point));
@@ -158,14 +201,29 @@ class PeriodicGrid {
     }
   }
 
+  /** Into the rectangle the diagonal spans, measured from the box's corner. */
+  private fold(point: readonly [number, number, number]): [number, number, number] {
+    const [a, b, c] = this.vectors;
+    let x = (point[0] as number) - (this.origin[0] as number);
+    let y = (point[1] as number) - (this.origin[1] as number);
+    let z = (point[2] as number) - (this.origin[2] as number);
+    const kc = Math.floor(z / (c[2] as number));
+    x -= kc * (c[0] as number);
+    y -= kc * (c[1] as number);
+    z -= kc * (c[2] as number);
+    const kb = Math.floor(y / (b[1] as number));
+    x -= kb * (b[0] as number);
+    y -= kb * (b[1] as number);
+    x -= Math.floor(x / (a[0] as number)) * (a[0] as number);
+    return [x, y, z];
+  }
+
   private cellOf(point: readonly [number, number, number]): [number, number, number] {
+    const folded = this.fold(point);
     const cell: [number, number, number] = [0, 0, 0];
     for (let axis = 0; axis < 3; axis++) {
       const count = this.counts[axis] as number;
-      const raw = Math.floor(
-        ((point[axis] as number) - (this.origin[axis] as number)) /
-          (this.sizes[axis] as number),
-      );
+      const raw = Math.floor((folded[axis] as number) / (this.sizes[axis] as number));
       cell[axis] = ((raw % count) + count) % count;
     }
     return cell;
@@ -179,19 +237,22 @@ class PeriodicGrid {
     );
   }
 
-  /** Indices in the 27 cells around a point, wrapping at the box faces. */
+  /** Indices in the 27 cells around a point, wrapping at the cell faces. */
   near(point: readonly [number, number, number]): number[] {
-    const base = this.cellOf(point);
     const found: number[] = [];
+    const seen = new Set<number>();
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dz = -1; dz <= 1; dz++) {
-          const cell: [number, number, number] = [0, 0, 0];
-          for (const [axis, delta] of [dx, dy, dz].entries()) {
-            const count = this.counts[axis] as number;
-            cell[axis] = (((base[axis] as number) + delta + count) % count) as number;
-          }
-          const bucket = this.cells.get(this.keyOf(cell));
+          const probe: readonly [number, number, number] = [
+            (point[0] as number) + dx * (this.sizes[0] as number),
+            (point[1] as number) + dy * (this.sizes[1] as number),
+            (point[2] as number) + dz * (this.sizes[2] as number),
+          ];
+          const key = this.keyOf(this.cellOf(probe));
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const bucket = this.cells.get(key);
           if (bucket !== undefined) found.push(...bucket);
         }
       }
@@ -204,19 +265,43 @@ class PeriodicGrid {
   }
 }
 
-function squaredPeriodicDistance(
+/**
+ * The squared distance between two points, under the periodic cell.
+ *
+ * 🔴 This is `minimumImage` in `src/reference/triclinic.ts` with the returned
+ * array removed, because it runs once per candidate pair for every tiled water
+ * -- millions of calls for a solvated box -- and `test/prep-solvate.test.ts`
+ * holds the two to bit-for-bit agreement so the copy cannot drift.
+ *
+ * Measured against OpenMM's own `compiled.periodicDistance` on a 3 nm
+ * dodecahedron: **0 of 20,000 separations differ**, worst 4.4e-16 nm. So this
+ * is not merely *a* correct minimum image, it is the arithmetic `addSolvent`
+ * tests clashes with, which is what makes the surviving water reproducible.
+ *
+ * The sequential reduction is not the true nearest image for every separation
+ * -- over those same 20,000 pairs it reads up to 1.29 nm long -- and does not
+ * need to be. It is exact below half the narrowest perpendicular width, and a
+ * clash cutoff is about 0.33 nm against a bound of 1.06 nm for a 3 nm
+ * dodecahedron, so every pair that could be a clash is reduced exactly.
+ */
+export function squaredPeriodicDistance(
   a: readonly [number, number, number],
   b: readonly [number, number, number],
-  box: readonly [number, number, number],
+  vectors: BoxVectors,
 ): number {
-  let total = 0;
-  for (let axis = 0; axis < 3; axis++) {
-    let delta = (a[axis] as number) - (b[axis] as number);
-    const width = box[axis] as number;
-    delta -= width * Math.round(delta / width);
-    total += delta * delta;
-  }
-  return total;
+  const [va, vb, vc] = vectors;
+  let x = (a[0] as number) - (b[0] as number);
+  let y = (a[1] as number) - (b[1] as number);
+  let z = (a[2] as number) - (b[2] as number);
+  const kc = Math.round(z / (vc[2] as number));
+  x -= kc * (vc[0] as number);
+  y -= kc * (vc[1] as number);
+  z -= kc * (vc[2] as number);
+  const kb = Math.round(y / (vb[1] as number));
+  x -= kb * (vb[0] as number);
+  y -= kb * (vb[1] as number);
+  x -= Math.round(x / (va[0] as number)) * (va[0] as number);
+  return x * x + y * y + z * z;
 }
 
 /**
@@ -320,7 +405,10 @@ export function solvate(
     seed = 0,
     boxShape = "cube",
   } = options;
-  if (boxShape !== "cube") throw new UnsupportedBoxShape(boxShape);
+  if (!(KNOWN_BOX_SHAPES as readonly string[]).includes(boxShape)) {
+    throw new UnsupportedBoxShape(boxShape);
+  }
+  const shape = boxShape as BoxShape;
 
   const sigma = WATER_SIGMA[model];
   if (sigma === undefined) {
@@ -331,19 +419,48 @@ export function solvate(
   const waterRadius = sigma * VDW_RADIUS_PER_SIGMA;
 
   // --- The box -----------------------------------------------------------
-  let box: readonly [number, number, number];
+  // 🔴 `boxShape` applies to the padding branch and to nothing else, because
+  // that is what `addSolvent` does: handed a box size, or a box on the
+  // topology, OpenMM takes those vectors as they stand and never consults the
+  // shape. Applying the shape to a size a caller gave explicitly would change
+  // the volume they asked for by 30%.
+  let vectors: BoxVectors;
   if (boxSize !== undefined) {
-    box = boxSize;
+    vectors = [
+      [boxSize[0] as number, 0, 0],
+      [0, boxSize[1] as number, 0],
+      [0, 0, boxSize[2] as number],
+    ];
   } else if (padding !== undefined) {
     const width = boxWidthForPadding(topology.positions, topology.atoms.length, padding);
-    box = [width, width, width];
+    vectors = boxVectorsForShape(shape, width);
   } else if (topology.box !== null) {
-    box = topology.box;
+    vectors = [
+      [topology.box[0] as number, 0, 0],
+      [0, topology.box[1] as number, 0],
+      [0, 0, topology.box[2] as number],
+    ];
   } else {
     throw new Error(
       "neither a padding nor a box size was given, and the topology has no box",
     );
   }
+  if (!isReducedForm(vectors)) throw new NotReducedForm(vectors);
+
+  // 🔴 The water tiling, the inclusion test and the boundary skin all work in
+  // the box vectors' **diagonal**, and that is not an approximation. For a
+  // lower-triangular cell the rectangle `[0, ax) x [0, by) x [0, cz)` is a
+  // fundamental domain of the lattice: its volume is the determinant, which is
+  // the cell's own volume, and every point of the cell has exactly one image
+  // in it. So filling that rectangle fills the cell, and `addSolvent` needs no
+  // triclinic inclusion test anywhere -- only the clash distances and the
+  // neighbour grid see the skew. A dodecahedron of width `w` is tiled over
+  // `w x w x 0.707w`, which is why it holds 70.7% of the cube's water.
+  const box: readonly [number, number, number] = [
+    (vectors[0] as readonly number[])[0] as number,
+    (vectors[1] as readonly number[])[1] as number,
+    (vectors[2] as readonly number[])[2] as number,
+  ];
 
   // --- Per-atom clash cutoffs -------------------------------------------
   const cutoff = atoms.map((atom) =>
@@ -381,7 +498,7 @@ export function solvate(
     centre[1] - (box[1] as number) / 2,
     centre[2] - (box[2] as number) / 2,
   ];
-  const soluteGrid = new PeriodicGrid(solutePoints, maxCutoff, origin, box);
+  const soluteGrid = new PeriodicGrid(solutePoints, maxCutoff, origin, vectors);
   const { box: tileBox, molecules } = readWaterBox(waterBox);
 
   // --- Tile, and keep what fits ------------------------------------------
@@ -424,7 +541,7 @@ export function solvate(
           for (const other of soluteGrid.near(shifted)) {
             const limit = cutoff[other] as number;
             if (
-              squaredPeriodicDistance(shifted, solutePoints[other] as readonly [number, number, number], box) <
+              squaredPeriodicDistance(shifted, solutePoints[other] as readonly [number, number, number], vectors) <
               limit * limit
             ) {
               clashes = true;
@@ -454,7 +571,7 @@ export function solvate(
         oxygen[0] < lower[0] || oxygen[1] < lower[1] || oxygen[2] < lower[2],
     )
     .map(({ oxygen }) => oxygen as readonly [number, number, number]);
-  const skinGrid = new PeriodicGrid(skin, maxCutoff, origin, box);
+  const skinGrid = new PeriodicGrid(skin, maxCutoff, origin, vectors);
 
   const survivors = kept.filter(({ oxygen }) => {
     if (oxygen[0] < upper[0] && oxygen[1] < upper[1] && oxygen[2] < upper[2]) {
@@ -462,7 +579,7 @@ export function solvate(
     }
     for (const index of skinGrid.near(oxygen)) {
       const other = skin[index] as readonly [number, number, number];
-      const periodic = squaredPeriodicDistance(other, oxygen, box);
+      const periodic = squaredPeriodicDistance(other, oxygen, vectors);
       const direct =
         ((other[0] as number) - oxygen[0]) ** 2 +
         ((other[1] as number) - oxygen[1]) ** 2 +
@@ -621,7 +738,7 @@ export function solvate(
       positions: Float64Array.from(positions),
     },
     bonds: newBonds,
-    boxVectors: box,
+    boxVectors: vectors,
     waters: survivors.length - chosen.length,
     positiveIons: positives,
     negativeIons: negatives,

@@ -125,7 +125,11 @@ export function rewritePdb(
     }
     if (line.startsWith("CRYST1") && options.box !== undefined) {
       const [a, b, c] = options.box as unknown as [number, number, number];
-      // Right angles: the engine refuses triclinic boxes upstream.
+      // 🔴 Right angles, because `box` is a diagonal and cannot say otherwise.
+      // The engine runs a skewed cell now, so for one of those this writes a
+      // rectangular `CRYST1` of the right volume and the wrong shape. Nothing
+      // downstream of a *run* reads it -- the box comes from `state.xml` -- but
+      // a reader of the PDB alone would be misled, which is deviation 24.
       out.push(
         "CRYST1" +
           fixed(a * TO_ANGSTROM, 9, 3) +
@@ -356,6 +360,9 @@ export function writePdb(
     out.push(`REMARK   1 ${options.remark}`.padEnd(80, " ").slice(0, 80));
   }
   if (topology.box !== null) {
+    // 🔴 Right angles, for the reason at the other `CRYST1` above: a
+    // `PdbTopology` carries a diagonal, so a skewed cell cannot survive this
+    // file. Deviation 24.
     const [a, b, c] = topology.box;
     out.push(
       "CRYST1" +

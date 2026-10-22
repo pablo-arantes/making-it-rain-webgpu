@@ -28,6 +28,7 @@
  */
 
 import { writePdb, readPdb, type PdbTopology } from "../src/analysis/pdb.js";
+import { type BoxVectors, isRectangular } from "../src/reference/triclinic.js";
 import { serialiseState } from "../src/engine/state.js";
 import {
   NonbondedMethod,
@@ -411,6 +412,14 @@ function offer(files: readonly { name: string; text: string }[]): void {
  * includes things which did not happen trains people to skip it. Each entry
  * names the number it is about.
  */
+/** `x × y × z` for a rectangular cell; all three vectors for a skewed one. */
+function formatBox(box: BoxVectors): string {
+  if (isRectangular(box)) {
+    return box.map((v, axis) => (v[axis] as number).toFixed(4)).join(" × ");
+  }
+  return box.map((v) => `(${v.map((c) => c.toFixed(4)).join(", ")})`).join(" ");
+}
+
 function showDeviations(solvated: SolvateResult, variants: readonly (string | null)[]): void {
   const entries: string[] = [];
 
@@ -622,7 +631,7 @@ prepareButton.addEventListener("click", () => {
         [`${positiveIon} ions`]: solvated.positiveIons,
         "Cl- ions": solvated.negativeIons,
         "Total atoms": solvated.topology.atoms.length,
-        "Box (nm)": solvated.boxVectors.map((v) => v.toFixed(4)).join(" × "),
+        "Box (nm)": formatBox(solvated.boxVectors),
         "Padding (Å)": (padding * 10).toFixed(1),
         "Solute radius (nm)": radius.toFixed(4),
         "Solute charge (e)": solvated.soluteCharge,
@@ -660,11 +669,12 @@ prepareButton.addEventListener("click", () => {
             openmmVersion: "8.4",
             stepCount: 0,
             time: 0,
-            boxVectors: [
-              [solvated.boxVectors[0], 0, 0],
-              [0, solvated.boxVectors[1], 0],
-              [0, 0, solvated.boxVectors[2]],
-            ],
+            // 🔴 The vectors as solvation produced them. This used to rebuild
+            // a diagonal from them, which was right only while a cube was the
+            // only shape -- for a dodecahedron it writes a rectangular cell of
+            // the correct volume and the wrong shape, and the engine would
+            // have run it without complaint.
+            boxVectors: solvated.boxVectors,
             particleCount: solvated.topology.atoms.length,
             positions: solvated.topology.positions,
           }),
