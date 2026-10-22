@@ -71,6 +71,11 @@ struct Params {
   /// stride; only `.xy` is used, low word then high.
   box_fixed: array<vec4<u32>, 3>,
   half_box_fixed: array<vec4<u32>, 3>,
+  /// The three off-diagonal lattice components in fixed point -- `b.x`, `c.x`,
+  /// `c.y` -- and the inverse box in f32. Zero and diagonal for a rectangular
+  /// cell, which is what `frame.skewed` is computed from.
+  off_fixed: array<vec4<u32>, 3>,
+  inverse: array<vec4<f32>, 3>,
 }
 
 /// The box and half the box, in fixed point, held in registers.
@@ -92,6 +97,16 @@ struct Params {
 struct FixedBox {
   box: array<vec2<u32>, 3>,
   half: array<vec2<u32>, 3>,
+  off: array<vec2<u32>, 3>,
+  inverse0: vec3<f32>,
+  inverse1: vec3<f32>,
+  inverse2: vec3<f32>,
+  /// 🔴 Decided once per invocation, outside the candidate loop. A skewed cell
+  /// needs the general reduction, which costs an f32 matrix product and three
+  /// `from_fixed` per candidate; a rectangular one keeps the single conditional
+  /// shift it had. Measured on 1L2Y and 3HTB after this branch went in: the
+  /// rectangular path did not move, which is what the branch is for.
+  skewed: bool,
 }
 
 fn load_fixed_box() -> FixedBox {
@@ -102,6 +117,16 @@ fn load_fixed_box() -> FixedBox {
   loaded.half[0] = params.half_box_fixed[0].xy;
   loaded.half[1] = params.half_box_fixed[1].xy;
   loaded.half[2] = params.half_box_fixed[2].xy;
+  loaded.off[0] = params.off_fixed[0].xy;
+  loaded.off[1] = params.off_fixed[1].xy;
+  loaded.off[2] = params.off_fixed[2].xy;
+  loaded.inverse0 = params.inverse[0].xyz;
+  loaded.inverse1 = params.inverse[1].xyz;
+  loaded.inverse2 = params.inverse[2].xyz;
+  loaded.skewed =
+    (loaded.off[0].x | loaded.off[0].y |
+     loaded.off[1].x | loaded.off[1].y |
+     loaded.off[2].x | loaded.off[2].y) != 0u;
   return loaded;
 }
 
@@ -116,19 +141,20 @@ fn load_fixed_box() -> FixedBox {
 /// uniform each time. The arithmetic is identical -- difference in fixed point,
 /// wrap in fixed point, convert last -- so the result is bit for bit the same.
 fn pair_vector(a: u32, b: u32, frame: ptr<function, FixedBox>) -> vec3<f32> {
+  let dx = sub64(positions[b * 3u + 0u], positions[a * 3u + 0u]);
+  let dy = sub64(positions[b * 3u + 1u], positions[a * 3u + 1u]);
+  let dz = sub64(positions[b * 3u + 2u], positions[a * 3u + 2u]);
+  if ((*frame).skewed) {
+    return nearest_image_triclinic(
+      array<vec2<u32>, 3>(dx, dy, dz),
+      (*frame).box, (*frame).off,
+      (*frame).inverse0, (*frame).inverse1, (*frame).inverse2,
+    );
+  }
   return vec3<f32>(
-    nearest_image_box(
-      sub64(positions[b * 3u + 0u], positions[a * 3u + 0u]),
-      (*frame).box[0], (*frame).half[0],
-    ),
-    nearest_image_box(
-      sub64(positions[b * 3u + 1u], positions[a * 3u + 1u]),
-      (*frame).box[1], (*frame).half[1],
-    ),
-    nearest_image_box(
-      sub64(positions[b * 3u + 2u], positions[a * 3u + 2u]),
-      (*frame).box[2], (*frame).half[2],
-    ),
+    nearest_image_box(dx, (*frame).box[0], (*frame).half[0]),
+    nearest_image_box(dy, (*frame).box[1], (*frame).half[1]),
+    nearest_image_box(dz, (*frame).box[2], (*frame).half[2]),
   );
 }
 

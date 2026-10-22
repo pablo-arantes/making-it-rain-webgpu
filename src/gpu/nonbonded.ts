@@ -25,6 +25,7 @@ import { BufferPool } from "./allocator.js";
 import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import {
   alignedBytes,
+  gridExtents,
   planCellList,
   planWrapPositions,
   prepareCellList,
@@ -539,7 +540,11 @@ export function prepareDirect(
    * pass with any search radius, so the small fixture cannot test this at all.
    * `validateNeighbours` is the check that can, on the big one.
    */
-  const shortestBox = Math.min(box[0] as number, box[1] as number, box[2] as number);
+  // 🔴 The narrowest *perpendicular* width, not the shortest edge: it is what
+  // the 27-cell shell has to reach across, and for a skewed cell it is smaller.
+  const shortestBox = Math.min(
+    ...(gridExtents(boxVectors) as unknown as number[]),
+  );
   const searchRadius =
     capacity === 0 ||
     Math.floor(shortestBox / (force.cutoff + skin)) < MINIMUM_CELLS_PER_AXIS
@@ -547,7 +552,7 @@ export function prepareDirect(
       : force.cutoff + skin;
 
   // The grid has to be known before the sections can be laid out.
-  const probe = prepareCellList(pool, n, box, searchRadius, {
+  const probe = prepareCellList(pool, n, boxVectors, searchRadius, {
     buffer: pool.buffer({ label: "nonbonded/listsProbe", byteLength: 4, usage: storageUsage() }),
     startsByteOffset: 0,
     orderByteOffset: 0,
@@ -565,7 +570,7 @@ export function prepareDirect(
     orderByteOffset: sections.order,
     cellOfByteOffset: sections.cellOf,
   };
-  const cellList = prepareCellList(pool, n, box, searchRadius, target);
+  const cellList = prepareCellList(pool, n, boxVectors, searchRadius, target);
 
   // Only the exclusion sections are static; the cell list's are written by its
   // own kernel every rebuild.

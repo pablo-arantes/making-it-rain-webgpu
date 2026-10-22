@@ -20,6 +20,7 @@ import { CELL_LIST } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
+import { isRectangular, perpendicularWidths, type BoxVectors } from "../reference/triclinic.js";
 import {
   CellListTooCoarse,
   MINIMUM_CELLS_PER_AXIS,
@@ -109,6 +110,27 @@ export function geometryForDivisions(
       (divisions[0] as number) * (divisions[1] as number) * (divisions[2] as number),
     extent,
   };
+}
+
+/**
+ * The extents the cell grid is divided along.
+ *
+ * 🔴 The **perpendicular widths** for a skewed cell, not its edge lengths. A
+ * 27-cell scan reaches one cell width, so dividing by an edge would make a
+ * skewed cell's slabs thinner than the cutoff across the faces and lose pairs
+ * -- the same trap as the cutoff bound, one level down. For a rectangular cell
+ * the two are the same number, so nothing existing changes.
+ */
+export function gridExtents(boxVectors: readonly [Vec3, Vec3, Vec3]): Vec3 {
+  const vectors = boxVectors as unknown as BoxVectors;
+  if (isRectangular(vectors)) {
+    return [
+      (boxVectors[0] as Vec3)[0] as number,
+      (boxVectors[1] as Vec3)[1] as number,
+      (boxVectors[2] as Vec3)[2] as number,
+    ];
+  }
+  return perpendicularWidths(vectors) as unknown as Vec3;
 }
 
 export function cellGeometry(box: Vec3, cutoff: number): CellGeometry {
@@ -224,34 +246,54 @@ const diagonalVectors = (box: Vec3): readonly [Vec3, Vec3, Vec3] => [
 export function updateCellBox(
   pool: BufferPool,
   buffers: CellListBuffers,
-  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   cutoff: number,
 ): CellGeometry {
-  const geometry = geometryForDivisions(box, buffers.geometry.divisions, cutoff);
+  const geometry = geometryForDivisions(
+    gridExtents(boxVectors),
+    buffers.geometry.divisions,
+    cutoff,
+  );
   pool.device.queue.writeBuffer(
     buffers.params,
     0,
-    packParams(buffers.particleCount, geometry, box) as unknown as BufferSource,
+    packParams(
+      buffers.particleCount,
+      geometry,
+      diagonalOf(boxVectors),
+      boxVectors,
+    ) as unknown as BufferSource,
   );
   return geometry;
 }
+
+/** The box's diagonal, which is what the fixed-point box uniform carries. */
+const diagonalOf = (boxVectors: readonly [Vec3, Vec3, Vec3]): Vec3 => [
+  (boxVectors[0] as Vec3)[0] as number,
+  (boxVectors[1] as Vec3)[1] as number,
+  (boxVectors[2] as Vec3)[2] as number,
+];
 
 /** Create (or find) the list's buffers and upload the geometry. */
 export function prepareCellList(
   pool: BufferPool,
   particleCount: number,
-  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   cutoff: number,
   target: ListTarget,
 ): CellListBuffers {
-  const geometry = cellGeometry(box, cutoff);
+  // Divisions from the perpendicular widths; the uniform's box from the real
+  // diagonal and off-diagonals. Two different things that coincide only for a
+  // rectangular cell.
+  const geometry = cellGeometry(gridExtents(boxVectors), cutoff);
+  const box = diagonalOf(boxVectors);
   const named = (label: string, byteLength: number, usage = readableStorageUsage()): GPUBuffer =>
     pool.buffer({ label, byteLength, usage });
   const params = named("cell/params", 224, uniformUsage());
   pool.device.queue.writeBuffer(
     params,
     0,
-    packParams(particleCount, geometry, box) as unknown as BufferSource,
+    packParams(particleCount, geometry, box, boxVectors) as unknown as BufferSource,
   );
   return {
     counts: named("cell/counts", geometry.cellCount * 4),

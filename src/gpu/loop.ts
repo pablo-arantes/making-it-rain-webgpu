@@ -1060,7 +1060,12 @@ export class StepLoop {
     );
     // The radius `prepareDirect` actually sized the cells by, which is clamped
     // for a small box and so is not always `cutoff + skin`.
-    updateCellBox(this.pool, this.direct.cellList, box, this.direct.verlet.searchRadius);
+    updateCellBox(
+      this.pool,
+      this.direct.cellList,
+      boxVectors,
+      this.direct.verlet.searchRadius,
+    );
     for (const restraint of this.restraints) {
       write(restraint.params, packRestraintParams(restraint.count, box));
     }
