@@ -157,36 +157,47 @@ so 1 ns at a 2 fs timestep is **under 8 minutes** — against the test's
 90-minute budget. Minimisation comes first and shows `progress=0` for its
 duration. 3HTB, at 26,749 atoms, runs at about **150 steps/s** (26 ns/day).
 
-🔴 **Wrap any browser run longer than a few minutes in `caffeinate -dimsu`.**
-Without it the display sleeps, Chrome loses its page, and Playwright reports
+🔴 **A long browser run can have its page closed, and the report blames your
+engine.** Playwright says
 
 ```
 Error: page.waitForFunction: Target page, context or browser has been closed
-  ...
-  CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
 ```
 
-`-6670` is `kCVReturnInvalidDisplay`. 🔴 **It does not read as an environment
-problem**: the message names `waitForFunction`, so it looks like the condition
-never came true — a stalled engine — and the browser log that explains it is
-buried under a hundred lines of unrelated SSL and certificate noise. Measured
-twice in one afternoon: the 1 ns dodecahedron gate died at 66 minutes of its
-90-minute budget, and `bonded.spec.ts`'s 3HTB case died at about 5 minutes;
-the same 3HTB case then **passed in 5.8 minutes under `caffeinate`**, which is
-what identified the cause. Every short test in the same lane passed throughout,
-so the symptom is specific to the long ones and a green lane does not clear it.
+which names the wait, so it reads as a condition that never came true — a
+stalled kernel — when the page simply went away. **This is unsolved.** What is
+measured so far, on the 1 ns dodecahedron gate:
 
-```sh
-caffeinate -dimsu npx playwright test test/browser/bonded.spec.ts
-MIR_LONG_RUN=1 caffeinate -dimsu npx playwright test -g nanosecond
-```
+| attempt | died after | notes |
+| --- | --- | --- |
+| plain | 66 min of a 90-min budget | other work running on the machine |
+| `caffeinate -dimsu`, machine otherwise idle | **5.4 min** | no crash in the log |
 
-Two things that look like causes and are not. A rebuild of `dist/` under the
-running `vite preview` was the first suspect for the gate — plausible, since
-`vite build` empties `outDir` and the page would 404 on any chunk it had not
-yet fetched — but the browser lane runs off the **dev server** and never
-touches `dist/`, and it failed the same way, so that was not it. And renderer
-CPU says nothing either way, for the reason the note above gives.
+So **`caffeinate` is not the fix** — the second attempt failed twelve times
+sooner than the first. An earlier version of this note said it was, on the
+strength of `bonded.spec.ts`'s 3HTB case failing at about 5 minutes and then
+passing in 5.8 under `caffeinate`. That case is simply *intermittent*, and one
+pass does not clear it.
+
+🔴 **`CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670` is a red
+herring.** It appears ten times in runs that **pass**, so it is startup noise
+rather than the cause, and it was the whole basis of the display-sleep theory.
+Two more things that look like causes and are not: a rebuild of `dist/` under
+the running `vite preview` (the browser lane runs off the **dev server**, never
+touches `dist/`, and fails the same way) and the engine changes in flight at
+the time (the short run-page test exercises the same protocol, DCD frames and
+checkpoint included, and passed).
+
+Do not run `npm run build:web` during a gate anyway — `playwright.config.ts`
+runs it itself for `MIR_LONG_RUN=1` and then serves `vite preview`, so a second
+build empties `outDir` under a live page.
+
+The reason this has been diagnosed twice and wrongly twice is that the only
+real signal — `window.__mirRun` and the progress element — dies with the page,
+and Chrome is launched with `--remote-debugging-pipe` rather than a port, so
+nothing outside Playwright can read it. The gate therefore logs its own
+progress every 60 s and captures `crash`, `pageerror` and console errors; read
+those before forming a theory.
 
 🔴 **Those numbers moved by 6x in one day, so do not trust a remembered one.**
 `docs/measurements/profile-step-m3pro.json` and `gate-1ns-m3pro.json` carry the
