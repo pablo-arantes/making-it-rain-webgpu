@@ -14,7 +14,12 @@ notebook's figures.
 files (9 more are skipped: the Dawn and oracle lanes), and the web build. `npm run test:browser` passes **13 tests** in Chrome —
 the device and precision checks, bonded forces on both fixtures, the three
 preparation paths, the step profile, and the run page end to end. The 1 ns gate
-is the 14th and is skipped unless `MIR_LONG_RUN=1`; it passes in **7.6 minutes**.
+is the 14th and is skipped unless `MIR_LONG_RUN=1`; it passes in **7.6 minutes**
+on the cube, and in **15.3 minutes on a rhombic dodecahedron** at 5,002
+particles with `MIR_GATE_FIXTURE=1L2Y-dodeca-wide`
+(`docs/measurements/gate-1ns-dodecahedron-m3pro.json`). 🔴 Run it instrumented
+and read its 60-second ticker; `CLAUDE.md` has the three wrong diagnoses that
+cost an afternoon before it had one.
 `npm run bench` and `npm run report:adapter` work and their output is committed
 under `docs/measurements/`.
 

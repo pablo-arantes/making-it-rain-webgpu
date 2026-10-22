@@ -1,0 +1,57 @@
+{
+ "what": "The plan's Phase 2 gate on a *triclinic* cell: a 1 ns rhombic-dodecahedral 1L2Y run end to end through web/run.html in a browser, under Playwright.",
+ "date": "2026-10-22",
+ "host": "Apple M3 Pro, macOS 14, Google Chrome 155",
+ "adapter": "apple · metal-3",
+ "command": "MIR_GATE_FIXTURE=1L2Y-dodeca-wide MIR_LONG_RUN=1 caffeinate -dimsu npx playwright test -g nanosecond",
+ "served_by": "vite preview, the production build",
+ "fixture": "1L2Y-dodeca-wide, 5002 particles, rhombic dodecahedron 4.25 nm across",
+ "cell": {
+  "shape": "dodecahedron",
+  "box_vectors_nm": [
+   [
+    4.25,
+    0,
+    0
+   ],
+   [
+    0,
+    4.25,
+    0
+   ],
+   [
+    2.125,
+    2.125,
+    3.0052
+   ]
+  ],
+  "note": "Built at 1.5 nm padding, not the notebook's 0.4: the 27-cell scan needs three cells across the narrowest *perpendicular* width, which is 0.707 of the edge, so a dodecahedron needs d >= 3*sqrt(2)*cutoff = 4.24 nm where the cube needs 3.0. Deviation 19."
+ },
+ "settings": {
+  "timestep_fs": 2,
+  "temperature_k": 298,
+  "pressure_bar": 1,
+  "equilibration_ns": 0.1,
+  "stride_ns": 0.9,
+  "strides": 1
+ },
+ "result": "passed",
+ "wall_clock_minutes": 15.3,
+ "reports": 100,
+ "artefacts": 9,
+ "artefact_bytes": 8100000,
+ "throughput": {
+  "steps_per_second": 554,
+  "ns_per_day": 96,
+  "note": "From the gate's own 60-second ticker: 25,000 steps at 20:06:53 UTC to 490,000 at 20:20:53, so 465,000 steps in 840 s. Every interval was 30,000-35,000 steps with no decay. End to end the 15.3 minutes for 1 ns is 94 ns/day, the difference being minimisation, 100 reports and the artefact writes. For scale the cubic 1L2Y gate is 7.6 minutes at 2,373 particles: 2.11x the particles here for 2.01x the wall clock, so the cost is linear in the atom count and the skew itself is not paid for."
+ },
+ "heap_megabytes": {
+  "range": [
+   11,
+   18
+  ],
+  "note": "Sampled every 60 s for 15 minutes with no trend. This is what disproved renderer OOM, which was the leading theory for the two failures below."
+ },
+ "history": "🔴 Two earlier attempts produced no result, both ending in `page.waitForFunction: Target page, context or browser has been closed` -- the first after 66 minutes of a 90-minute budget, the second after 5.4. Neither is evidence about the engine, and three explanations were offered and withdrawn before this run: a rebuild of dist/ under the live `vite preview` (eliminated -- the browser lane runs off the dev server, never touches dist/, and failed the same way), display sleep (eliminated -- `caffeinate -dimsu` made it fail twelve times sooner, and `CVDisplayLinkCreateWithCGDisplay failed, CVReturn: -6670` appears in runs that pass), and renderer OOM (eliminated by the flat heap above). What distinguishes this run is that the spec now samples `window.__mirRun` and the progress element every 60 s, which also touches an otherwise un-interacted tab. That correlation is a hypothesis and not a finding: one pass does not establish it, and the earlier failures stay unexplained.",
+ "why_this_file": "The cubic gate is gate-1ns-m3pro.json. This is its triclinic sibling rather than an edit to it, because the two are different fixtures at different sizes and a single file quoting one wall clock for both would be read as a regression."
+}

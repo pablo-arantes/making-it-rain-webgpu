@@ -157,47 +157,33 @@ so 1 ns at a 2 fs timestep is **under 8 minutes** — against the test's
 90-minute budget. Minimisation comes first and shows `progress=0` for its
 duration. 3HTB, at 26,749 atoms, runs at about **150 steps/s** (26 ns/day).
 
-🔴 **A long browser run can have its page closed, and the report blames your
-engine.** Playwright says
+🔴 **Run the 1 ns gate instrumented, and read the ticker rather than theorising
+from Chrome's stderr.** The gate samples `window.__mirRun`, the progress element
+and the JS heap every 60 s and captures `crash`, `pageerror` and console errors
+in a `finally`. That is there because the gate failed twice with
 
 ```
 Error: page.waitForFunction: Target page, context or browser has been closed
 ```
 
 which names the wait, so it reads as a condition that never came true — a
-stalled kernel — when the page simply went away. **This is unsolved.** What is
-measured so far, on the 1 ns dodecahedron gate:
+stalled kernel — when the page had simply gone away. **Three explanations were
+offered and all three were wrong**, each eliminated only once there was a
+measurement:
 
-| attempt | died after | notes |
-| --- | --- | --- |
-| plain | 66 min of a 90-min budget | other work running on the machine |
-| `caffeinate -dimsu`, machine otherwise idle | **5.4 min** | no crash in the log |
+| theory | what killed it |
+| --- | --- |
+| a rebuild of `dist/` under the live `vite preview` | the browser lane runs off the **dev server**, never touches `dist/`, and failed identically |
+| display sleep | `caffeinate -dimsu` made it fail *twelve times sooner* (5.4 min against 66), and `CVDisplayLink ... CVReturn: -6670` appears in runs that **pass** |
+| renderer OOM | the heap is flat at 11–18 MB across 15 minutes with no trend |
 
-So **`caffeinate` is not the fix** — the second attempt failed twelve times
-sooner than the first. An earlier version of this note said it was, on the
-strength of `bonded.spec.ts`'s 3HTB case failing at about 5 minutes and then
-passing in 5.8 under `caffeinate`. That case is simply *intermittent*, and one
-pass does not clear it.
-
-🔴 **`CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670` is a red
-herring.** It appears ten times in runs that **pass**, so it is startup noise
-rather than the cause, and it was the whole basis of the display-sleep theory.
-Two more things that look like causes and are not: a rebuild of `dist/` under
-the running `vite preview` (the browser lane runs off the **dev server**, never
-touches `dist/`, and fails the same way) and the engine changes in flight at
-the time (the short run-page test exercises the same protocol, DCD frames and
-checkpoint included, and passed).
-
-Do not run `npm run build:web` during a gate anyway — `playwright.config.ts`
-runs it itself for `MIR_LONG_RUN=1` and then serves `vite preview`, so a second
-build empties `outDir` under a live page.
-
-The reason this has been diagnosed twice and wrongly twice is that the only
-real signal — `window.__mirRun` and the progress element — dies with the page,
-and Chrome is launched with `--remote-debugging-pipe` rather than a port, so
-nothing outside Playwright can read it. The gate therefore logs its own
-progress every 60 s and captures `crash`, `pageerror` and console errors; read
-those before forming a theory.
+The instrumented run passed in 15.3 minutes, stepping monotonically to 490,000
+at a steady 554 steps/s. The one thing that changed is the 60-second
+`page.evaluate`, which also touches an otherwise un-interacted tab — a
+**hypothesis**, not a finding, and the two failures stay unexplained. The
+practical rule is the instrumentation: a run that dies having printed a rising
+step count is an environment problem, and one that dies with a flat count is
+yours.
 
 🔴 **Those numbers moved by 6x in one day, so do not trust a remembered one.**
 `docs/measurements/profile-step-m3pro.json` and `gate-1ns-m3pro.json` carry the
