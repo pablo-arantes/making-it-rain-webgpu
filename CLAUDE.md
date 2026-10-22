@@ -289,6 +289,21 @@ fold on purpose: if the home cell and the pair vector disagreed for an atom near
 a boundary, atom *i* would miss *j* while *j* still found *i*, which leaks
 momentum.
 
+🔴 **A neighbour list is correct when it is built, whatever its rebuild
+criterion.** So comparing forces at one configuration cannot test the criterion
+at all — what a wrong one costs is pairs that go missing *between* rebuilds,
+intermittently. `validateNeighbours` therefore runs both paths NVE from the same
+minimised state and compares the energy slopes: equal to seven significant
+figures over 248 rebuilds on 1L2Y and 63 on 3HTB, so the list reproduces the
+cell-shell trajectory bit for bit. For scale, a stale cell list at an interval
+of 20 steps reads 13.7 kJ/mol/ns/atom against 0.0023 rebuilt every step.
+
+That check also has to prove it is comparing two things: the list run must
+rebuild and the shell run must not, or two equal slopes are one path agreeing
+with itself. Those counts are asserted. Treat the slope itself as a comparison
+and never as the engine's drift figure — it is NVE from an unequilibrated
+structure, and the calibrated gate is `validate-loop.ts`.
+
 🔴 **This machine cannot catch a binding overrun.**
 `maxStorageBuffersPerShaderStage` has a mandated floor of 8 and Apple reports
 far more, so a kernel that bound nine would compile here, pass every

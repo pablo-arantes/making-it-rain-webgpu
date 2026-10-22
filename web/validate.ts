@@ -563,6 +563,21 @@ async function main(): Promise<void> {
           ${(neighbours.particleCount * 3).toLocaleString("en-US")} force
           components differ, worst by ${neighbours.worstForceDifference};
           overflowed ${String(neighbours.overflowed)}.
+        </p>
+        <p class="note">
+          And over a trajectory, which is the part one evaluation cannot check:
+          a list is correct when it is built whatever the rebuild criterion
+          says, and a wrong criterion loses pairs <em>between</em> rebuilds.
+          NVE drift over ${neighbours.driftSteps} steps from the same minimised
+          state — list
+          ${neighbours.listDriftPerAtomPerNs.toExponential(2)}, shell
+          ${neighbours.shellDriftPerAtomPerNs.toExponential(2)} kJ/mol per atom
+          per ns, after ${neighbours.listRebuilds} rebuilds against the shell
+          path's ${neighbours.shellRebuilds} — which is what stops this being a
+          comparison of a path with itself. Equal to five figures means the two
+          produce the same trajectory bit for bit, not just the same forces
+          once. The slope is not the engine's drift figure: this is NVE from an
+          unequilibrated structure, and the calibrated gate is the loop check.
           <span class="badge ${neighbours.ok ? "ok" : "bad"}">${
             neighbours.ok ? "pass" : "fail"
           }</span>

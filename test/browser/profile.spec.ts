@@ -137,6 +137,21 @@ test.describe("the step profile", () => {
       expect(neighbours.differing).toBe(0);
       expect(neighbours.worstForceDifference).toBe(0);
       expect(neighbours.ok).toBe(true);
+
+      // 🔴 The two paths must have *been* two paths. The list run rebuilds and
+      // the shell run cannot, because it has no list; without this the drifts
+      // agreeing would be a path agreeing with itself, which is the kind of
+      // check that passes forever and tests nothing.
+      expect(neighbours.listRebuilds).toBeGreaterThan(0);
+      expect(neighbours.shellRebuilds).toBe(0);
+      // And having been two paths, they produce the same trajectory. Equal
+      // slopes over hundreds of rebuilds is what says the rebuild criterion
+      // never loses a pair *between* rebuilds -- the failure a single
+      // evaluation cannot see, and the one a Verlet list gets wrong.
+      expect(neighbours.listDriftPerAtomPerNs).toBeCloseTo(
+        neighbours.shellDriftPerAtomPerNs,
+        6,
+      );
       // One cell has to be at least as wide as the list's radius, or the
       // 27-cell shell cannot reach the pairs the list is supposed to hold --
       // unless there are exactly three cells an axis, where the shell is the

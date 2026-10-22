@@ -872,6 +872,30 @@
    "Throughput was first measured on the loop that `profileStep` had just run. That replays step 0's parameter block, so the thermostat draw is the same every time -- a systematic kick, not a random one -- and it heats the system. The run after it measured a blown-up system.",
    "Then it was measured from the fixture state without minimising. 3HTB went from -7.6 kJ/mol an atom to -26,893 on the shell path and -56,929 on the list path over 200 steps: both diverging, and a diverging run is slower because its cells stop being even. Both numbers measured nothing. 1L2Y's fixture happens to be relaxed, which is why it looked fine. The harness now minimises first and reports the final energy per atom of both runs, because a throughput number alone cannot tell a fast engine from a diverging one.",
    "The earlier 3HTB figure of 33.1 steps/s came from the per-kernel profile rather than a run, and understated the shell path: a real minimised run is 82.5 steps/s."
-  ]
+  ],
+  "trajectory_agreement": {
+   "comment": "The force comparison is one configuration, which cannot see the failure a Verlet list actually has: pairs that go missing BETWEEN rebuilds, because the rebuild criterion is wrong. A list is correct at the moment it is built whatever the criterion says. So both paths are run NVE from the same minimised state and their energy slopes compared.",
+   "guard": "The list run must rebuild and the shell run must not, or the two drifts agreeing is a path agreeing with itself. Asserted in test/browser/profile.spec.ts.",
+   "caveat": "The slope is NOT the engine's drift figure and must not be quoted as one: this is NVE from a minimised but unequilibrated structure, so the structure is still relaxing. The calibrated gate is validate-loop.ts against the basis in AGENTS.md.",
+   "fixtures": {
+    "1L2Y": {
+     "driftSteps": 3372,
+     "listRebuilds": 248,
+     "shellRebuilds": 0,
+     "listDriftPerAtomPerNs": 0.41464494818016073,
+     "shellDriftPerAtomPerNs": 0.41464494818016073,
+     "agreesToSignificantFigures": 7
+    },
+    "3HTB": {
+     "driftSteps": 400,
+     "listRebuilds": 63,
+     "shellRebuilds": 0,
+     "listDriftPerAtomPerNs": 0.765329350456359,
+     "shellDriftPerAtomPerNs": 0.765329350456359,
+     "agreesToSignificantFigures": 7
+    }
+   },
+   "result": "Equal to seven significant figures on both fixtures, over 248 rebuilds on 1L2Y and 63 on 3HTB. The two paths produce the same trajectory bit for bit, not merely the same forces once."
+  }
  }
 }
