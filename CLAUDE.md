@@ -346,14 +346,26 @@ momentum.
 
 🔴 **For a triclinic cell the oracle is OpenMM's CPU platform, not Reference.**
 The Reference platform's neighbour list reports pairs that are genuinely inside
-the cutoff as non-interacting — 72 of 689 counted directly on a dodecahedral
-1L2Y, zero on a cube. The loss sits in a thin shell at the cutoff and lands with
-opposite sign in Coulomb and Lennard-Jones (ours read 7.0 kJ/mol low on LJ, 11.0
-high on Coulomb, cancelling to 3.9 in the total), so it reads as a small
-implementation difference rather than as missing pairs. Everywhere else in this
-project Reference *is* the oracle, which is what makes this a trap: the minimum
-image, the cell list, alpha and the dispersion correction were each eliminated
-before the oracle came under suspicion. `docs/measurements/
+the cutoff as non-interacting, and the loss scales with how skewed the cell is —
+same solute, same padding, same 1.0 nm cutoff:
+
+| shape | missed | narrowest ÷ shortest edge | closest missed |
+| --- | --- | --- | --- |
+| cube | 0 of 850 | 1.000 | — |
+| octahedron | 23 of 657 | 0.816 | 0.7156 nm |
+| dodecahedron | 72 of 689 | 0.707 | 0.6394 nm |
+
+Everywhere else in this project Reference *is* the oracle, which is what makes
+this a trap: the minimum image, the cell list, alpha, the dispersion correction,
+the exceptions and the exclusion correction were each eliminated before the
+oracle came under suspicion.
+
+🔴 **The missed pairs are not confined to the cutoff**, and an earlier version
+of this note said they were. The closest one is at 0.64 nm against a 1.0 nm
+cutoff, where a Coulomb or Lennard-Jones term is not small. What keeps the total
+error at a few kJ/mol is cancellation — 7.0 low on Lennard-Jones against 11.0
+high on Coulomb — not the individual pairs being negligible. So do not assume a
+small total means a small defect. `docs/measurements/
 triclinic-reference-parity.json` has the whole chain.
 
 🔴 **Build triclinic fixtures with the oracle environment, OpenMM 8.4+.**
