@@ -33,14 +33,47 @@ struct RestraintParams {
   // Only `.xy` is used: low word then high.
   box: array<vec4<u32>, 3>,
   half_box: array<vec4<u32>, 3>,
+  /// The off-diagonal lattice components in fixed point and the inverse box in
+  /// f32, appended so no existing offset moves. Zero and diagonal for a
+  /// rectangular cell.
+  off_box: array<vec4<u32>, 3>,
+  inverse: array<vec4<f32>, 3>,
 }
 
 /// The displacement from a reference point to an atom, nearest image, in nm.
-fn restraint_delta(atom: u32, term: u32, axis: u32) -> f32 {
-  return minimum_image64(
-    sub64(positions[atom * 3u + axis], restraint_reference[term * 3u + axis]),
-    restraint.box[axis].xy,
-    restraint.half_box[axis].xy,
+///
+/// A skewed cell takes the general reduction, which needs all three components
+/// together; a rectangular one keeps the per-axis `minimum_image64` it had.
+///
+/// 🔴 `minimum_image64` here, not `nearest_image_box`: a restraint reference is
+/// an *arbitrary* point from the system the restraints were built on, not a
+/// position this engine has folded into the cell, so there is no `|Δf| < 1` to
+/// rely on. The general reduction handles that too -- its f32 estimate is a
+/// `round`, not a one-of-three choice -- but the rectangular path needs the
+/// unbounded version rather than the single shift.
+fn restraint_vector(atom: u32, term: u32) -> vec3<f32> {
+  let dx = sub64(positions[atom * 3u + 0u], restraint_reference[term * 3u + 0u]);
+  let dy = sub64(positions[atom * 3u + 1u], restraint_reference[term * 3u + 1u]);
+  let dz = sub64(positions[atom * 3u + 2u], restraint_reference[term * 3u + 2u]);
+  let skewed = (restraint.off_box[0].x | restraint.off_box[0].y |
+                restraint.off_box[1].x | restraint.off_box[1].y |
+                restraint.off_box[2].x | restraint.off_box[2].y) != 0u;
+  if (skewed) {
+    return nearest_image_triclinic(
+      array<vec2<u32>, 3>(dx, dy, dz),
+      array<vec2<u32>, 3>(
+        restraint.box[0].xy, restraint.box[1].xy, restraint.box[2].xy,
+      ),
+      array<vec2<u32>, 3>(
+        restraint.off_box[0].xy, restraint.off_box[1].xy, restraint.off_box[2].xy,
+      ),
+      restraint.inverse[0].xyz, restraint.inverse[1].xyz, restraint.inverse[2].xyz,
+    );
+  }
+  return vec3<f32>(
+    minimum_image64(dx, restraint.box[0].xy, restraint.half_box[0].xy),
+    minimum_image64(dy, restraint.box[1].xy, restraint.half_box[1].xy),
+    minimum_image64(dz, restraint.box[2].xy, restraint.half_box[2].xy),
   );
 }
 
@@ -51,11 +84,7 @@ fn position_restraint(@builtin(global_invocation_id) gid: vec3<u32>) {
   let atom = restraint_terms[term].x;
   let k = bitcast<f32>(restraint_terms[term].y);
 
-  let d = vec3<f32>(
-    restraint_delta(atom, term, 0u),
-    restraint_delta(atom, term, 1u),
-    restraint_delta(atom, term, 2u),
-  );
+  let d = restraint_vector(atom, term);
   accumulate_energy(k * dot(d, d));
   // F = -dE/dr = -2 k d.
   add_force(atom, -2.0 * k * d);

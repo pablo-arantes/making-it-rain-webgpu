@@ -27,6 +27,47 @@ struct Params {
   /// image; only `.xy` of each is used.
   box_fixed: array<vec4<u32>, 3>,
   half_box_fixed: array<vec4<u32>, 3>,
+  /// The off-diagonal lattice components in fixed point and the inverse box in
+  /// f32, appended so no existing offset moves. Zero and diagonal for a
+  /// rectangular cell.
+  off_fixed: array<vec4<u32>, 3>,
+  inverse: array<vec4<f32>, 3>,
+}
+
+/// Whether the cell is skewed, from the off-diagonals being non-zero.
+fn exception_cell_is_skewed() -> bool {
+  return (params.off_fixed[0].x | params.off_fixed[0].y |
+          params.off_fixed[1].x | params.off_fixed[1].y |
+          params.off_fixed[2].x | params.off_fixed[2].y) != 0u;
+}
+
+/// The pair vector between two atoms, nearest image.
+///
+/// A skewed cell takes the general reduction, which has to see all three
+/// components at once -- `delta_image_axis` returns one, which is why the
+/// rectangular form can be three independent calls and this cannot.
+fn exception_vector(i: u32, j: u32) -> vec3<f32> {
+  if (exception_cell_is_skewed()) {
+    return nearest_image_triclinic(
+      array<vec2<u32>, 3>(
+        sub64(positions[j * 3u + 0u], positions[i * 3u + 0u]),
+        sub64(positions[j * 3u + 1u], positions[i * 3u + 1u]),
+        sub64(positions[j * 3u + 2u], positions[i * 3u + 2u]),
+      ),
+      array<vec2<u32>, 3>(
+        params.box_fixed[0].xy, params.box_fixed[1].xy, params.box_fixed[2].xy,
+      ),
+      array<vec2<u32>, 3>(
+        params.off_fixed[0].xy, params.off_fixed[1].xy, params.off_fixed[2].xy,
+      ),
+      params.inverse[0].xyz, params.inverse[1].xyz, params.inverse[2].xyz,
+    );
+  }
+  return vec3<f32>(
+    delta_image_axis(i, j, 0u, params.box_fixed[0].xy, params.half_box_fixed[0].xy),
+    delta_image_axis(i, j, 1u, params.box_fixed[1].xy, params.half_box_fixed[1].xy),
+    delta_image_axis(i, j, 2u, params.box_fixed[2].xy, params.half_box_fixed[2].xy),
+  );
 }
 
 @compute @workgroup_size(64)
@@ -45,11 +86,7 @@ fn direct_exceptions(@builtin(global_invocation_id) gid: vec3<u32>) {
   // Wrapped in fixed point before conversion, like the pair kernel: an
   // exception can span a periodic boundary, and converting a box-sized
   // difference to f32 first rounds away what the wrap would have used.
-  let d = vec3<f32>(
-    delta_image_axis(i, j, 0u, params.box_fixed[0].xy, params.half_box_fixed[0].xy),
-    delta_image_axis(i, j, 1u, params.box_fixed[1].xy, params.half_box_fixed[1].xy),
-    delta_image_axis(i, j, 2u, params.box_fixed[2].xy, params.half_box_fixed[2].xy),
-  );
+  let d = exception_vector(i, j);
   let r_squared = dot(d, d);
   let r = sqrt(r_squared);
   let alpha_r = params.alpha * r;

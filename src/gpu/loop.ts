@@ -1047,7 +1047,7 @@ export class StepLoop {
     );
     write(
       this.direct.exceptionParams,
-      packExceptionParams(this.nonbonded, box, this.alpha),
+      packExceptionParams(this.nonbonded, box, boxVectors, this.alpha),
     );
     write(
       this.pme.pmeParams,
@@ -1067,7 +1067,7 @@ export class StepLoop {
       this.direct.verlet.searchRadius,
     );
     for (const restraint of this.restraints) {
-      write(restraint.params, packRestraintParams(restraint.count, box));
+      write(restraint.params, packRestraintParams(restraint.count, box, boxVectors));
     }
 
     const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);

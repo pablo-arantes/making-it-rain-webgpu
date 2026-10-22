@@ -364,8 +364,11 @@ export function writeInverseBox(
  */
 export const PAIR_PARAMS_BYTES = 256;
 
-/** 32 bytes of struct, then the fixed-point box and half box to 128. */
-export const EXCEPTION_PARAMS_BYTES = 128;
+/**
+ * 32 bytes of struct, the fixed-point box and half box to 128, then the three
+ * off-diagonal lattice components at 128 and the inverse box at 176.
+ */
+export const EXCEPTION_PARAMS_BYTES = 224;
 
 /**
  * Pack the pair kernel's uniform.
@@ -413,6 +416,7 @@ export function packPairParams(
 export function packExceptionParams(
   force: NonbondedForce,
   box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
 ): Uint8Array {
   const bytes = new ArrayBuffer(EXCEPTION_PARAMS_BYTES);
@@ -425,6 +429,8 @@ export function packExceptionParams(
   f32[6] = box[2] as number;
   u32[7] = force.exceptionCount;
   writeFixedBox(u32, 8, box);
+  writeOffDiagonalBox(u32, 32, boxVectors);
+  writeInverseBox(f32, 44, boxVectors);
   return new Uint8Array(bytes);
 }
 
@@ -713,7 +719,7 @@ export function prepareDirect(
   device.queue.writeBuffer(
     exceptionParams,
     0,
-    packExceptionParams(force, box, alpha) as unknown as BufferSource,
+    packExceptionParams(force, box, boxVectors, alpha) as unknown as BufferSource,
   );
 
   return {

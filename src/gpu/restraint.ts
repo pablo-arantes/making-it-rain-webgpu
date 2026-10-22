@@ -22,7 +22,11 @@ import { RESTRAINT } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { storageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
-import { writeFixedBox } from "./nonbonded.js";
+import {
+  writeFixedBox,
+  writeInverseBox,
+  writeOffDiagonalBox,
+} from "./nonbonded.js";
 import { rectangularBox } from "../reference/forces/nonbonded.js";
 import type { Pass, PipelineCache } from "./pipeline.js";
 import type { PositionRestraintForce, Vec3 } from "../engine/system.js";
@@ -37,10 +41,20 @@ import type { PositionRestraintForce, Vec3 } from "../engine/system.js";
  *
  * A function because the barostat rewrites it.
  */
-export function packRestraintParams(count: number, box: Vec3): Uint32Array {
-  const params = new Uint32Array(28);
+/**
+ * 16 bytes of struct, the fixed-point box and half box to 112, then the three
+ * off-diagonal lattice components at 112 and the inverse box at 160.
+ */
+export function packRestraintParams(
+  count: number,
+  box: Vec3,
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+): Uint32Array {
+  const params = new Uint32Array(52);
   params[0] = count;
   writeFixedBox(params, 4, box);
+  writeOffDiagonalBox(params, 28, boxVectors);
+  writeInverseBox(new Float32Array(params.buffer), 40, boxVectors);
   return params;
 }
 
@@ -93,7 +107,11 @@ export function prepareRestraint(
     count: force.count,
     terms: put("terms", terms, storageUsage()),
     reference: put("reference", reference, storageUsage()),
-    params: put("params", packRestraintParams(force.count, box), uniformUsage()),
+    params: put(
+      "params",
+      packRestraintParams(force.count, box, boxVectors),
+      uniformUsage(),
+    ),
   };
 }
 
