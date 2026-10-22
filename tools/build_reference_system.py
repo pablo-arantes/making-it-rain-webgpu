@@ -192,11 +192,18 @@ def build(args) -> dict:
     facts["atoms_before_addHydrogens"] = modeller.topology.getNumAtoms()
     modeller.addHydrogens(forcefield, pH=args.ph)
     facts["atoms_after_addHydrogens"] = modeller.topology.getNumAtoms()
+    # `boxShape` is the notebook's own option. A dodecahedron holds about 71%
+    # of the water of the enclosing cube for the same padding, and the engine
+    # refuses one today -- so a fixture is how the engine's triclinic path gets
+    # something to be differentially tested against before our own solvation
+    # can build one.
     modeller.addSolvent(forcefield, model=args.water,
                         padding=args.padding * unit.angstrom,
+                        boxShape=args.box_shape,
                         ionicStrength=args.concentration * unit.molar,
                         positiveIon="Na+" if args.ions == "NaCl" else "K+",
                         negativeIon="Cl-")
+    facts["box_shape"] = args.box_shape
     topology = modeller.getTopology()
     # cell 17 shifts the whole system by +30 A before writing system.pdb
     positions = modeller.getPositions() + np.array([30, 30, 30]) * unit.angstrom
@@ -303,6 +310,10 @@ def main() -> None:
     p.add_argument("--protein-ff", default="ff14SB", choices=sorted(PROTEIN_FF))
     p.add_argument("--water", default="tip3p", choices=["tip3p", "spce"])
     p.add_argument("--padding", type=float, default=4.0, help="angstrom")
+    p.add_argument("--box-shape", default="cube",
+                   choices=["cube", "dodecahedron", "octahedron"],
+                   help="the notebook's boxShape; a dodecahedron holds ~71% of "
+                        "the water for the same padding")
     p.add_argument("--ions", default="NaCl", choices=["NaCl", "KCl"])
     p.add_argument("--concentration", type=float, default=0.15, help="molar")
     p.add_argument("--ph", type=float, default=7.4)

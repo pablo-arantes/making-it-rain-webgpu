@@ -1,0 +1,79 @@
+{
+ "what": "OpenMM's dodecahedral solvation of 1L2Y, against the cubic one, and against the triclinic numerics in src/reference/triclinic.ts.",
+ "date": "2026-10-22",
+ "produced_by": "tools/build_reference_system.py --pdb-id 1L2Y --box-shape dodecahedron --case 1L2Y-dodecahedron; facts pinned by test/triclinic-fixture.test.ts",
+ "host": "OpenMM 7.7.0.dev-db4cefd, Apple M3 Pro",
+ "cube": {
+  "atoms": 2373,
+  "waters": 688,
+  "box_nm": 3.08064,
+  "volume_nm3": 29.236
+ },
+ "dodecahedron": {
+  "atoms": 1855,
+  "waters": 516,
+  "width_nm": 3.0796129339021414,
+  "box_vectors_nm": [
+   [
+    3.0796129339021414,
+    0,
+    0
+   ],
+   [
+    0,
+    3.0796129339021414,
+    0
+   ],
+   [
+    1.5398064669510707,
+    1.5398064669510707,
+    2.1776151889920032
+   ]
+  ],
+  "volume_nm3": 20.653,
+  "volume_vs_cube": 0.7071067811865476,
+  "edge_lengths_nm": [
+   3.0796,
+   3.0796,
+   3.0796
+  ],
+  "perpendicular_widths_nm": [
+   2.5145,
+   2.5145,
+   2.1776
+  ],
+  "maximum_cutoff_nm": 1.0888,
+  "system_cutoff_nm": 1.0,
+  "headroom": 1.089
+ },
+ "savings": {
+  "atoms": 0.7817,
+  "waters": 0.75,
+  "note": "The water count falls by 25% where the volume falls by 29%: the solute is the same size in both, the padding is measured to the solute rather than between images, and whole molecules are kept or dropped. A ~22% atom saving is ~22% of a run's time and memory."
+ },
+ "findings": [
+  "Our boxVectorsForShape reproduces OpenMM's vectors exactly -- 0 difference, not merely close -- so both compute d/2 and d*sqrt(2)/2 from the same d.",
+  "Every edge of the cell (3.0796 nm) is longer than every perpendicular width (2.5145, 2.5145, 2.1776), so an edge-based cutoff bound would allow 1.5 nm where the real ceiling is 1.0888. That is the trap the bound exists for.",
+  "OpenMM's own default solvation fits the bound with 8.9% headroom. It is a live constraint, not a formality: the 1.2 nm cutoff some protocols use would not fit this box, so it has to be checked per system and reported."
+ ],
+ "still_refused_by": {
+  "reference": [
+   "potential.ts",
+   "forces/nonbonded.ts",
+   "forces/pme.ts",
+   "forces/restraint.ts"
+  ],
+  "gpu": [
+   "nonbonded.ts",
+   "pme.ts",
+   "loop.ts",
+   "restraint.ts",
+   "verify.ts",
+   "validate.ts",
+   "validate-cell-list.ts",
+   "validate-pbc.ts",
+   "validate-protocol.ts"
+  ],
+  "note": "Every one of these calls rectangularBox, which throws. The reference four are the next stage and are testable in the no-GPU lane against OpenMM's energy for this fixture; PME's reciprocal lattice is the hard one."
+ }
+}

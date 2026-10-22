@@ -486,11 +486,37 @@ agree with pytraj. `docs/PREPARATION.md` has the tables.
 gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
 `src/prep/prmtop.ts`. One item did not make it:
 
-1. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
-   image in the solvation clash tests, in the engine's cell list and now in the
-   neighbour list's search radius too. A dodecahedron holds ~70% of the water for
-   the same padding, so this is a real saving, not tidiness.
-   `UnsupportedBoxShape` in `src/prep/solvate.ts` is where it refuses.
+1. **A non-rectangular box** (deviation 19). Two stages of it are done and the
+   rest is mapped.
+
+   Done: the numerics (`src/reference/triclinic.ts` — reduction, perpendicular
+   widths, minimum image, the cutoff bound), pinned against OpenMM by
+   `tools/dump_triclinic.py`; and a real fixture,
+   `tools/build_reference_system.py --box-shape dodecahedron`, which gives 1,855
+   atoms against the cube's 2,373. Our box construction reproduces OpenMM's
+   vectors *exactly*, and OpenMM's own default solvation satisfies the cutoff
+   bound with 8.9% headroom — live, not a formality, since the 1.2 nm cutoff some
+   protocols use would not fit.
+   `docs/measurements/triclinic-dodecahedron-1L2Y.json` has the numbers.
+
+   Next, and the reason the refusal stays: every one of these calls
+   `rectangularBox`, which throws.
+
+   * reference — `potential.ts`, `forces/nonbonded.ts`, `forces/pme.ts`,
+     `forces/restraint.ts`. Do these first: they are testable in the no-GPU lane
+     against OpenMM's energy for the dodecahedral fixture, which is a real
+     differential test and not a self-consistency one.
+   * GPU — `nonbonded.ts`, `pme.ts`, `loop.ts`, `restraint.ts`, `verify.ts`,
+     `validate.ts`, `validate-cell-list.ts`, `validate-pbc.ts`,
+     `validate-protocol.ts`.
+   * and then `src/prep/solvate.ts`, whose `PeriodicGrid` buckets in Cartesian
+     space and would have to bucket in fractional space instead.
+
+   **PME's reciprocal lattice is the hard part** and is where the risk is; the
+   direct space is now a solved problem. `UnsupportedBoxShape` in
+   `src/prep/solvate.ts` is where preparation refuses, and
+   `TriclinicBoxUnsupported` in `src/reference/forces/nonbonded.ts` is where the
+   engine does.
 
 **Phase 4 is done**, and it was half the project's stated scope:
 protein–ligand. A heterogen picker that asks which residue is the ligand rather
