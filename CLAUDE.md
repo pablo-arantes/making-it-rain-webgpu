@@ -289,6 +289,19 @@ fold on purpose: if the home cell and the pair vector disagreed for an atom near
 a boundary, atom *i* would miss *j* while *j* still found *i*, which leaks
 momentum.
 
+🔴 **A triclinic cell's cutoff is bounded by its narrowest *perpendicular*
+width, not by any edge length.** For a 3 nm dodecahedron the edges are 3, 3 and
+3.67 nm while the widths are 2.12, 2.12 and 3 — so an edge-based bound passes a
+1.5 nm cutoff that silently loses pairs, where the real ceiling is 1.06. The
+notebook's default 1.0 nm fits a 3 nm dodecahedron, but only just.
+
+Within that bound the minimum image is three subtractions, the same shape as the
+rectangular path. Beyond it the reduction starts returning the wrong image, and
+`src/reference/triclinic.ts` has the measurement: 0 wrong of 34,992 in-cutoff
+pairs at 1.0 nm, 6,839 of 91,663 at 1.3× the bound. An earlier reading of the
+same arithmetic concluded a 27-image search was unavoidable — that was measured
+over *all* separations instead of the in-cutoff ones, and was wrong.
+
 🔴 **A neighbour list is correct when it is built, whatever its rebuild
 criterion.** So comparing forces at one configuration cannot test the criterion
 at all — what a wrong one costs is pairs that go missing *between* rebuilds,
