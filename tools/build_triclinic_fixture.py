@@ -269,6 +269,11 @@ def main() -> None:
         handle.write(XmlSerializer.serialize(state))
     with open(os.path.join(args.out, "facts.json"), "w") as handle:
         json.dump(facts, handle, indent=1)
+    # The run page needs a topology to name atoms in the DCD and the output
+    # PDB, and it has to carry the *minimised* coordinates so it matches
+    # state.xml rather than the structure before relaxation.
+    with open(os.path.join(args.out, "system.pdb"), "w") as handle:
+        app.PDBFile.writeFile(topology, state.getPositions(), handle)
 
     print(f"{args.shape}: {facts['atoms_total']} atoms, {facts['waters']} waters, "
           f"volume {facts['volume_nm3']:.2f} nm^3")

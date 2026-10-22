@@ -13,7 +13,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { DcdWriter } from "../src/analysis/dcd.js";
 import { decodeNpy } from "../src/analysis/npy.js";
-import type { Vec3 } from "../src/engine/system.js";
 
 const dir = process.argv[2] ?? "fixtures/dcd";
 const facts = JSON.parse(readFileSync(`${dir}/facts.json`, "utf8")) as {
@@ -49,7 +48,11 @@ for (let frame = 0; frame < facts.frames; frame++) {
   chunks.push(
     writer.frame(
       positions.slice(frame * stride, (frame + 1) * stride),
-      boxes.slice(frame * 3, frame * 3 + 3) as unknown as Vec3,
+      [
+        [boxes[frame * 3] as number, 0, 0],
+        [0, boxes[frame * 3 + 1] as number, 0],
+        [0, 0, boxes[frame * 3 + 2] as number],
+      ],
     ),
   );
 }

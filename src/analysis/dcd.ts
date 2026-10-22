@@ -28,6 +28,66 @@
  */
 
 import type { Vec3 } from "../engine/system.js";
+import type { BoxVectors } from "../reference/triclinic.js";
+
+/**
+ * A DCD unit cell: three edge lengths and three angle cosines.
+ *
+ * 🔴 **Edge lengths, not the box vectors' diagonal.** For a rhombic
+ * dodecahedron of width `w` all three edges are `w` and two of the angles are
+ * 60 degrees, while the diagonal is `(w, w, 0.707w)` -- so handing a writer the
+ * diagonal and assuming right angles yields a cell with the right *volume* and
+ * the wrong shape. `computeLengthsAndAngles` in
+ * `openmm/app/internal/unitcell.py` is the authority and this follows it.
+ */
+export interface UnitCell {
+  /** nm. */
+  readonly lengths: Vec3;
+  /** `[cos alpha, cos beta, cos gamma]`; all zero for a rectangular cell. */
+  readonly cosines: Vec3;
+}
+
+/**
+ * The cell OpenMM would write for these vectors.
+ *
+ * 🔴 **The cosines are the dot-product ratios, with no trip through `acos`.**
+ * `dcdfile.py` computes `sin(pi/2 - acos(r))`, which is the identity `r` --
+ * two transcendentals that cancel. Evaluating them is not merely wasteful, it
+ * is *unmatchable*: `Math.acos` and `Math.sin` in V8 are not bit-identical to
+ * CPython's libm, so following that spelling gave 0.49999999999999983 where
+ * OpenMM's own round trip returns exactly 0.5, and broke byte equality on the
+ * dodecahedral fixture by one ulp. Taking the ratio is exact, and it agrees
+ * with OpenMM to the byte on every fixture here.
+ *
+ * So this is one of the few places where *not* transcribing OpenMM's
+ * arithmetic is what reproduces OpenMM's output. Where a cosine is not exactly
+ * representable the two can still differ by an ulp -- 1e-16 on a quantity the
+ * file stores as f64 -- and the ratio is the more accurate of the two.
+ */
+export function unitCellOf(vectors: BoxVectors): UnitCell {
+  const [a, b, c] = vectors;
+  // 🔴 `dot` accumulates left to right and `norm` is `sqrt(dot(v, v))`, which
+  // is `unit_math.py` exactly. Writing the norm as `sqrt(x**2 + y**2 + z**2)`
+  // instead costs one ulp, because `**2` is `Math.pow` and is not required to
+  // return the same double as `x * x`. The lengths go into the file directly,
+  // so that ulp is visible in a byte comparison.
+  const dot = (u: Vec3, v: Vec3): number =>
+    (u[0] as number) * (v[0] as number) +
+    (u[1] as number) * (v[1] as number) +
+    (u[2] as number) * (v[2] as number);
+  const norm = (v: Vec3): number => Math.sqrt(dot(v, v));
+  const la = norm(a as Vec3);
+  const lb = norm(b as Vec3);
+  const lc = norm(c as Vec3);
+  return {
+    lengths: [la, lb, lc],
+    cosines: [
+      dot(b as Vec3, c as Vec3) / (lb * lc),
+      dot(c as Vec3, a as Vec3) / (lc * la),
+      dot(a as Vec3, b as Vec3) / (la * lb),
+    ],
+  };
+}
 
 /** One AKMA time unit, in picoseconds. The constant DCD's `dt` is scaled by. */
 export const AKMA_PICOSECONDS = 0.04888821;
@@ -154,11 +214,16 @@ export class DcdWriter {
   /**
    * One frame.
    *
-   * `positions` is nm, xyz interleaved; `box` is the three edge lengths in nm.
-   * Both are converted to ångström here, which is the single most common way to
-   * get a DCD wrong.
+   * `positions` is nm, xyz interleaved; `box` is the **whole cell**, three
+   * vectors in nm. Both are converted to ångström here, which is the single
+   * most common way to get a DCD wrong.
+   *
+   * 🔴 This took a `Vec3` of edge lengths and assumed right angles. That is
+   * only correct for a rectangular cell, and the engine runs skewed ones now,
+   * so the signature is the fix: a caller holding a diagonal has to say what
+   * the other six components are rather than have them assumed to be zero.
    */
-  frame(positions: Float64Array, box?: Vec3): Uint8Array {
+  frame(positions: Float64Array, box?: BoxVectors): Uint8Array {
     const n = this.options.particleCount;
     if (positions.length !== n * 3) {
       throw new Error(
@@ -185,19 +250,17 @@ export class DcdWriter {
     const view = new DataView(bytes);
     let at = 0;
     if (this.periodic) {
-      const lengths = box as Vec3;
+      const { lengths, cosines } = unitCellOf(box as BoxVectors);
       view.setInt32(at, 48, true);
       at += 4;
-      // [a, cos gamma, b, cos beta, cos alpha, c]. All three angles are right
-      // angles for a rectangular box, so the cosines are zero -- the engine
-      // refuses triclinic boxes upstream (`TriclinicBoxUnsupported`), and this
-      // is where that assumption is written down.
+      // [a, cos gamma, b, cos beta, cos alpha, c] -- the order is CHARMM's and
+      // the angles run backwards through it, which is worth reading twice.
       const cell = [
         (lengths[0] as number) * TO_ANGSTROM,
-        0,
+        cosines[2] as number,
         (lengths[1] as number) * TO_ANGSTROM,
-        0,
-        0,
+        cosines[1] as number,
+        cosines[0] as number,
         (lengths[2] as number) * TO_ANGSTROM,
       ];
       for (const value of cell) {
@@ -265,8 +328,19 @@ export interface DcdTrajectory {
   readonly periodic: boolean;
   /** nm, `frameCount * particleCount * 3`, xyz interleaved per frame. */
   readonly positions: Float32Array;
-  /** nm, three edge lengths per frame; empty when the file has no boxes. */
+  /**
+   * nm, three **edge lengths** per frame; empty when the file has no boxes.
+   *
+   * Edge lengths, which for a skewed cell are not the box vectors' diagonal.
+   * `cosines` carries the rest, and without it a frame cannot be turned back
+   * into box vectors at all.
+   */
   readonly boxes: Float64Array;
+  /**
+   * `[cos alpha, cos beta, cos gamma]` per frame; empty when there are no
+   * boxes, and all zero for a rectangular cell.
+   */
+  readonly cosines: Float64Array;
 }
 
 export class DcdFormatError extends Error {
@@ -371,6 +445,7 @@ export function readDcd(file: Uint8Array): DcdTrajectory {
 
   const positions = new Float32Array(count * particleCount * 3);
   const boxes = periodic ? new Float64Array(count * 3) : new Float64Array(0);
+  const cosines = periodic ? new Float64Array(count * 3) : new Float64Array(0);
   const fromAngstrom = 1 / TO_ANGSTROM;
 
   for (let frame = 0; frame < count; frame++) {
@@ -382,13 +457,17 @@ export function readDcd(file: Uint8Array): DcdTrajectory {
         );
       }
       at += 4;
-      // [a, cos gamma, b, cos beta, cos alpha, c].
+      // [a, cos gamma, b, cos beta, cos alpha, c]. The angles run backwards
+      // through the record, so they are read by offset rather than in order.
       const a = view.getFloat64(at, true);
       const b = view.getFloat64(at + 16, true);
       const c = view.getFloat64(at + 40, true);
       boxes[frame * 3] = a * fromAngstrom;
       boxes[frame * 3 + 1] = b * fromAngstrom;
       boxes[frame * 3 + 2] = c * fromAngstrom;
+      cosines[frame * 3] = view.getFloat64(at + 32, true);
+      cosines[frame * 3 + 1] = view.getFloat64(at + 24, true);
+      cosines[frame * 3 + 2] = view.getFloat64(at + 8, true);
       at += 48;
       if (view.getInt32(at, true) !== 48) {
         throw new DcdFormatError(`frame ${frame}'s unit-cell record markers disagree`);
@@ -425,5 +504,6 @@ export function readDcd(file: Uint8Array): DcdTrajectory {
     periodic,
     positions,
     boxes,
+    cosines,
   };
 }

@@ -36,6 +36,15 @@ export interface ProtocolEngine {
   positions(): Promise<Float64Array>;
   velocities(): Promise<Float64Array>;
   boxLengths(): Vec3;
+  /**
+   * The whole cell.
+   *
+   * 🔴 `boxLengths` is its *diagonal*, which for a skewed cell is neither the
+   * edge lengths nor enough to reconstruct the shape. Anything that records the
+   * box for someone else to read -- the trajectory, the checkpoint -- needs
+   * this one.
+   */
+  boxVectors(): readonly [Vec3, Vec3, Vec3];
   setPositions(positions: Float64Array): void;
   setVelocities(velocities: Float64Array): void;
   setBox(box: Vec3): void;
@@ -271,7 +280,7 @@ export async function runStage(
     if (engine.steps % frameInterval === 0) {
       await outputs.append(
         names.trajectory,
-        writer.frame(await engine.positions(), engine.boxLengths()),
+        writer.frame(await engine.positions(), engine.boxVectors()),
       );
       frames++;
     }
@@ -311,16 +320,16 @@ export async function runStage(
     await outputs.patch(names.trajectory, offset, bytes);
   }
 
-  const box = engine.boxLengths();
   const checkpoint: OpenMMState = {
     openmmVersion: "8.4",
     stepCount: engine.steps,
     time: engine.steps * settings.timeStep,
-    boxVectors: [
-      [box[0] as number, 0, 0],
-      [0, box[1] as number, 0],
-      [0, 0, box[2] as number],
-    ],
+    // 🔴 The cell as it stands, not a diagonal rebuilt from `boxLengths`. This
+    // is the file a run is resumed from: rebuilding a rectangular cell here
+    // meant a dodecahedral run checkpointed as a *rectangular* system of the
+    // same volume, and resuming it would have continued in the wrong cell with
+    // nothing to show for it.
+    boxVectors: engine.boxVectors(),
     particleCount: engine.particleCount,
     positions: await engine.positions(),
     velocities: await engine.velocities(),

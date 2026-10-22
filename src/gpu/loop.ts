@@ -983,9 +983,14 @@ export class StepLoop {
   /**
    * The current box's diagonal, nm.
    *
-   * The diagonal, not the edge lengths: for a skewed cell those differ, and
-   * what the DCD header and the protocol want is the former. `boxVectorsNow`
-   * is the whole cell.
+   * The diagonal, not the edge lengths: for a skewed cell those differ.
+   *
+   * 🔴 An earlier version of this said the DCD wanted the diagonal. It does
+   * not: a DCD stores three *edge lengths* and three angle cosines, which for a
+   * rhombic dodecahedron are `(w, w, w)` at 60/60/90 where the diagonal is
+   * `(w, w, 0.707w)`. Use `boxVectorsNow` for anything written to a file; this
+   * is for the volume, where the product of the diagonal is the determinant and
+   * so is exactly right.
    */
   get boxLengths(): Vec3 {
     return [

@@ -39,6 +39,10 @@ export class LoopEngine implements ProtocolEngine {
     return this.loop.boxLengths;
   }
 
+  boxVectors(): readonly [Vec3, Vec3, Vec3] {
+    return this.loop.boxVectorsNow;
+  }
+
   setPositions(positions: Float64Array): void {
     this.loop.setPositions(positions);
   }

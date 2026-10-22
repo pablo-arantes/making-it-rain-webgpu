@@ -89,6 +89,13 @@ function stubEngine(particleCount: number, startStep = 0): ProtocolEngine & {
     boxLengths() {
       return box;
     },
+    boxVectors(): readonly [Vec3, Vec3, Vec3] {
+      return [
+        [box[0] as number, 0, 0],
+        [0, box[1] as number, 0],
+        [0, 0, box[2] as number],
+      ];
+    },
     setPositions() {
       calls.push("setPositions");
     },

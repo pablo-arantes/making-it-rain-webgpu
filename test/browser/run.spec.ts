@@ -18,6 +18,15 @@ import { expect, test } from "@playwright/test";
 import { existsSync, mkdirSync } from "node:fs";
 
 const fixture = "1L2Y";
+
+/**
+ * Which fixture the 1 ns gate runs, so it can be pointed at a triclinic cell.
+ *
+ * The short tests stay on `1L2Y` -- they assert its particle count and its
+ * artefact names -- but the gate asserts only that a nanosecond completes and
+ * writes files, which is true of any system the engine accepts.
+ */
+const gateFixture = process.env["MIR_GATE_FIXTURE"] ?? fixture;
 const present = existsSync(`fixtures/${fixture}/system.xml`);
 
 test.describe("the run page", () => {
@@ -184,9 +193,9 @@ test.describe("the run page", () => {
 
     await page.goto("/run.html");
     await page.waitForFunction(() => window.__mirRun?.state === "idle");
-    await page.locator("#file-system").setInputFiles(`fixtures/${fixture}/system.xml`);
-    await page.locator("#file-state").setInputFiles(`fixtures/${fixture}/state.xml`);
-    await page.locator("#file-pdb").setInputFiles(`fixtures/${fixture}/system.pdb`);
+    await page.locator("#file-system").setInputFiles(`fixtures/${gateFixture}/system.xml`);
+    await page.locator("#file-state").setInputFiles(`fixtures/${gateFixture}/state.xml`);
+    await page.locator("#file-pdb").setInputFiles(`fixtures/${gateFixture}/system.pdb`);
     await page.locator("#job").fill("gate1ns");
     await page.locator("#equil-ns").fill("0.1");
     await page.locator("#stride-ns").fill("0.9");

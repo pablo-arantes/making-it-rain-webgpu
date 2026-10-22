@@ -10,8 +10,8 @@ runnable `System` in the browser, protein or protein–ligand, runs on the GPU
 against OpenMM-calibrated thresholds, and comes back as a DCD with the
 notebook's figures.
 
-`npm run check` passes: typecheck, **662 unit and reference tests** over 48
-files, and the web build. `npm run test:browser` passes **13 tests** in Chrome —
+`npm run check` passes: typecheck, **672 unit and reference tests** over 48
+files (9 more are skipped: the Dawn and oracle lanes), and the web build. `npm run test:browser` passes **13 tests** in Chrome —
 the device and precision checks, bonded forces on both fixtures, the three
 preparation paths, the step profile, and the run page end to end. The 1 ns gate
 is the 14th and is skipped unless `MIR_LONG_RUN=1`; it passes in **7.6 minutes**.
@@ -23,8 +23,8 @@ its first step and that there were 45 tests, while Phase 4 landed and Phase 5
 started. A handoff that overstates what is left is survivable; one that
 *understates* it sends the next person to rebuild what already works. Check the
 section below against `git log` before trusting it — and the test count has
-since gone 45, 566, 628, 662, so treat that number as the first thing to
-re-measure rather than quote.
+since gone 45, 566, 628, 662, 672, so treat that number as the first thing
+to re-measure rather than quote.
 
 Done in Phase 1, which is where the engine's parity record lives:
 
