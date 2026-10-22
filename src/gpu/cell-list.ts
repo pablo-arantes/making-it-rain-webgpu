@@ -275,10 +275,12 @@ export async function planWrapPositions(
  *
  * Five dispatches, no readback. `clear` is cheap and run every time rather than
  * relying on `scan` having left the counts at zero, so a build is correct
- * whatever ran before it. `sort_cells` is the fifth, and it is not optional:
- * the pair kernel sums one atom's neighbours in registers, so the order within
- * a cell changed the answer -- measured at 1.89e-3 kJ/mol/nm, which is small
- * and is still run-to-run noise in a trajectory.
+ * whatever ran before it. `sort_cells` is the fifth, and it is not optional --
+ * though not for the reason it was written for: the pair kernel now adds every
+ * pair in fixed point, so the order within a cell cannot change a force. It is
+ * what makes the device's list comparable to the host builder's, and what gives
+ * the neighbour list built from it a defined order. The kernel's own header has
+ * the measurement and the history.
  *
  * 🔴 It does **not** include `planWrapPositions`, and must not: the fold has to
  * run every step even where the list is rebuilt less often, because the pair

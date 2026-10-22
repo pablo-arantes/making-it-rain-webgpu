@@ -11,20 +11,33 @@
 // cell depends on how the workgroups were scheduled. A fifth pass, `sort_cells`,
 // replaces it with ascending atom index.
 //
-// That pass is not tidiness. The first version of this file argued the order
-// could not matter, because the forces accumulate in 64-bit fixed point and an
-// exact integer sum is independent of the order its terms arrive in. The
-// argument is sound and the premise was false: `nonbonded-pairs.wgsl` sums one
-// atom's contributions in an **f32 register** across its neighbours and makes a
-// single fixed-point add at the end, so the per-atom sum reassociates with the
-// neighbour order. Measured, by feeding the same kernel two different orderings
-// of the same partition: 1.89e-3 kJ/mol/nm on the worst force component, about
-// 2e-6 of the force RMS. Small, and exactly the kind of run-to-run difference
-// that makes a trajectory unreproducible -- which AGENTS.md does not allow.
+// That pass has now had three different justifications, and the history is the
+// useful part.
 //
-// Sorting is also what makes the list comparable to the host builder's at all,
-// and OpenMM solves it the same way: its neighbour list is deterministic and
-// its tiles accumulate in registers too.
+// The first version argued the order could not matter, because the forces
+// accumulate in 64-bit fixed point and an exact integer sum does not depend on
+// the order its terms arrive in. Sound argument, false premise at the time:
+// `nonbonded-pairs.wgsl` then summed one atom's contributions in an **f32
+// register** and made a single fixed-point add at the end, so the per-atom sum
+// reassociated with the neighbour order -- measured at 1.89e-3 kJ/mol/nm on the
+// worst force component by feeding the same kernel two orderings of the same
+// partition.
+//
+// 🔴 That premise is now true, and this comment claimed otherwise for longer
+// than it was right. The pair kernels convert and add **every pair** in fixed
+// point (`accumulate_pair`), so nothing reassociates and the order genuinely
+// cannot change a force. The evidence is `validateNeighbours`: the cell-shell
+// path combines 27 partial sums per atom and the neighbour-list path combines
+// 8, which are different groupings of the same terms, and they agree on all
+// 80,247 force components of 3HTB bit for bit. An inexact accumulator could
+// not do that.
+//
+// So `sort_cells` stays for the two reasons that are still standing, neither of
+// which is the force. It is what makes the device's list comparable to the host
+// builder's, which is how the cell list is validated at all. And the neighbour
+// list is built by walking this one, so sorting is what gives *that* list a
+// defined order -- which AGENTS.md requires of every list a kernel walks, and
+// which is cheap insurance against a future kernel that does sum in f32.
 
 @group(0) @binding(0) var<storage, read>       positions: array<vec2<u32>>;
 @group(0) @binding(1) var<storage, read_write> cell_of: array<u32>;

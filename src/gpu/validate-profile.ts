@@ -140,7 +140,18 @@ export async function validateProfile(
   };
   // A loop that exists only to be measured: `profileStep` advances the system
   // without advancing its step counter, so this one is discarded afterwards.
+  //
+  // 🔴 Minimised first, for the same reason the timed runs are. A fixture state
+  // that has not been relaxed is a *diverging* system, and a diverging system
+  // does not just run slowly, it reallocates the step's time: its atoms spread,
+  // its cells stop being even, and the kernels that walk neighbours grow while
+  // the ones that do not stay put. Profiling that attributes a step to the
+  // wrong kernels and sends the next optimisation at the wrong one. 3HTB
+  // profiled from the raw fixture put 86.7% of a step in the list build and
+  // implied a step slower than the timed run actually was, which is the
+  // contradiction that gave it away.
   const loop = await StepLoop.fromParsed(device, system, state, options);
+  await minimiseOnDevice(loop, system, { maxIterations: 200 });
   const profile = (await loop.profileStep(repeats)) as Profile;
   // What the query set could actually hold, which may be fewer than asked for.
   const taken = profile.repeats;

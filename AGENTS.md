@@ -66,14 +66,22 @@ measurements these rest on.
   is as deterministic as a gather. Introducing a floating-point reduction across
   threads would break this.
 
-  *Every list a kernel walks is in a defined order.* A thread may still sum its
-  own terms in f32 before the one exact add at the end -- `nonbonded-pairs.wgsl`
-  does, and so does OpenMM -- and that sum reassociates with the order the terms
-  come in. So the cell list is sorted rather than left as the atomics produced
-  it. Measured, by feeding one kernel two orderings of the same partition:
-  1.89e-3 kJ/mol/nm, about 2e-6 of the force RMS. This bullet previously claimed
-  the exact accumulator made ordering irrelevant; it does not, and the claim
-  cost nothing only because the test that found it was written to check it.
+  *Every list a kernel walks is in a defined order.* This has been true for
+  three different reasons and the current one is not the original. When the pair
+  kernel summed its own terms in f32 before one exact add at the end, that sum
+  reassociated with the order the terms arrived in -- measured at 1.89e-3
+  kJ/mol/nm by feeding one kernel two orderings of the same partition -- so the
+  cell list had to be sorted or a trajectory was not reproducible.
+
+  🔴 It no longer does: `accumulate_pair` converts and adds **every pair** in
+  fixed point, so a per-atom sum is genuinely order-independent, and
+  `validateNeighbours` is the evidence rather than the argument -- the cell-shell
+  path combines 27 partial sums an atom and the list path combines 8, different
+  groupings of the same terms, agreeing on all 80,247 force components of 3HTB
+  bit for bit. Keep the rule anyway: it is what makes the device's cell list
+  comparable to the host builder's, which is how that list is validated, and it
+  is what gives the neighbour list a defined order. But know which argument is
+  load-bearing, because this bullet has twice stated the wrong one.
 
   Across devices bitwise agreement is not promised, and the reason is recorded.
 - **The neighbour list is an optimisation and gives way rather than failing.**

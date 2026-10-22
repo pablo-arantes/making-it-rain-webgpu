@@ -87,7 +87,9 @@ All five are named inputs in `vite.config.ts`. 🔴 Vite discovers only
 development and is **silently missing from a production build**.
 
 `MIR_LONG_RUN=1 npx playwright test -g nanosecond` runs the plan's 1 ns gate,
-about 38 minutes at the measured 38 ns/day. It is skipped otherwise.
+**about 8 minutes** at the measured 210 ns/day. It is skipped otherwise. It was
+43 minutes before the kernel work in `docs/measurements/profile-step-m3pro.json`,
+so treat any older figure for it with suspicion.
 
 🔴 **Do not edit `src/` while a browser run is in flight.** The dev server
 watches it, and `web/run.ts` imports the engine straight out of it — `run.ts` →
@@ -150,11 +152,16 @@ await page.evaluate(() => window.__mirRun)   // state, stages, reports, artefact
 await page.locator("progress").getAttribute("value")   // steps completed
 ```
 
-Measured on this machine, 1L2Y through `web/run.html`: **about 208 steps/s**,
-5000-step reports roughly every 24 s, so 1 ns at a 2 fs timestep is **~40
-minutes** — against the test's 90-minute budget. Minimisation comes first and
-shows `progress=0` for its duration, which is about 40 s at the default 10000
-steps.
+Measured on this machine, 1L2Y through `web/run.html`: **about 1,200 steps/s**,
+so 1 ns at a 2 fs timestep is **under 8 minutes** — against the test's
+90-minute budget. Minimisation comes first and shows `progress=0` for its
+duration. 3HTB, at 26,749 atoms, runs at about **150 steps/s** (26 ns/day).
+
+🔴 **Those numbers moved by 6x in one day, so do not trust a remembered one.**
+`docs/measurements/profile-step-m3pro.json` and `gate-1ns-m3pro.json` carry the
+current ones and what changed. The engine was at 208 steps/s on 1L2Y and 82 on
+3HTB before the pair kernel's shell split, the loop-free minimum image, the
+position fold and the neighbour list.
 
 ## Capturing measurements
 
