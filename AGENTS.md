@@ -155,7 +155,6 @@ it:
   with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`, so the basis is OpenCL/mixed.
   Both are genuine mixed precision, but OpenMM's CUDA and OpenCL platforms are
   separate implementations and may not agree to better than the spread above.
-* **CUDA is unmeasured** (above), so the basis is OpenCL/mixed.
 
 ### Where the engine sits against it
 
@@ -170,6 +169,14 @@ an incomparable structure. 1L2Y, 2373 particles,
 | OpenMM OpenCL single | 1.42e-05 | 0.0044 kJ/mol |
 | **this engine, WebGPU** | **1.10e-06** | **0.0084 kJ/mol** |
 | OpenMM CPU double | 8.67e-07 | 0.0023 kJ/mol |
+
+🔴 Re-measure this with `npm run report:engine-error` after touching a kernel,
+and do not take a passing threshold as the answer. It was produced by hand once,
+then four kernel changes went past it — the shell split, the loop-free minimum
+image, the position fold and the neighbour list — with no way to tell whether it
+still described what ships. Re-measured afterwards it is **bit-identical to all
+17 digits**, forces and energy both, which says those changes were *exact* and
+not merely inside tolerance. A threshold could not have told the difference.
 
 The engine is **12.9× inside** the single-precision basis on forces, and sits
 nearer OpenMM's *double*-precision CPU platform (1.27× its error) than its

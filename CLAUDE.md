@@ -169,7 +169,16 @@ position fold and the neighbour list.
 npm run report:adapter                                    # to stdout
 npm run report:adapter -- docs/measurements/device-<x>.json
 npm run bench -- docs/measurements/bench-<x>.json
+npm run report:engine-error -- docs/measurements/engine-force-error-equilibrated-m3pro.json
 ```
+
+🔴 **Run `report:engine-error` after touching a kernel.** It is the figure
+`AGENTS.md` cites for where the engine sits against OpenMM, it is measured at
+the one saved frame the thresholds are defined at, and it was produced by hand
+once — after which four kernel changes went past it unverified. A passing
+differential threshold is not the same evidence: re-measured after that work the
+figure is bit-identical to all 17 digits, which says the changes were *exact*,
+and a threshold cannot show that.
 
 Both drive the real page in Chrome. `?bench=1` on the page is what runs the
 benchmark, so the benchmark measures exactly what the checks ran on rather than

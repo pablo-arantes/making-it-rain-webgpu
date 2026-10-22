@@ -49,6 +49,10 @@ import {
   validateNeighbours,
   type NeighbourComparison,
 } from "../src/gpu/validate-neighbours.js";
+import {
+  validateEngineError,
+  type EngineErrorReport,
+} from "../src/gpu/validate-engine-error.js";
 
 import {
   validatePersistence,
@@ -64,6 +68,7 @@ declare global {
     __mirCellList?: CellListComparison | { error: string };
     __mirProfile?: ProfileComparison;
     __mirNeighbours?: NeighbourComparison | { error: string };
+    __mirEngineError?: EngineErrorReport | { error: string; absent?: boolean };
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
     __mirRestraint?: RestraintComparison | { error: string };
@@ -540,6 +545,55 @@ async function main(): Promise<void> {
     // Where a step's GPU time goes. Development-only, like the rest of this
     // page: it needs `timestamp-query` and reports its absence rather than
     // failing when a device does not offer it.
+    // The figure AGENTS.md cites, at the frame the thresholds are defined at.
+    // Absent unless the equilibrated fixture has been captured, which only
+    // 1L2Y has; a missing fixture is reported rather than silently skipped.
+    const equilibratedPath = `/fixtures/equilibrated/${name}-state.xml`;
+    const equilibratedResponse = await fetch(equilibratedPath);
+    if (!equilibratedResponse.ok) {
+      window.__mirEngineError = {
+        error:
+          `${equilibratedPath} returned ${equilibratedResponse.status}. ` +
+          "Capture it with `tools/calibrate_thresholds.py --save-equilibrated`; " +
+          "the force error has to be measured at the frame the thresholds were.",
+        absent: true,
+      };
+    } else {
+      const engineError = await validateEngineError(device, {
+        systemXml,
+        equilibratedStateXml: await equilibratedResponse.text(),
+        state: equilibratedPath,
+      });
+      if (body) {
+        body.innerHTML += `<div class="check"><h3>The engine against the threshold basis</h3>
+          <p class="claim">
+            Measured at the saved frame
+            <code>${equilibratedPath}</code> that
+            <code>tools/calibrate_thresholds.py</code> measured OpenMM's
+            platforms at, because equilibration is stochastic and a re-run gives
+            an incomparable structure — and because at a fixture's raw
+            coordinates a relative force error reports on the input structure
+            rather than on the platform.
+          </p>
+          <p class="note">
+            ${engineError.particleCount.toLocaleString("en-US")} particles:
+            force relative RMS
+            <strong>${exponential(engineError.forceRelativeRms)}</strong> against
+            our own f64 reference, total energy
+            ${engineError.deviceEnergy.toFixed(4)} against
+            ${engineError.referenceEnergy.toFixed(4)} kJ/mol
+            (${exponential(engineError.energyRelativeError)} relative,
+            ${engineError.absoluteEnergyError.toFixed(4)} absolute).
+            AGENTS.md's basis is 1.43e-05 for OpenMM's own single-precision
+            platform and 8.67e-07 for its double-precision CPU one.
+            <span class="badge ${engineError.ok ? "ok" : "bad"}">${
+              engineError.ok ? "pass" : "fail"
+            }</span>
+          </p></div>`;
+      }
+      window.__mirEngineError = engineError;
+    }
+
     const neighbours = await validateNeighbours(device, { systemXml, stateXml });
     if (body) {
       body.innerHTML += `<div class="check"><h3>The neighbour list against the cell shell</h3>
