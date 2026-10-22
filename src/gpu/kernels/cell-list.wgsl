@@ -63,6 +63,15 @@ struct CellParams {
   // from being two separate pieces of knowledge.
   box: array<vec4<u32>, 3>,
   cell_extent: array<vec4<u32>, 3>,
+  /// 🔴 Appended, not inserted. The three off-diagonal lattice components in
+  /// fixed point -- `b.x`, `c.x`, `c.y` -- and the inverse box in f32. Putting
+  /// them before `box` would have moved every offset `packParams` writes, for
+  /// no benefit; a uniform's layout is a contract with the host.
+  ///
+  /// Zero and diagonal respectively for a rectangular cell, which is how
+  /// `skewed()` tells them apart.
+  off: array<vec4<u32>, 3>,
+  inverse: array<vec4<f32>, 3>,
 }
 
 /// One coordinate folded into [0, box), exactly.
@@ -102,14 +111,92 @@ fn wrap_axis(value: vec2<u32>, box: vec2<u32>) -> vec2<u32> {
 /// neighbourhood it is not listed in -- atom i missing j while j still finds i,
 /// which breaks Newton's third law and leaks momentum. One function means they
 /// agree by construction rather than by two implementations matching.
+/// Whether this cell is skewed, from the off-diagonals being non-zero.
+///
+/// A rectangular cell keeps the exact integer paths below unchanged, which is
+/// what makes this conversion verifiable by "rectangular unchanged" rather
+/// than by trusting that the general code reduces correctly.
+fn skewed() -> bool {
+  for (var slot = 0u; slot < 3u; slot++) {
+    let value = params.off[slot].xy;
+    if (value.x != 0u || value.y != 0u) { return true; }
+  }
+  return false;
+}
+
+fn lattice_diagonal() -> array<vec2<u32>, 3> {
+  return array<vec2<u32>, 3>(
+    params.box[0].xy, params.box[1].xy, params.box[2].xy,
+  );
+}
+
+fn lattice_off() -> array<vec2<u32>, 3> {
+  return array<vec2<u32>, 3>(
+    params.off[0].xy, params.off[1].xy, params.off[2].xy,
+  );
+}
+
 @compute @workgroup_size(64)
 fn wrap(@builtin(global_invocation_id) gid: vec3<u32>) {
   let atom = gid.x;
   if (atom >= params.particle_count) { return; }
+  if (skewed()) {
+    // A skewed cell folds as a whole: subtracting lattice vector `c` moves the
+    // `a` and `b` components too, so there is no per-axis version of this.
+    let folded = fold_into_cell(
+      array<vec2<u32>, 3>(
+        positions[atom * 3u + 0u],
+        positions[atom * 3u + 1u],
+        positions[atom * 3u + 2u],
+      ),
+      lattice_diagonal(), lattice_off(),
+      params.inverse[0].xyz, params.inverse[1].xyz, params.inverse[2].xyz,
+    );
+    for (var axis = 0u; axis < 3u; axis++) {
+      wrapped_positions[atom * 3u + axis] = folded[axis];
+    }
+    return;
+  }
   for (var axis = 0u; axis < 3u; axis++) {
     wrapped_positions[atom * 3u + axis] =
       wrap_axis(positions[atom * 3u + axis], params.box[axis].xy);
   }
+}
+
+/// Which cell an atom falls in, for a skewed cell, from its fractional
+/// coordinate.
+///
+/// 🔴 f32, where the rectangular path below is exact integers, and the reason
+/// that is safe is worth stating because this file already carries a warning
+/// against recomputing a cell index in f32. That warning is about *two*
+/// calculations disagreeing: the pair kernel used to recompute a home cell the
+/// builder had bucketed differently, so atom i would scan a neighbourhood it
+/// was not listed in. There is still exactly one authority here -- this
+/// function -- and every reader takes the index from the list.
+///
+/// What an f32 ulp can do on its own is put an atom within ~5e-7 nm of a cell
+/// boundary on either side of it. That is harmless: the 27-cell shell reaches a
+/// whole cell width past the home cell, and a cell is at least a cutoff wide,
+/// so the slack is the width minus the cutoff -- tenths of a nanometre, six
+/// orders of magnitude more than the ulp. An exact version would need the
+/// inverse box in fixed point and a signed 64-bit matrix multiply per atom.
+fn skewed_cell(atom: u32) -> u32 {
+  let x = from_fixed(wrapped_positions[atom * 3u + 0u]);
+  let y = from_fixed(wrapped_positions[atom * 3u + 1u]);
+  let z = from_fixed(wrapped_positions[atom * 3u + 2u]);
+  var cell = vec3<u32>(0u, 0u, 0u);
+  for (var axis = 0u; axis < 3u; axis++) {
+    let row = vec3<f32>(
+      params.inverse[0][axis], params.inverse[1][axis], params.inverse[2][axis],
+    );
+    let fraction = x * row.x + y * row.y + z * row.z;
+    let divisions = params.divisions[axis];
+    // `fold_into_cell` leaves this in [0, 1), but clamp anyway: an f32 estimate
+    // at the upper edge must not index past the last cell.
+    let scaled = i32(floor(fraction * f32(divisions)));
+    cell[axis] = u32(clamp(scaled, 0, i32(divisions) - 1));
+  }
+  return (cell.x * params.divisions.y + cell.y) * params.divisions.z + cell.z;
 }
 
 /// Which cell an atom falls in along one axis.
@@ -145,12 +232,19 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn assign(@builtin(global_invocation_id) gid: vec3<u32>) {
   let atom = gid.x;
   if (atom >= params.particle_count) { return; }
-  let x = axis_cell(atom, 0u);
-  let y = axis_cell(atom, 1u);
-  let z = axis_cell(atom, 2u);
   // Row-major in (x, y, z), matching the host builder and the pair kernel's
-  // 27-cell scan.
-  let cell = (x * params.divisions.y + y) * params.divisions.z + z;
+  // 27-cell scan. A skewed cell buckets from its fractional coordinate, which
+  // `wrap` has already folded into [0, 1); a rectangular one keeps the exact
+  // integer path.
+  var cell: u32;
+  if (skewed()) {
+    cell = skewed_cell(atom);
+  } else {
+    let x = axis_cell(atom, 0u);
+    let y = axis_cell(atom, 1u);
+    let z = axis_cell(atom, 2u);
+    cell = (x * params.divisions.y + y) * params.divisions.z + z;
+  }
   cell_of[atom] = cell;
   atomicAdd(&counts[cell], 1u);
 }

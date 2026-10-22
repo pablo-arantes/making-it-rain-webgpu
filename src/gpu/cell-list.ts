@@ -20,7 +20,12 @@ import { CELL_LIST } from "./kernels.js";
 import { BufferPool } from "./allocator.js";
 import { readableStorageUsage, storageUsage, uniformUsage } from "./usage.js";
 import { fixedWords } from "../reference/fixed-point.js";
-import { CellListTooCoarse, MINIMUM_CELLS_PER_AXIS } from "./nonbonded.js";
+import {
+  CellListTooCoarse,
+  MINIMUM_CELLS_PER_AXIS,
+  writeInverseBox,
+  writeOffDiagonalBox,
+} from "./nonbonded.js";
 import type { Vec3 } from "../engine/system.js";
 
 
@@ -180,8 +185,9 @@ function packParams(
   particleCount: number,
   geometry: CellGeometry,
   box: Vec3,
+  boxVectors?: readonly [Vec3, Vec3, Vec3],
 ): Uint32Array {
-  const words = new Uint32Array(32);
+  const words = new Uint32Array(56);
   words[0] = particleCount;
   words[1] = geometry.cellCount;
   for (let axis = 0; axis < 3; axis++) {
@@ -193,8 +199,21 @@ function packParams(
     words[20 + axis * 4] = extentWords.lo;
     words[20 + axis * 4 + 1] = extentWords.hi;
   }
+  // The off-diagonals and the inverse box, appended. A rectangular cell leaves
+  // the off-diagonals zero and the inverse diagonal, which is what `skewed()`
+  // in the kernel reads to keep the exact integer paths.
+  const vectors = boxVectors ?? diagonalVectors(box);
+  writeOffDiagonalBox(words, 32, vectors);
+  writeInverseBox(new Float32Array(words.buffer), 44, vectors);
   return words;
 }
+
+/** Box vectors from three edge lengths, for a caller that only has those. */
+const diagonalVectors = (box: Vec3): readonly [Vec3, Vec3, Vec3] => [
+  [box[0] as number, 0, 0],
+  [0, box[1] as number, 0],
+  [0, 0, box[2] as number],
+];
 
 /**
  * Rewrite the geometry uniform for a new box, keeping the divisions.
@@ -228,7 +247,7 @@ export function prepareCellList(
   const geometry = cellGeometry(box, cutoff);
   const named = (label: string, byteLength: number, usage = readableStorageUsage()): GPUBuffer =>
     pool.buffer({ label, byteLength, usage });
-  const params = named("cell/params", 128, uniformUsage());
+  const params = named("cell/params", 224, uniformUsage());
   pool.device.queue.writeBuffer(
     params,
     0,
@@ -332,11 +351,16 @@ export async function planCellList(
 
   return Promise.all([
     plan("clear", cells, [countsBinding, paramsBinding]),
+    // 🔴 `assign` reads the *wrapped* positions now, for a skewed cell's
+    // fractional bucketing, so binding 7 has to be here: an auto layout is
+    // derived from what the entry point statically uses and rejects a bind
+    // group that is missing one.
     plan("assign", atoms, [
       positionsBinding,
       cellOfBinding,
       countsBinding,
       paramsBinding,
+      { binding: 7, resource: { buffer: buffers.wrapped } },
     ]),
     plan("scan", 1, [countsBinding, startsBinding, paramsBinding]),
     plan("scatter", atoms, [
