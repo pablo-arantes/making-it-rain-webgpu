@@ -289,6 +289,15 @@ fold on purpose: if the home cell and the pair vector disagreed for an atom near
 a boundary, atom *i* would miss *j* while *j* still found *i*, which leaks
 momentum.
 
+🔴 **This machine cannot catch a binding overrun.**
+`maxStorageBuffersPerShaderStage` has a mandated floor of 8 and Apple reports
+far more, so a kernel that bound nine would compile here, pass every
+differential check here, and fail to create its pipeline on a conforming Intel
+or NVIDIA device — first seen as a user's bug report.
+`test/kernel-bindings.test.ts` follows each entry point's calls through the
+*composed* source and asserts the count in the no-GPU lane. The busiest is
+`direct_pairs_list` at 7 of 8, so there is exactly one spare.
+
 🔴 **`GPUBufferUsage` at module scope breaks the no-GPU lane.** It is a global
 that exists only where WebGPU does, so `const STORAGE = GPUBufferUsage.STORAGE`
 at the top of a file throws when the *module loads* — not when a buffer is made.

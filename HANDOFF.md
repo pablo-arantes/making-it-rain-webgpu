@@ -5,14 +5,26 @@ has only what is **unfinished**.
 
 ## State
 
-**Phase 0 is done. Phase 1 is underway**, through the first of its six steps.
+**Phases 0 to 4 are done. Phase 5 is underway.** A PDB ID or an upload becomes a
+runnable `System` in the browser, protein or protein–ligand, runs on the GPU
+against OpenMM-calibrated thresholds, and comes back as a DCD with the
+notebook's figures.
 
-`npm run check` passes: typecheck, 45 unit and reference tests, web build.
-`npm run test:browser` passes all five device checks plus the bonded-force
-comparison on both fixtures. `npm run bench` and `npm run report:adapter` work
-and their output is committed under `docs/measurements/`.
+`npm run check` passes: typecheck, **628 unit and reference tests** over 45
+files, and the web build. `npm run test:browser` passes **13 tests** in Chrome —
+the device and precision checks, bonded forces on both fixtures, the three
+preparation paths, the step profile, and the run page end to end. The 1 ns gate
+is the 14th and is skipped unless `MIR_LONG_RUN=1`; it passes in **7.6 minutes**.
+`npm run bench` and `npm run report:adapter` work and their output is committed
+under `docs/measurements/`.
 
-Done in Phase 1 so far:
+🔴 **This file was wrong about that for five commits**, claiming Phase 1 was on
+its first step and that there were 45 tests, while Phase 4 landed and Phase 5
+started. A handoff that overstates what is left is survivable; one that
+*understates* it sends the next person to rebuild what already works. Check the
+section below against `git log` before trusting it.
+
+Done in Phase 1, which is where the engine's parity record lives:
 
 - **`System` and `State` parsers** (`src/engine/system.ts`, `state.ts`, over a
   purpose-built scanner in `xml.ts`): 7.5 MB of `system.xml` in 39 ms, every
@@ -214,14 +226,35 @@ the declared bind group layouts are already in place for it.
 
 ## Open, in the order they are worth doing
 
-### The FFT is correct but not yet tuned
+### The FFT is correct but not yet tuned — and now there is a number
 Radices 2, 3, 5 and 7, with a generic R² inner product per butterfly rather
 than specialised butterflies — at most 49 terms, since the radix is at most 7.
 Specialised radix-2/3/4/5 butterflies and a radix-4 or radix-8 path for
 power-of-two sizes are the obvious next step, and the differential test in
-`src/gpu/checks.ts` is what they would be held to. **Measure before writing
-them**: the per-step cost of PME against everything else is not known yet,
-because there is no step loop to measure.
+`src/gpu/checks.ts` is what they would be held to.
+
+This entry used to end "**measure before writing them**: the per-step cost of
+PME against everything else is not known yet, because there is no step loop to
+measure." It is now measured, from a *minimised* state, on an M3 Pro
+(`docs/measurements/profile-step-m3pro.json`):
+
+| | 1L2Y | 3HTB |
+| --- | --- | --- |
+| pair force | 35% | 39% |
+| neighbour-list build | 13% | 30% |
+| **PME** | **30%** | **24%** |
+| everything else | 22% | 7% |
+
+So PME is worth about a quarter of a step and no single kernel dominates any
+more. Of that quarter, roughly 40% is the FFT passes and 35% is `pme spread`;
+`zero/pmeGrid` and `pme load grid` together are about 4% of the whole step and
+are pure bookkeeping, which is the cheapest thing on this list to attack.
+
+🔴 Profile from a **minimised** state or the attribution is wrong, not just the
+total: an unrelaxed fixture is a diverging system, and a diverging system
+reallocates the step toward whatever walks neighbours. Measured from 3HTB's raw
+fixture, the build looked like 87% of a step and the step looked ten times
+slower than a timed run had just shown it was.
 
 ### 🔴 Three mistakes the barostat made, all of the same kind
 Each was a quantity measured against the wrong baseline, and each produced a
@@ -315,15 +348,27 @@ disk and compares. If it recurs, the failure says which file arrived wrong
 instead of looking like a physics regression -- which is the part that cost time
 here, because 0.0167 nm is exactly the size of a plausible bug.
 
-### An exact accumulator does not make a kernel order-independent
-The forces accumulate in fixed point, so the sum across threads is exact. But
-the pair kernel sums one atom's neighbours in an f32 register before the single
-exact add at the end, and that part reassociates. Measured at 1.89e-3 kJ/mol/nm
-between two orderings of the same partition -- 2e-6 of the force RMS, invisible
-in a force comparison and enough to make two runs differ. The cell list is
-sorted for that reason, `AGENTS.md`'s determinism bullet is amended, and
-docs/NONBONDED.md has the measurement. The same section covers why the pair
-kernel now reads its home cell from the list instead of recomputing it in f32.
+### ✅ An exact accumulator *does* now make the pair kernel order-independent
+This entry said the opposite, and was right when written. The pair kernel then
+summed one atom's neighbours in an f32 register before a single exact add, and
+that part reassociated -- 1.89e-3 kJ/mol/nm between two orderings of the same
+partition, 2e-6 of the force RMS, invisible in a force comparison and enough to
+make two runs differ.
+
+`accumulate_pair` now converts and adds **every pair** in fixed point, so
+nothing reassociates. The evidence is `validateNeighbours` rather than the
+argument: the cell-shell path combines 27 partial sums an atom, the
+neighbour-list path combines 8, those are different groupings of the same terms,
+and they agree on all 80,247 force components of 3HTB **bit for bit**. An
+inexact accumulator could not do that.
+
+`sort_cells` stays, for the two reasons still standing and not for the force: it
+keeps the device's cell list comparable to the host builder's, which is how that
+list is validated at all, and it is what gives the neighbour list built from it a
+defined order. `AGENTS.md`'s determinism bullet has now stated the wrong
+argument twice, so it carries the history as well as the rule. The same section
+of docs/NONBONDED.md covers why the pair kernel reads its home cell from the
+list instead of recomputing it in f32.
 
 ### A step can hide a broken stage
 The device's first RATTLE did nothing at all to the rigid waters -- the
@@ -382,14 +427,34 @@ the "verify this system" button, so it is worth doing early rather than late.
 macOS 15+. The browser lane covers it, and CI runs Dawn on Linux, so this is
 recorded rather than blocking. It will resolve itself on a macOS upgrade.
 
+### ✅ Nothing binds more than WebGPU guarantees, and a test now says so
+`maxStorageBuffersPerShaderStage` has a mandated floor of 8 and Apple reports
+far more, so a kernel binding nine would compile here, pass every differential
+check here, and fail to create its pipeline on a conforming Intel or NVIDIA
+device. This machine cannot catch that class of bug at all.
+`test/kernel-bindings.test.ts` reads the *composed* sources, follows each entry
+point's calls, and asserts the count — one check per entry point, 62 of them,
+in the lane that runs everywhere. The busiest is `direct_pairs_list` at **7 of
+8**, so there is one spare and the neighbour list used two of the three that
+were. It also keeps `MAX_STORAGE_BUFFERS_USED` from drifting below what a kernel
+uses, which is the direction that turns a passing preflight into a failed
+pipeline.
+
 ### Smaller
-* `src/gpu/compute.ts` allocates buffers directly. `AGENTS.md` requires every
-  allocation to go through one place so peak memory stays measurable; there is
-  nothing to pool yet, and Phase 1 must replace it before the force kernels
-  land.
+* `src/gpu/compute.ts` allocates buffers directly, and the entry that used to
+  be here said "Phase 1 must replace it before the force kernels land". They
+  landed, the pool exists, and the module now argues the other way in its own
+  header: these are one-shot evaluations where nothing outlives the call, so
+  there is nothing to amortise, and `AGENTS.md`'s requirement is about the
+  memory a *run* holds. That argument covers `uploadBuffer` and `storageBuffer`.
+  It does **not** cover `readBuffer`, which the step loop calls — once a report,
+  for positions, forces, energy and the Verlet flags — and which creates and
+  destroys a staging buffer each time. Transient and bounded, so not urgent;
+  worth pooling if a profile ever shows it, which one has not.
 * The three CI jobs other than `check` are `continue-on-error: true`, because
-  none has been run on a hosted runner yet. Tighten each as it proves itself;
-  leaving them permanently soft would make them decorative.
+  none has been run on a hosted runner yet — and none can be, because the repo
+  has no remote. That is the blocker, not the jobs: tighten each as it proves
+  itself on a runner, and until then they are decorative rather than soft.
 
 ## Phase 2's gates
 
@@ -417,22 +482,24 @@ GPU then agrees with our own f64 reference to 1.07e-6 on that same prepared
 system (`docs/measurements/prepared-system-verify-m3pro.json`). The analyses
 agree with pytraj. `docs/PREPARATION.md` has the tables.
 
-**Phase 3 remainder, smallest first:**
+**Phase 3 is closed.** ff99SB, DHFR (1RX2) and 1UBQ went through the parity
+gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
+`src/prep/prmtop.ts`. One item did not make it:
 
-1. **ff99SB** through the parity gate; only ff99SB-ILDN has been run.
-2. **DHFR and 1UBQ**, the two fixtures the plan's gate names and that have not
-   been built. The ones used instead are 1L2Y, T4 lysozyme, a solvated 1L2Y and
-   1L2Y under ff99SB-ILDN.
-3. `prmtop`/`inpcrd` export.
-4. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
-   image in the solvation clash tests and in the engine's cell list. A
-   dodecahedron holds ~70% of the water for the same padding, so this is a
-   real saving, not tidiness.
+1. **A non-rectangular box** (deviation 19), which needs a triclinic minimum
+   image in the solvation clash tests, in the engine's cell list and now in the
+   neighbour list's search radius too. A dodecahedron holds ~70% of the water for
+   the same padding, so this is a real saving, not tidiness.
+   `UnsupportedBoxShape` in `src/prep/solvate.ts` is where it refuses.
 
-**Phase 4 is untouched**, and it is half the project's stated scope:
-protein–ligand. Heterogen picker, CCD bond orders, SMIRNOFF typing through
-RDKit in WASM, NAGL in ONNX, GAFF by upload, and the ligand analyses. Nothing
-in `src/prep/` handles a non-polymer residue today — it is refused by name.
+**Phase 4 is done**, and it was half the project's stated scope:
+protein–ligand. A heterogen picker that asks which residue is the ligand rather
+than guessing, CCD bond orders, ligand parameters by ffxml upload, and the
+ligand analyses, all through the parity gate at 26,749 atoms on 3HTB+JZ4. One
+piece was cut rather than finished: the ProLIF interaction network, on the
+grounds that the notebook's version is not what this tool is for. Typing a
+ligand *in the browser* -- SMIRNOFF through RDKit in WASM, NAGL in ONNX -- was
+not built either; parameters are uploaded instead, which is deviation 23.
 
 **Phase 5 has started.** `deviceFitness` answers "will *this* system run on
 *this* GPU" before any GPU work, naming the limit that binds — storage binding,
@@ -445,10 +512,24 @@ and `verifySystem` carries the same verdict.
 
 🔴 What that does **not** establish is that the kernels produce right numbers on
 another GPU. Only running them there does, and `npm run test:browser` is the
-lane. Still open in Phase 5: workgroup tuning (64 everywhere, which is valid
-below WebGPU's 256-invocation minimum but not necessarily fast on a 32-wide
-NVIDIA warp or a 16-wide Intel EU), subgroups, fewer readbacks, Safari,
-accessibility, the tutorial page, GROMACS export.
+lane. **No non-Apple GPU has ever run these kernels**, which is the largest
+single unknown in the project and is not a performance question.
+
+The step is also now profiled per kernel (`src/gpu/profile.ts`, reported on
+`web/validate.html`, guarded by `test/browser/profile.spec.ts`), and acting on
+it took 1L2Y from 208 to 1,213 steps/s and 3HTB from 82 to 151. Two of the
+things this list named as next turned out not to be where the time was:
+**fewer readbacks** -- there are none in the per-step path, they are all in the
+accessors -- and **subgroups**, which were never reached because the costs were
+a loop the backend could not schedule around and a dispatch with too few
+threads. **Workgroup tuning is still untried** (64 everywhere, valid below
+WebGPU's 256-invocation minimum but not necessarily right on a 32-wide NVIDIA
+warp or a 16-wide Intel EU), and it is worth more on hardware that is not this
+machine.
+
+Still open in Phase 5: workgroup tuning, subgroups, Safari (untestable on macOS
+14), accessibility, the tutorial page mirroring the notebook, and GROMACS export
+(deviation 10, best-effort).
 
 ## 🔴 The things that are not features
 
