@@ -249,13 +249,10 @@ export function prepareCellList(
 /**
  * The fold on its own.
  *
- * 🔴 Every path that encodes the pair pass has to encode this first, and it is
- * deliberately *not* part of `planCellList`, for two reasons that are easy to
- * miss. The path that uploads a host-built list never calls `planCellList` at
- * all, and would leave the kernel differencing a buffer of zeros. And a run
- * with `cellListInterval` above 1 encodes the build on some steps only, which
- * for the list itself means a stale partition and for this means forces at
- * stale *coordinates* -- a much larger error, and silent either way.
+ * 🔴 Every path that encodes a pair pass has to encode this first, and it is
+ * deliberately *not* part of `planCellList`: the path that uploads a host-built
+ * list never calls that at all, and would leave the kernel differencing a
+ * buffer of zeros -- a wrong answer, not an error.
  */
 export async function planWrapPositions(
   cache: PipelineCache,

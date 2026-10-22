@@ -1,9 +1,22 @@
 // Real-space Ewald and Lennard-Jones over the pairs inside the cutoff.
 //
-// One invocation per atom, gathering: it walks the 27 cells around its own and
-// sums every interaction it finds, so the pair loop needs no atomics for its
-// own force.  Every pair is therefore evaluated twice, once from each end,
-// and the energy is halved to compensate.
+// Gathering: an invocation sums the interactions of one atom, so the pair loop
+// needs no atomics for its own force.  Every pair is therefore evaluated twice,
+// once from each end, and the energy is halved to compensate.
+//
+// Two ways of finding the candidates, and `accumulate_pair` is the one copy of
+// what happens once a candidate is inside the cutoff.
+//
+//   `direct_pairs_list`  walks a Verlet neighbour list, which is the fast path
+//                        and what a run uses.
+//   `direct_pairs`       walks the 27 cells around the atom's own, which needs
+//                        no list and is the fallback for an atom whose list
+//                        overflowed.  It is also the primary path in the
+//                        differential tests, so the two are compared against
+//                        each other as well as against the reference.
+//
+// `build_neighbours` is the list builder, and it lives here because finding
+// candidates in the 27-cell shell is exactly what `direct_pairs` does.
 //
 // Exclusions are skipped, not zeroed. An excluded pair's reciprocal-space
 // contribution is removed, and its own interaction applied, by the companion
@@ -13,6 +26,22 @@
 @group(0) @binding(3) var<storage, read> particle: array<vec4<f32>>;  // q, sigma, eps, _
 @group(0) @binding(4) var<storage, read> lists: array<u32>;
 @group(0) @binding(5) var<uniform>       params: Params;
+
+/// The Verlet neighbour list, and how much of it each atom uses.
+///
+/// 🔴 Indexed `[k * particle_count + atom]`, not `[atom * capacity + k]`. The
+/// pair kernel's threads are consecutive atoms at the same `k`, so this layout
+/// makes one coalesced read where the obvious one makes 64 scattered ones.
+///
+/// `count` is `OVERFLOWED` for an atom with more neighbours than the list has
+/// room for. Those atoms are skipped here and picked up by `direct_pairs`,
+/// because dropping them would silently lose every pair they are in.
+@group(0) @binding(6) var<storage, read_write> neighbours: array<u32>;
+@group(0) @binding(7) var<storage, read_write> neighbour_count: array<u32>;
+/// `[0]` is the rebuild flag, `[2]` records an overflow. See verlet.wgsl.
+@group(0) @binding(8) var<storage, read_write> verlet_flags: array<atomic<u32>>;
+
+const OVERFLOWED: u32 = 0xffffffffu;
 
 struct Params {
   particle_count: u32,
@@ -24,6 +53,15 @@ struct Params {
   exclusion_list_offset: u32,
   /// Where each atom's cell index begins in `lists`.
   cell_of_offset: u32,
+  /// How many neighbours the list has room for per atom.
+  verlet_capacity: u32,
+  /// How many invocations share one atom's list; see `direct_pairs_list`.
+  verlet_slices: u32,
+  /// `(cutoff + skin)^2`, the radius the list is built to.
+  verlet_cutoff_squared: f32,
+  /// Three `u32` of padding were here: `cells` is a `vec3<u32>`, which WGSL
+  /// aligns to 16 bytes, so the three fields above cost nothing and
+  /// `PAIR_PARAMS_BYTES` is unchanged.
   cells: vec3<u32>,
   cutoff: f32,
   box: vec3<f32>,
@@ -117,10 +155,65 @@ fn is_excluded(atom: u32, other: u32) -> bool {
   return false;
 }
 
+/// One pair, from atom `i`'s end, added into this invocation's accumulators.
+///
+/// 🔴 The two candidate loops share this rather than each carrying a copy,
+/// because the arithmetic has to be identical to the bit: the energy takes
+/// *two* separate `to_fixed` additions, Coulomb and then Lennard-Jones, and
+/// folding them into one `to_fixed(coulomb + lj)` is a different number. That
+/// is also why the accumulators come in by pointer instead of being returned --
+/// a returned f32 would have to be added somewhere, and where decides the
+/// rounding.
+fn accumulate_pair(
+  me: vec4<f32>,
+  other: vec4<f32>,
+  d: vec3<f32>,
+  r_squared: f32,
+  energy_sum: ptr<function, vec2<u32>>,
+  force_x: ptr<function, vec2<u32>>,
+  force_y: ptr<function, vec2<u32>>,
+  force_z: ptr<function, vec2<u32>>,
+) {
+  let r = sqrt(r_squared);
+  let alpha_r = params.alpha * r;
+  let charge_product = 138.93545764498457 * me.x * other.x;
+  let screened = erfc_approx(alpha_r);
+  // Halved here rather than at the end: each pair is seen from both ends, and
+  // scaling by 0.5 is exact in f32, so this is the same total and keeps the
+  // running sum a pure integer.
+  *energy_sum = add64(*energy_sum, to_fixed(0.5 * charge_product * screened / r));
+  var d_e_d_r = charge_product *
+    (-screened / r_squared - params.alpha * erf_derivative(alpha_r) / r);
+
+  let epsilon = sqrt(me.z * other.z);
+  if (epsilon != 0.0) {
+    let sigma = 0.5 * (me.y + other.y);
+    let s2 = sigma * sigma / r_squared;
+    let s6 = s2 * s2 * s2;
+    let s12 = s6 * s6;
+    *energy_sum = add64(*energy_sum, to_fixed(2.0 * epsilon * (s12 - s6)));
+    d_e_d_r += (4.0 * epsilon / r) * (6.0 * s6 - 12.0 * s12);
+  }
+  // F_i = (dE/dr / r) * d, and this invocation owns only atom i.
+  let contribution = (d_e_d_r / r) * d;
+  *force_x = add64(*force_x, to_fixed(contribution.x));
+  *force_y = add64(*force_y, to_fixed(contribution.y));
+  *force_z = add64(*force_z, to_fixed(contribution.z));
+}
+
+/// The 27-cell shell scan.
+///
+/// The fallback, and the reference path. A run reaches it only for an atom
+/// whose neighbour list overflowed, which the gate below selects; the
+/// differential tests dispatch it for every atom by building no list at all, so
+/// `neighbour_count` is zero everywhere and the gate is inverted. Both are one
+/// comparison outside the loop.
 @compute @workgroup_size(64)
 fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= params.particle_count) { return; }
+  // Atoms the list covers are handled by `direct_pairs_list`.
+  if (params.verlet_capacity != 0u && neighbour_count[i] != OVERFLOWED) { return; }
 
   // Which of the 27 cells around the home cell this invocation handles.
   //
@@ -198,32 +291,10 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (r_squared >= cutoff_squared) { continue; }
     if (is_excluded(i, j)) { continue; }
 
-    let other = particle[j];
-    let r = sqrt(r_squared);
-    let alpha_r = params.alpha * r;
-    let charge_product = 138.93545764498457 * me.x * other.x;
-    let screened = erfc_approx(alpha_r);
-    // Halved here rather than at the end: each pair is seen from both
-    // ends, and scaling by 0.5 is exact in f32, so this is the same total
-    // and keeps the running sum a pure integer.
-    energy_sum = add64(energy_sum, to_fixed(0.5 * charge_product * screened / r));
-    var d_e_d_r = charge_product *
-      (-screened / r_squared - params.alpha * erf_derivative(alpha_r) / r);
-
-    let epsilon = sqrt(me.z * other.z);
-    if (epsilon != 0.0) {
-      let sigma = 0.5 * (me.y + other.y);
-      let s2 = sigma * sigma / r_squared;
-      let s6 = s2 * s2 * s2;
-      let s12 = s6 * s6;
-      energy_sum = add64(energy_sum, to_fixed(2.0 * epsilon * (s12 - s6)));
-      d_e_d_r += (4.0 * epsilon / r) * (6.0 * s6 - 12.0 * s12);
-    }
-    // F_i = (dE/dr / r) * d, and this invocation owns only atom i.
-    let contribution = (d_e_d_r / r) * d;
-    force_x = add64(force_x, to_fixed(contribution.x));
-    force_y = add64(force_y, to_fixed(contribution.y));
-    force_z = add64(force_z, to_fixed(contribution.z));
+    accumulate_pair(
+      me, particle[j], d, r_squared,
+      &energy_sum, &force_x, &force_y, &force_z,
+    );
   }
 
   accumulate_into(i * 3u + 0u, force_x);
@@ -232,4 +303,169 @@ fn direct_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
   // Each pair was seen from both ends; the halving happened as each
   // contribution was formed.
   accumulate_energy_fixed(energy_sum);
+}
+
+/// The same forces, over a Verlet neighbour list instead of the cell shell.
+///
+/// 🔴 Why this exists, measured on 3HTB at 26,749 atoms: a 27-cell shell is 27
+/// cutoff volumes around a sphere of 4.19, so only 13.7% of the 3,344
+/// candidates an atom tests are inside the cutoff. A list built to
+/// `cutoff + skin` holds about 520 of them and stays valid for as long as no
+/// atom has moved half the skin, so the shell scan is paid once every few dozen
+/// steps instead of every step.
+///
+/// One atom's list is split across `verlet_slices` invocations, striding rather
+/// than taking contiguous blocks. Striding is what keeps the reads coalesced:
+/// at a given `k` the invocations in a workgroup are consecutive atoms, and the
+/// list is stored `[k * particle_count + atom]`, so they read neighbouring
+/// words. It also keeps the slices balanced whatever the counts are. The split
+/// is for occupancy, the same reason the shell is split across the dispatch --
+/// one invocation per atom is 2,373 threads on 1L2Y -- and it is exact for the
+/// same reason: the accumulators are fixed-point atomics.
+@compute @workgroup_size(64)
+fn direct_pairs_list(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= params.particle_count) { return; }
+  let count = neighbour_count[i];
+  // Overflowed atoms belong to `direct_pairs`, which has no capacity to run out
+  // of.
+  if (count == OVERFLOWED) { return; }
+
+  let me = particle[i];
+  let cutoff_squared = params.cutoff * params.cutoff;
+  var frame = load_fixed_box();
+
+  var force_x = vec2<u32>(0u, 0u);
+  var force_y = vec2<u32>(0u, 0u);
+  var force_z = vec2<u32>(0u, 0u);
+  var energy_sum = vec2<u32>(0u, 0u);
+
+  let n = params.particle_count;
+  for (var k = gid.y; k < count; k += params.verlet_slices) {
+    let j = neighbours[k * n + i];
+
+    // The list is built to `cutoff + skin`, so the cutoff still has to be
+    // tested here -- and the exclusions are tested after it, because most
+    // candidates fail this.
+    let d = pair_vector(i, j, &frame);
+    let r_squared = dot(d, d);
+    if (r_squared >= cutoff_squared) { continue; }
+    if (is_excluded(i, j)) { continue; }
+
+    accumulate_pair(
+      me, particle[j], d, r_squared,
+      &energy_sum, &force_x, &force_y, &force_z,
+    );
+  }
+
+  accumulate_into(i * 3u + 0u, force_x);
+  accumulate_into(i * 3u + 1u, force_y);
+  accumulate_into(i * 3u + 2u, force_z);
+  accumulate_energy_fixed(energy_sum);
+}
+
+/// Building the neighbour list: count per shell cell, prefix-sum, then fill.
+///
+/// 🔴 Three passes rather than one, and the reason is the two things profiling
+/// found in `direct_pairs`. A single pass would be one invocation per atom
+/// looping the 27 cells -- which is `particle_count` threads and a triple
+/// nested loop, the exact pair of defects that made the pair kernel 18x slower
+/// than it needed to be. Measured, on 1L2Y: one build that way cost 26.7 ms,
+/// against 0.84 ms for the whole shell-scan force kernel, which does strictly
+/// more arithmetic.
+///
+/// Splitting it per (atom, shell cell) fixes both -- 27x the threads, and the
+/// shell loop becomes a flat one -- but then an atomic append would put the
+/// list in whatever order the scheduler produced. AGENTS.md requires every list
+/// a kernel walks to be in a defined order, so instead each cell's count is
+/// taken first, prefix-summed over the 27 cells, and the fill writes at the
+/// offset that gives it. The order is shell cell then slot within the cell, the
+/// same order the one-invocation version produced, whatever the scheduler does.
+/// The price is scanning the shell twice, which is still a small fraction of
+/// what one pass cost.
+@group(0) @binding(9) var<storage, read_write> shell_counts: array<u32>;
+
+/// Decode this invocation's shell cell, and find its range in the sorted order.
+///
+/// Returns `vec2(start, end)`, empty when the flag says no rebuild is wanted.
+fn shell_range(atom: u32, shell: u32) -> vec2<u32> {
+  let cells = params.cells;
+  let home = cell_axes(lists[params.cell_of_offset + atom], cells);
+  let offset = vec3<i32>(i32(shell / 9u) - 1, i32((shell / 3u) % 3u) - 1, i32(shell % 3u) - 1);
+  let neighbour = (vec3<i32>(home) + offset + vec3<i32>(cells)) % vec3<i32>(cells);
+  let cell = (u32(neighbour.x) * cells.y + u32(neighbour.y)) * cells.z
+           + u32(neighbour.z);
+  return vec2<u32>(lists[cell], lists[cell + 1u]);
+}
+
+/// How many of one shell cell's atoms are inside `cutoff + skin` of this atom.
+@compute @workgroup_size(64)
+fn count_neighbours(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (atomicLoad(&verlet_flags[0]) == 0u) { return; }
+  let i = gid.x;
+  if (i >= params.particle_count) { return; }
+
+  var frame = load_fixed_box();
+  let range = shell_range(i, gid.y);
+  var count = 0u;
+  for (var slot = range.x; slot < range.y; slot++) {
+    let j = lists[params.sorted_offset + slot];
+    if (j == i) { continue; }
+    let d = pair_vector(i, j, &frame);
+    if (dot(d, d) >= params.verlet_cutoff_squared) { continue; }
+    count += 1u;
+  }
+  shell_counts[gid.y * params.particle_count + i] = count;
+}
+
+/// Turn the 27 per-cell counts into the offsets the fill writes at.
+///
+/// Exclusive prefix sum, in place, 27 terms in one invocation -- small enough
+/// that a parallel scan would cost more in dispatches than it saved.
+@compute @workgroup_size(64)
+fn offset_neighbours(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (atomicLoad(&verlet_flags[0]) == 0u) { return; }
+  let i = gid.x;
+  let n = params.particle_count;
+  if (i >= n) { return; }
+
+  var total = 0u;
+  for (var shell = 0u; shell < 27u; shell++) {
+    let here = shell_counts[shell * n + i];
+    shell_counts[shell * n + i] = total;
+    total += here;
+  }
+  // 🔴 Record the overflow and mark the atom, rather than truncating quietly.
+  // `direct_pairs` then evaluates it from the cell shell in full. Losing a pair
+  // is a discontinuity in the force, not a rounding error.
+  if (total > params.verlet_capacity) {
+    atomicOr(&verlet_flags[2], 1u);
+    neighbour_count[i] = OVERFLOWED;
+    return;
+  }
+  neighbour_count[i] = total;
+}
+
+/// Write one shell cell's neighbours into the atom's list.
+@compute @workgroup_size(64)
+fn fill_neighbours(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (atomicLoad(&verlet_flags[0]) == 0u) { return; }
+  let i = gid.x;
+  let n = params.particle_count;
+  if (i >= n) { return; }
+  // An atom whose list overflowed has no room to write into, and the cell-shell
+  // path owns it.
+  if (neighbour_count[i] == OVERFLOWED) { return; }
+
+  var frame = load_fixed_box();
+  let range = shell_range(i, gid.y);
+  var at = shell_counts[gid.y * n + i];
+  for (var slot = range.x; slot < range.y; slot++) {
+    let j = lists[params.sorted_offset + slot];
+    if (j == i) { continue; }
+    let d = pair_vector(i, j, &frame);
+    if (dot(d, d) >= params.verlet_cutoff_squared) { continue; }
+    neighbours[at * n + i] = j;
+    at += 1u;
+  }
 }

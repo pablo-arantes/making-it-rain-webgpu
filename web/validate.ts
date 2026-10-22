@@ -45,6 +45,10 @@ import {
   validateProfile,
   type ProfileComparison,
 } from "../src/gpu/validate-profile.js";
+import {
+  validateNeighbours,
+  type NeighbourComparison,
+} from "../src/gpu/validate-neighbours.js";
 
 import {
   validatePersistence,
@@ -59,6 +63,7 @@ declare global {
     __mirRandom?: RandomComparison | { error: string };
     __mirCellList?: CellListComparison | { error: string };
     __mirProfile?: ProfileComparison;
+    __mirNeighbours?: NeighbourComparison | { error: string };
     __mirLoop?: LoopComparison | { error: string };
     __mirMinimise?: MinimiseComparison | { error: string };
     __mirRestraint?: RestraintComparison | { error: string };
@@ -535,6 +540,36 @@ async function main(): Promise<void> {
     // Where a step's GPU time goes. Development-only, like the rest of this
     // page: it needs `timestamp-query` and reports its absence rather than
     // failing when a device does not offer it.
+    const neighbours = await validateNeighbours(device, { systemXml, stateXml });
+    if (body) {
+      body.innerHTML += `<div class="check"><h3>The neighbour list against the cell shell</h3>
+        <p class="claim">
+          The two find the same pairs by different routes and the arithmetic
+          after a candidate is accepted is the same function, so one evaluation
+          of each at the same coordinates has to agree <em>to the bit</em>. A
+          tolerance here would hide the only failure that matters: a pair the
+          list never found, which is a discontinuity in the force rather than a
+          small error.
+        </p>
+        <p class="note">
+          ${neighbours.cells.join(" x ")} cells of
+          ${neighbours.cellExtent.map((v: number) => v.toFixed(3)).join(" x ")} nm, and the
+          shell has to reach ${neighbours.searchRadius.toFixed(3)} nm. Room for
+          ${neighbours.capacity} neighbours an atom at a
+          ${neighbours.skin.toFixed(2)} nm skin.
+          Shell ${neighbours.shellEnergy.toFixed(4)} against list
+          ${neighbours.listEnergy.toFixed(4)} kJ/mol;
+          ${neighbours.differing} of
+          ${(neighbours.particleCount * 3).toLocaleString("en-US")} force
+          components differ, worst by ${neighbours.worstForceDifference};
+          overflowed ${String(neighbours.overflowed)}.
+          <span class="badge ${neighbours.ok ? "ok" : "bad"}">${
+            neighbours.ok ? "pass" : "fail"
+          }</span>
+        </p></div>`;
+    }
+    window.__mirNeighbours = neighbours;
+
     const profile = await validateProfile(device, { systemXml, stateXml });
     if (body) {
       body.innerHTML += !profile.available

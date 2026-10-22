@@ -203,6 +203,41 @@ kernel at 2× the pair work. Do not act on this until it is measured on NVIDIA
 and on an integrated GPU; the determinism invariant is a separate argument for
 gather.
 
+🔴 **A throughput number from an unminimised fixture measures a diverging
+run.** 3HTB's fixture state is not relaxed, and 200 steps of it go from -7.6
+kJ/mol an atom to -26,893. A diverging run is *slower* — its atoms spread, its
+cells stop being even — so it reads as a slow engine rather than a broken run,
+and two such numbers happily "compare". 1L2Y's fixture is relaxed, which is why
+it never showed this. `validateProfile` minimises first and reports the final
+energy per atom of both paths; if those two disagree, the comparison is
+meaningless whatever the times say.
+
+🔴 **The 27-cell shell only reaches one cell width.** So a search radius larger
+than the cell leaves candidates two cells out that the scan never visits. The
+cells are therefore sized by `cutoff + skin`, not by the cutoff — with
+cutoff-sized cells, 3HTB's are 1.096 nm and a list built to 1.1 nm silently
+lost every pair between the two, which came apart a few hundred steps later.
+**1L2Y cannot test this**: three cells an axis means the shell *is* the whole
+box, so nothing is ever out of reach and every check passes at any radius.
+`validateNeighbours` is the check that can, and it holds the list and the shell
+to bit-for-bit agreement — 0 of 80,247 force components differing — because a
+lost pair is a discontinuity in the force rather than something a tolerance
+would catch.
+
+🔴 **`layout: "auto"` derives a bind group layout per *entry point*, from the
+bindings that entry point statically uses.** So a pass must be handed exactly
+those and no more: `direct_pairs` reads `neighbour_count` but never
+`neighbours`, and passing both is rejected outright. One shared bindings array
+for several entry points of the same module does not work, and the error names
+the entry point rather than the cause.
+
+🔴 **A `GPUQuerySet` holds 4096 timestamps, and the profiler needs two per pass
+per repeat.** Adding eight passes to the step took 3HTB past it at 40 repeats,
+and the failure surfaced as `Invalid QuerySet` on an unrelated later pass rather
+than where the set was made. `profilePasses` clamps `repeats` to fit and reports
+what it actually used, so a caller dividing by the number it asked for does not
+quietly report times that are too small.
+
 🔴 **Profile the big fixture, not the small one.** 1L2Y is 2,373 atoms and
 3HTB is 26,749, and for a long time only 1L2Y had a measured speed. A step cost
 4.8 ms on 1L2Y and **629 ms** on 3HTB — 11× the atoms and 130× the time, with

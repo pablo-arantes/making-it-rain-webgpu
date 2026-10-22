@@ -28,6 +28,7 @@ import pmeInterpolate from "./kernels/pme-interpolate.wgsl?raw";
 import random from "./kernels/random.wgsl?raw";
 import zero from "./kernels/zero.wgsl?raw";
 import cellList from "./kernels/cell-list.wgsl?raw";
+import verlet from "./kernels/verlet.wgsl?raw";
 import randomProbe from "./kernels/random-probe.wgsl?raw";
 import integrate from "./kernels/integrate.wgsl?raw";
 import reduce from "./kernels/reduce.wgsl?raw";
@@ -63,6 +64,15 @@ export const NONBONDED_PAIRS = composeKernel(nonbondedPairs, [
   "accumulate",
   "erfc",
 ]);
+
+/**
+ * Deciding when the Verlet neighbour list has gone stale.
+ *
+ * Four entry points, all tiny: `reset_rebuild`, `displacement`,
+ * `save_reference` and `mark_built`. The list itself is built by
+ * `build_neighbours` in NONBONDED_PAIRS, which already has the cell shell.
+ */
+export const VERLET = composeKernel(verlet, ["fixed64"]);
 
 /** The exclusion corrections and the exceptions' own interactions. */
 export const NONBONDED_EXCEPTIONS = composeKernel(nonbondedExceptions, [

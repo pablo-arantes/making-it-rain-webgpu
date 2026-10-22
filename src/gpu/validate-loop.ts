@@ -165,8 +165,6 @@ export async function validateLoop(
     constraintTolerance: TOLERANCE,
     integrator: "verlet",
     // Every step: this list has no skin, and a stale one loses pairs. See
-    // `RunOptions.cellListInterval`.
-    cellListInterval: 1,
   };
 
   // 1. Determinism: the same run twice.

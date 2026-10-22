@@ -139,7 +139,6 @@ export async function validateBarostat(
     friction: 0,
     constraintTolerance: 1e-6,
     integrator: "verlet",
-    cellListInterval: 1,
     seed: 0x5eed,
   };
 

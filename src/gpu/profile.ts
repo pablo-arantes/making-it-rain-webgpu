@@ -36,6 +36,18 @@ export interface Profile {
   readonly totalNanoseconds: number;
   /** Wall-clock for the whole submission, for comparison with the sum. */
   readonly wallNanoseconds: number;
+  /**
+   * How many repeats were actually measured.
+   *
+   * 🔴 Not always the number asked for: a `GPUQuerySet` holds at most
+   * `maxQueryCount` timestamps, 4096 by default, and the set needs two per pass
+   * per repeat. A caller that divides by what it requested rather than by this
+   * reports times too small by whatever the clamp was. Asking for 40 repeats of
+   * 3HTB's step -- which is over 50 passes once the neighbour list is in it --
+   * needs 4,000-odd timestamps and quietly failed to create the set at all,
+   * which then surfaced as an unrelated 'invalid QuerySet' on the next pass.
+   */
+  readonly repeats: number;
 }
 
 /** Whether a device can be profiled at all. */
@@ -60,10 +72,18 @@ export async function profilePasses(
   repeats = 1,
 ): Promise<Profile | undefined> {
   if (!canProfile(device)) return undefined;
-  const count = passes.length * repeats;
-  if (count === 0) {
-    return { passes: [], totalNanoseconds: 0, wallNanoseconds: 0 };
+  if (passes.length === 0) {
+    return { passes: [], totalNanoseconds: 0, wallNanoseconds: 0, repeats: 0 };
   }
+  // Two timestamps per pass per repeat, inside what the device will hold.
+  // `maxQueryCount` is in the spec but not in @webgpu/types yet, so it is read
+  // defensively rather than declared; 4096 is the guaranteed floor.
+  const maxQueryCount =
+    (device.limits as unknown as { maxQueryCount?: number }).maxQueryCount ?? 4096;
+  const fits = Math.floor(maxQueryCount / 2 / passes.length);
+  if (fits < 1) return undefined;
+  const taken = Math.min(repeats, fits);
+  const count = passes.length * taken;
 
   // Two timestamps per pass, and the resolve buffer has to be a multiple of
   // 256 bytes for the copy that follows.
@@ -82,7 +102,7 @@ export async function profilePasses(
   device.pushErrorScope("validation");
   const encoder = device.createCommandEncoder({ label });
   const labels: string[] = [];
-  for (let repeat = 0; repeat < repeats; repeat++) {
+  for (let repeat = 0; repeat < taken; repeat++) {
     for (const item of passes) {
       const slot = labels.length;
       labels.push(item.label);
@@ -159,6 +179,7 @@ export async function profilePasses(
       .sort((a, b) => b.nanoseconds - a.nanoseconds),
     totalNanoseconds,
     wallNanoseconds,
+    repeats: taken,
   };
 }
 

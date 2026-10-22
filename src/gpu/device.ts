@@ -150,12 +150,23 @@ export const BYTES_PER_ATOM = {
   /** Sorted copies, cell indices, constraint and exclusion bookkeeping. */
   bookkeeping: 48,
   /**
-   * The full neighbour list, which dominates everything else.  At a 1.0 nm
-   * cutoff with a 0.2 nm skin a sphere at water density holds about 240
-   * neighbours, and a gather kernel needs the full list rather than half of
-   * it, at 4 bytes an entry.
+   * The full neighbour list, which dominates everything else by an order of
+   * magnitude.
+   *
+   * 🔴 This said `240 * 4` and the comment said a sphere at water density holds
+   * about 240 neighbours at a 1.0 nm cutoff with a 0.2 nm skin. That is four
+   * times too small, and the error was arithmetic rather than measurement: a
+   * 1.15 nm sphere is 6.37 nm^3, water is about 100 atoms/nm^3, so the sphere
+   * holds about 640 -- and a *gather* kernel stores every pair from both ends,
+   * so there is no halving to take. With the margin `verletCapacity` keeps for
+   * density fluctuation and for the solute, the room needed is about 1,020
+   * entries an atom. Counted on the device at the default skin: 956 for 3HTB.
+   *
+   * It matters because this constant is what `estimateMaxAtoms` turns into the
+   * figure `web/run.html` shows before a run. At 240 it promised four times the
+   * system that would actually fit.
    */
-  neighbours: 240 * 4,
+  neighbours: 1020 * 4,
 } as const;
 
 export const TOTAL_BYTES_PER_ATOM = Object.values(BYTES_PER_ATOM).reduce(
@@ -163,12 +174,31 @@ export const TOTAL_BYTES_PER_ATOM = Object.values(BYTES_PER_ATOM).reduce(
   0,
 );
 
+/**
+ * Everything except the neighbour list, which is the part that is not optional.
+ *
+ * A device too small for the list still runs the system through the cell-shell
+ * scan, so the list's bytes decide speed rather than whether a run is possible.
+ */
+export const REQUIRED_BYTES_PER_ATOM = TOTAL_BYTES_PER_ATOM - BYTES_PER_ATOM.neighbours;
+
 export interface SizeEstimate {
+  /** Including the neighbour list, which is what a run uses when it fits. */
   readonly bytesPerAtom: number;
-  /** Where the neighbour list stops fitting in one storage binding. */
+  /** Where the arrays the engine cannot drop stop fitting one storage binding. */
   readonly atomsAtBindingLimit: number;
-  /** Where the whole working set stops fitting in the largest buffer we can make. */
+  /** Where they stop fitting in the largest buffer we can make. */
   readonly atomsAtBufferLimit: number;
+  /**
+   * Where the *neighbour list* stops fitting one storage binding.
+   *
+   * 🔴 Far smaller than `maxAtoms`, and not a ceiling on what will run. Past
+   * this the list is dropped and every atom takes the 27-cell shell scan,
+   * which gives the same answers more slowly. Conflating the two is what the
+   * first version of this did, and it under-reported the runnable system size
+   * by a factor of forty.
+   */
+  readonly atomsWithNeighbourList: number;
   readonly maxAtoms: number;
   readonly limitedBy: "storage binding" | "buffer size";
 }
@@ -183,13 +213,15 @@ export interface SizeEstimate {
 export function estimateMaxAtoms(limits: GPUSupportedLimits): SizeEstimate {
   const binding = limits.maxStorageBufferBindingSize;
   const buffer = limits.maxBufferSize;
-  const atomsAtBindingLimit = Math.floor(binding / BYTES_PER_ATOM.neighbours);
-  const atomsAtBufferLimit = Math.floor(buffer / TOTAL_BYTES_PER_ATOM);
+  const atomsAtBindingLimit = Math.floor(binding / REQUIRED_BYTES_PER_ATOM);
+  const atomsAtBufferLimit = Math.floor(buffer / REQUIRED_BYTES_PER_ATOM);
+  const atomsWithNeighbourList = Math.floor(binding / BYTES_PER_ATOM.neighbours);
   const maxAtoms = Math.min(atomsAtBindingLimit, atomsAtBufferLimit);
   return {
     bytesPerAtom: TOTAL_BYTES_PER_ATOM,
     atomsAtBindingLimit,
     atomsAtBufferLimit,
+    atomsWithNeighbourList,
     maxAtoms,
     limitedBy:
       atomsAtBindingLimit <= atomsAtBufferLimit ? "storage binding" : "buffer size",
@@ -280,6 +312,23 @@ export interface DeviceFitness {
   /** Workgroups the largest per-atom dispatch needs. */
   readonly dispatchWorkgroups: number;
   readonly problems: readonly FitnessProblem[];
+  /**
+   * Whether the Verlet neighbour list fits, and the largest system it would.
+   *
+   * 🔴 Not a problem when it does not fit, which is the point. The list is
+   * about 4 kB an atom and so stops fitting one storage binding at around
+   * 33,000 atoms on WebGPU's guaranteed floor -- but it is an optimisation,
+   * and `prepareDirect` drops it and sends every atom through the 27-cell
+   * shell scan instead. That path is the one the differential tests run and
+   * `validateNeighbours` holds to bit-for-bit agreement with the list, so the
+   * answers are the same and only the speed differs. Reporting it as a problem
+   * would refuse a system the engine can run.
+   */
+  readonly neighbourList: {
+    readonly fits: boolean;
+    readonly bytes: number;
+    readonly maxAtoms: number;
+  };
 }
 
 /**
@@ -314,15 +363,24 @@ export function deviceFitness(
 
   const binding = limits["maxStorageBufferBindingSize"] ?? 0;
   const neighbourBytes = particleCount * BYTES_PER_ATOM.neighbours;
-  if (neighbourBytes > binding) {
+  const neighbourList = {
+    fits: neighbourBytes <= binding,
+    bytes: neighbourBytes,
+    maxAtoms: estimate.atomsWithNeighbourList,
+  };
+
+  // What the engine cannot do without: one component of one per-atom array has
+  // to fit a binding whatever else is dropped.
+  const requiredBinding = particleCount * REQUIRED_BYTES_PER_ATOM;
+  if (requiredBinding > binding) {
     problems.push({
       limit: "maxStorageBufferBindingSize",
-      needs: neighbourBytes,
+      needs: requiredBinding,
       has: binding,
       detail:
-        `the neighbour list alone needs ${(neighbourBytes / 1048576).toFixed(0)} MB ` +
-        `and this device binds at most ${(binding / 1048576).toFixed(0)} MB. ` +
-        `It can hold about ${estimate.atomsAtBindingLimit.toLocaleString("en-US")} atoms.`,
+        `the per-atom arrays the engine cannot do without come to ` +
+        `${(requiredBinding / 1048576).toFixed(0)} MB and this device binds at ` +
+        `most ${(binding / 1048576).toFixed(0)} MB.`,
     });
   }
 
@@ -385,5 +443,6 @@ export function deviceFitness(
     limitedBy: estimate.limitedBy,
     dispatchWorkgroups,
     problems,
+    neighbourList,
   };
 }

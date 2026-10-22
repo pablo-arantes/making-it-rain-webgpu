@@ -774,6 +774,104 @@
    "1L2Y": 86.5,
    "3HTB": 5.7
   },
-  "remaining": "The pair kernel is still 86% of a 3HTB step, and only 13.7% of the candidates it tests fall inside the cutoff, because a 27-cell shell is 27 cutoff volumes around a useful 4.19. A neighbour list, or a cell narrower than the cutoff, is where the next factor is."
+  "remaining": "The pair kernel is still 86% of a 3HTB step, and only 13.7% of the candidates it tests fall inside the cutoff, because a 27-cell shell is 27 cutoff volumes around a useful 4.19. A neighbour list, or a cell narrower than the cutoff, is where the next factor is.",
+  "note": "The before/after above is per-kernel GPU time from the profile. The neighbour-list figures under `neighbour_list` are steady-state runs, which is the number that matters and is not comparable with these."
+ },
+ "neighbour_list": {
+  "comment": "A Verlet list built to cutoff + skin, rebuilt on the device when any atom has moved skin/2. Measured against the 27-cell shell scan it replaced, over the same run from the same minimised state, on the same machine.",
+  "skin_sweep_3HTB": {
+   "comment": "steps/s against the shell path's ~82 on the same run. The rebuild interval is short because the criterion is exact: the list is rebuilt when ANY atom has moved half the skin, and the fastest hydrogen among 26,749 atoms moves fast.",
+   "0.05": {
+    "stepsPerSecond": 128.0,
+    "stepsPerRebuild": 1.4,
+    "megabytes": 81.5
+   },
+   "0.10": {
+    "stepsPerSecond": 135.2,
+    "stepsPerRebuild": 2.8,
+    "megabytes": 93.2
+   },
+   "0.15": {
+    "stepsPerSecond": 151.3,
+    "stepsPerRebuild": 4.3,
+    "megabytes": 105.9
+   },
+   "0.20": {
+    "stepsPerSecond": 156.6,
+    "stepsPerRebuild": 5.6,
+    "megabytes": 119.8
+   },
+   "chosen": 0.15,
+   "why": "the curve has mostly flattened and the list still fits inside the 128 MB storage binding WebGPU guarantees, which 0.20 is within 8 MB of."
+  },
+  "fixtures": {
+   "1L2Y": {
+    "particleCount": 2373,
+    "cells": [
+     3,
+     3,
+     3
+    ],
+    "cellExtentNm": [
+     1.0268799499686536,
+     1.0268799499686536,
+     1.0268799499686536
+    ],
+    "searchRadiusNm": 1.15,
+    "capacity": 828,
+    "megabytes": 8.18212,
+    "stepsPerRebuild": 7.952830188679245,
+    "worstDisplacementNm": 0.276,
+    "shellStepsPerSecond": 824.6918411846866,
+    "listStepsPerSecond": 1213.0369092550013,
+    "factor": 1.4708971868964402,
+    "nanosecondsPerDay": 209.61277791926423,
+    "shellNanosecondsPerDay": 142.50675015671385,
+    "energyPerAtomList": -13.018946423181518,
+    "energyPerAtomShell": -13.018946423181518,
+    "forceComponentsDiffering": 0,
+    "worstForceDifference": 0,
+    "overflowed": false
+   },
+   "3HTB": {
+    "particleCount": 26749,
+    "cells": [
+     5,
+     5,
+     5
+    ],
+    "cellExtentNm": [
+     1.3166091705295506,
+     1.3166091705295506,
+     1.3166091705295506
+    ],
+    "searchRadiusNm": 1.15,
+    "capacity": 956,
+    "megabytes": 105.926056,
+    "stepsPerRebuild": 4.25531914893617,
+    "worstDisplacementNm": 0.258,
+    "shellStepsPerSecond": 82.46742536535858,
+    "listStepsPerSecond": 151.3431706394249,
+    "factor": 1.8351872872097494,
+    "nanosecondsPerDay": 26.152099886492625,
+    "shellNanosecondsPerDay": 14.250371103133965,
+    "energyPerAtomList": -15.198024103001197,
+    "energyPerAtomShell": -15.198024103001197,
+    "forceComponentsDiffering": 0,
+    "worstForceDifference": 0,
+    "overflowed": false
+   }
+  },
+  "build": {
+   "comment": "One build, measured with the rebuild gate forced open so the profile's per-step figure IS one build. The first version was one invocation per atom looping the 27 cells, which is the same two defects the pair kernel had: particleCount threads and a triple nested loop.",
+   "oneInvocationPerAtomMicroseconds_1L2Y": 26700,
+   "threePassParallelMicroseconds_1L2Y": 980,
+   "factor": 27.2
+  },
+  "measurement_corrections": [
+   "Throughput was first measured on the loop that `profileStep` had just run. That replays step 0's parameter block, so the thermostat draw is the same every time -- a systematic kick, not a random one -- and it heats the system. The run after it measured a blown-up system.",
+   "Then it was measured from the fixture state without minimising. 3HTB went from -7.6 kJ/mol an atom to -26,893 on the shell path and -56,929 on the list path over 200 steps: both diverging, and a diverging run is slower because its cells stop being even. Both numbers measured nothing. 1L2Y's fixture happens to be relaxed, which is why it looked fine. The harness now minimises first and reports the final energy per atom of both runs, because a throughput number alone cannot tell a fast engine from a diverging one.",
+   "The earlier 3HTB figure of 33.1 steps/s came from the per-kernel profile rather than a run, and understated the shell path: a real minimised run is 82.5 steps/s."
+  ]
  }
 }

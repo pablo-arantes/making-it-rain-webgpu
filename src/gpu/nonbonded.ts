@@ -31,7 +31,7 @@ import {
   type CellListBuffers,
   type ListTarget,
 } from "./cell-list.js";
-import { NONBONDED_EXCEPTIONS, NONBONDED_PAIRS } from "./kernels.js";
+import { NONBONDED_EXCEPTIONS, NONBONDED_PAIRS, VERLET } from "./kernels.js";
 import { unpackFixed } from "./forces.js";
 import { fixedWords, fromFixed, fromWords } from "../reference/fixed-point.js";
 import {
@@ -166,6 +166,61 @@ export interface DirectSpaceResult {
  * costs nothing: it is a handful of KB and it means neither side has to know
  * the other's packing.
  */
+/**
+ * The default Verlet skin, nm.
+ *
+ * The list is built to `cutoff + skin` and stays valid while no atom has moved
+ * `skin / 2`, so the skin trades memory and per-step candidates against how
+ * often the shell scan is paid. Measured on 3HTB at 26,749 atoms, against the
+ * 82 steps/s the cell-shell path manages on the same run:
+ *
+ *   skin   steps/s   steps/rebuild   list bytes
+ *   0.05     128.0        1.4           81.5 MB
+ *   0.10     135.2        2.8           93.2 MB
+ *   0.15     151.3        4.3          105.9 MB
+ *   0.20     156.6        5.6          119.8 MB
+ *
+ * 0.15 is where the curve has mostly flattened and the list still fits inside
+ * the 128 MB storage binding WebGPU guarantees, which 0.20 is within 8 MB of.
+ * The rebuild interval is short because the criterion is exact -- the list is
+ * rebuilt when *any* atom has moved half the skin, and the fastest hydrogen in
+ * 26,749 atoms moves fast. GROMACS gets longer intervals by sizing the skin
+ * from a tolerated energy drift instead, which is a different promise.
+ */
+export const DEFAULT_VERLET_SKIN = 0.15;
+
+/**
+ * How many neighbours to make room for per atom.
+ *
+ * The mean is the number density times the volume of the list's sphere. The
+ * margin is for the fluctuation around it and for the solute, which is denser
+ * than the water it sits in: the count over a sphere holding `m` atoms varies
+ * by about `sqrt(m)`, which is 4% at 520, and a buried protein atom sees
+ * roughly 1.3x the mean. 1.6 covers both with room over.
+ *
+ * Overflow past this is not an error and not silent: `build_neighbours` marks
+ * the atom and `direct_pairs` evaluates it from the cell shell instead, so the
+ * margin being wrong costs speed rather than physics.
+ */
+export const VERLET_CAPACITY_MARGIN = 1.6;
+
+export function verletCapacity(
+  particleCount: number,
+  box: Vec3,
+  cutoff: number,
+  skin: number,
+): number {
+  const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);
+  const radius = cutoff + skin;
+  const mean = ((4 / 3) * Math.PI * radius ** 3 * particleCount) / volume;
+  // Never smaller than the system, which is the most an atom can ever see, and
+  // never zero for a system small enough to round down to it.
+  return Math.max(1, Math.min(particleCount - 1, Math.ceil(mean * VERLET_CAPACITY_MARGIN)));
+}
+
+/** How many invocations share one atom's list; see `direct_pairs_list`. */
+export const VERLET_SLICES = 8;
+
 export interface ListSections {
   readonly cellStarts: number;
   readonly order: number;
@@ -242,6 +297,7 @@ export function packPairParams(
   divisions: Vec3,
   box: Vec3,
   alpha: number,
+  verlet: { capacity: number; skin: number } = { capacity: 0, skin: 0 },
 ): Uint8Array {
   const bytes = new ArrayBuffer(PAIR_PARAMS_BYTES);
   const u32 = new Uint32Array(bytes);
@@ -251,6 +307,10 @@ export function packPairParams(
   u32[2] = sections.exclusionStarts / 4;
   u32[3] = sections.exclusionList / 4;
   u32[4] = sections.cellOf / 4;
+  // Words 5 to 7 were padding before `cells`, which is 16-byte aligned.
+  u32[5] = verlet.capacity;
+  u32[6] = VERLET_SLICES;
+  f32[7] = (force.cutoff + verlet.skin) ** 2;
   u32[8] = divisions[0] as number;
   u32[9] = divisions[1] as number;
   u32[10] = divisions[2] as number;
@@ -297,6 +357,41 @@ export interface ResidentDirect {
   readonly cellList: CellListBuffers;
   /** kJ/mol, analytic, a function of the volume and no coordinate. */
   readonly dispersion: number;
+  readonly verlet: ResidentVerlet;
+}
+
+/**
+ * The Verlet neighbour list and what decides when to rebuild it.
+ *
+ * `capacity` of 0 means no list: `planDirect` then plans the cell-shell path
+ * for every atom and none of these buffers are read. The differential tests use
+ * that, so the two candidate paths can be compared on the same configuration.
+ */
+export interface ResidentVerlet {
+  readonly capacity: number;
+  readonly skin: number;
+  /**
+   * The radius the cell grid was sized by, which is not always `cutoff + skin`.
+   *
+   * 🔴 Recorded rather than recomputed, because it is clamped: a box too small
+   * to divide by `cutoff + skin` and still give three cells an axis uses the
+   * cutoff instead, and relies on three cells meaning the 27-cell shell is the
+   * whole box. `StepLoop.setBox` re-derived it as `cutoff + skin` and threw on
+   * 1L2Y the moment the barostat moved the box -- 1.027 nm cells against a
+   * 1.15 nm radius -- which the bonded browser test caught.
+   */
+  readonly searchRadius: number;
+  /** `[k * particleCount + atom]`; see the binding comment in the kernel. */
+  readonly neighbours: GPUBuffer;
+  readonly counts: GPUBuffer;
+  /** `[shell * particleCount + atom]`, counts then offsets. */
+  readonly shellCounts: GPUBuffer;
+  /** Positions when the list was built, for the displacement test. */
+  readonly reference: GPUBuffer;
+  /** rebuild, built, overflow. */
+  readonly flags: GPUBuffer;
+  readonly params: GPUBuffer;
+  readonly byteLength: number;
 }
 
 export function prepareDirect(
@@ -304,14 +399,70 @@ export function prepareDirect(
   force: NonbondedForce,
   boxVectors: readonly [Vec3, Vec3, Vec3],
   alpha: number,
+  /** 0 builds no list, so every atom takes the cell-shell path. */
+  verletSkin?: number,
 ): ResidentDirect {
   const device = pool.device;
   const box = rectangularBox(boxVectors);
   const n = force.particleCount;
   const exclusions = buildExclusionLists(force);
 
+  // 🔴 The list has to fit one storage binding, and at a water density it is
+  // about 4 kB an atom -- which is 33,000 atoms inside the 128 MB WebGPU
+  // guarantees. So it is chosen to fit, not assumed to: the skin comes down
+  // first, and if even a thin one will not fit, the list is dropped and every
+  // atom takes the cell-shell path. That path is not a degraded mode kept for
+  // this -- it is the same kernel the differential tests run, and
+  // `validateNeighbours` holds the two to bit-for-bit agreement -- so giving
+  // way costs speed and nothing else.
+  const bindingBudget = Math.min(
+    pool.device.limits.maxStorageBufferBindingSize,
+    pool.device.limits.maxBufferSize,
+  );
+  const fitted = ((): { skin: number; capacity: number } => {
+    if (verletSkin === 0) return { skin: 0, capacity: 0 };
+    const wanted = verletSkin ?? DEFAULT_VERLET_SKIN;
+    for (const candidate of [wanted, 0.1, 0.05, 0.02]) {
+      if (candidate > wanted) continue;
+      const room = verletCapacity(n, box, force.cutoff, candidate);
+      if (room * n * 4 <= bindingBudget) return { skin: candidate, capacity: room };
+    }
+    return { skin: 0, capacity: 0 };
+  })();
+  const skin = fitted.skin;
+  const capacity = fitted.capacity;
+  /**
+   * The radius the cells are sized by, so the 27-cell shell reaches it.
+   *
+   * 🔴 Sized by `cutoff + skin`, not by the cutoff, and the difference is a
+   * lost-pair bug rather than a tuning choice. A shell of one cell either way
+   * covers everything within *one cell width*, so a search radius larger than
+   * the cell leaves candidates two cells out that the scan never visits. With
+   * cells sized by the cutoff, 3HTB's are 1.096 nm and a list built to
+   * `1.0 + 0.1` reaches 1.1 -- so every pair between 1.096 and 1.1 nm was
+   * missing, and the trajectory came apart a few hundred steps later.
+   *
+   * The exception is a box too small to divide by the larger radius and still
+   * get three cells an axis, which is 1L2Y: 3.081 nm over 1.1 is 2.8. Three
+   * cells an axis is the floor, and at exactly three the shell visits every
+   * cell in the box -- so nothing can be out of its reach whatever the radius,
+   * and the cutoff-sized grid is both correct and finer. `cellGeometry` throws
+   * if even the cutoff cannot give three, which is the pre-existing minimum
+   * image requirement and not this one.
+   *
+   * 1L2Y being that case is also why it hid the bug: its differential checks
+   * pass with any search radius, so the small fixture cannot test this at all.
+   * `validateNeighbours` is the check that can, on the big one.
+   */
+  const shortestBox = Math.min(box[0] as number, box[1] as number, box[2] as number);
+  const searchRadius =
+    capacity === 0 ||
+    Math.floor(shortestBox / (force.cutoff + skin)) < MINIMUM_CELLS_PER_AXIS
+      ? force.cutoff
+      : force.cutoff + skin;
+
   // The grid has to be known before the sections can be laid out.
-  const probe = prepareCellList(pool, n, box, force.cutoff, {
+  const probe = prepareCellList(pool, n, box, searchRadius, {
     buffer: pool.buffer({ label: "nonbonded/listsProbe", byteLength: 4, usage: storageUsage() }),
     startsByteOffset: 0,
     orderByteOffset: 0,
@@ -329,7 +480,7 @@ export function prepareDirect(
     orderByteOffset: sections.order,
     cellOfByteOffset: sections.cellOf,
   };
-  const cellList = prepareCellList(pool, n, box, force.cutoff, target);
+  const cellList = prepareCellList(pool, n, box, searchRadius, target);
 
   // Only the exclusion sections are static; the cell list's are written by its
   // own kernel every rebuild.
@@ -345,6 +496,69 @@ export function prepareDirect(
       exclusions.list as unknown as BufferSource,
     );
   }
+
+  const verletParams = pool.buffer({
+    label: "verlet/params",
+    byteLength: 16,
+    usage: uniformUsage(),
+  });
+  device.queue.writeBuffer(
+    verletParams,
+    0,
+    new Uint32Array([n, 0, 0, 0]) as unknown as BufferSource,
+  );
+  device.queue.writeBuffer(
+    verletParams,
+    4,
+    new Float32Array([(0.5 * skin) ** 2]) as unknown as BufferSource,
+  );
+  // 🔴 The list dominates the engine's memory: capacity words an atom, which is
+  // 2 kB an atom at a 1 nm cutoff in water. `deviceFitness` has to know, or a
+  // preflight promises a system that will not fit.
+  const neighbourBytes = Math.max(4, capacity * n * 4);
+  const verlet: ResidentVerlet = {
+    capacity,
+    skin,
+    searchRadius,
+    neighbours: pool.buffer({
+      label: "verlet/neighbours",
+      byteLength: neighbourBytes,
+      usage: storageUsage(),
+    }),
+    counts: pool.buffer({
+      label: "verlet/counts",
+      byteLength: n * 4,
+      usage: readableStorageUsage(),
+    }),
+    // One count per (atom, shell cell), which the prefix sum turns into the
+    // offset each cell's fill writes at.
+    shellCounts: pool.buffer({
+      label: "verlet/shellCounts",
+      byteLength: Math.max(4, capacity === 0 ? 4 : NEIGHBOUR_CELLS * n * 4),
+      usage: storageUsage(),
+    }),
+    reference: pool.buffer({
+      label: "verlet/reference",
+      byteLength: n * 3 * 8,
+      usage: storageUsage(),
+    }),
+    flags: pool.buffer({
+      label: "verlet/flags",
+      byteLength: 32,
+      usage: readableStorageUsage(),
+    }),
+    params: verletParams,
+    byteLength:
+      neighbourBytes +
+      n * 4 +
+      (capacity === 0 ? 0 : NEIGHBOUR_CELLS * n * 4) +
+      n * 24 +
+      16,
+  };
+  // `built` starts clear, so the first step builds; `counts` starts at zero so
+  // that a run with no list sends every atom to the cell-shell path.
+  device.queue.writeBuffer(verlet.flags, 0, new Uint32Array(8) as unknown as BufferSource);
+  device.queue.writeBuffer(verlet.counts, 0, new Uint32Array(n) as unknown as BufferSource);
 
   const particleData = new Float32Array(n * 4);
   for (let i = 0; i < n; i++) {
@@ -373,6 +587,7 @@ export function prepareDirect(
       probe.geometry.divisions,
       box,
       alpha,
+      verlet,
     ) as unknown as BufferSource,
   );
 
@@ -422,6 +637,7 @@ export function prepareDirect(
     exceptions: exceptionsBuffer,
     exceptionParams,
     cellList,
+    verlet,
     dispersion: force.useDispersionCorrection
       ? dispersionCorrection(
           force,
@@ -446,36 +662,153 @@ export interface Accumulators {
 }
 
 /** The pair pass, and the exception pass when there are any. */
+export interface DirectPasses {
+  /**
+   * Deciding whether the list has gone stale, then rebuilding it.
+   *
+   * Encoded every step and almost always doing nothing: four of the five
+   * return on the flag. Empty when there is no list.
+   */
+  readonly rebuild: readonly Pass[];
+  /** The neighbour-list path, or null when there is no list. */
+  readonly listPairs: Pass | null;
+  /**
+   * The cell-shell path.
+   *
+   * With a list this handles only the atoms whose list overflowed, and is a
+   * dispatch that returns immediately when none did. Without one it is the
+   * whole force.
+   */
+  readonly pairs: Pass;
+  readonly exceptions: Pass | null;
+}
+
 export async function planDirect(
   cache: PipelineCache,
   resident: ResidentDirect,
   accumulators: Accumulators,
-): Promise<{ pairs: Pass; exceptions: Pass | null }> {
+): Promise<DirectPasses> {
+  const { verlet } = resident;
+  const atoms = Math.ceil(resident.particleCount / 64);
+  // 🔴 One entry at a time, and only the ones the entry point reads. A pipeline
+  // created with `layout: "auto"` gets a layout derived from the bindings that
+  // entry point *statically uses*, so handing it one it does not touch is
+  // rejected outright -- `direct_pairs` never reads `neighbours`, only the
+  // count it gates on. The alternative, one shared array for all three entry
+  // points, does not survive that.
+  //
+  // Binding 0 is the *wrapped* positions, not the integrator's. Both endpoints
+  // inside the box is what lets the minimum image be a single conditional
+  // shift, which is 4x the whole kernel on 3HTB. The `wrap` pass that fills it
+  // runs first in the step.
+  const wrapped = { binding: 0, resource: { buffer: resident.cellList.wrapped } };
+  const forces = { binding: 1, resource: { buffer: accumulators.forces } };
+  const energy = { binding: 2, resource: { buffer: accumulators.energy } };
+  const particle = { binding: 3, resource: { buffer: resident.particle } };
+  const lists = { binding: 4, resource: { buffer: resident.lists } };
+  const pairParams = { binding: 5, resource: { buffer: resident.pairParams } };
+  const neighbours = { binding: 6, resource: { buffer: verlet.neighbours } };
+  const counts = { binding: 7, resource: { buffer: verlet.counts } };
+  const flags = { binding: 8, resource: { buffer: verlet.flags } };
+  const shellCounts = { binding: 9, resource: { buffer: verlet.shellCounts } };
+
   const pairs = await cache.pass(
     {
       label: "direct space pairs",
       code: NONBONDED_PAIRS,
       entryPoint: "direct_pairs",
     },
-    [
-      // 🔴 Binding 0 is the *wrapped* positions, not the integrator's. Both
-      // endpoints inside the box is what lets the kernel's minimum image be a
-      // single conditional shift, which is 4x the whole kernel on 3HTB. The
-      // `wrap` pass that fills this runs first in `planCellList`.
-      { binding: 0, resource: { buffer: resident.cellList.wrapped } },
-      { binding: 1, resource: { buffer: accumulators.forces } },
-      { binding: 2, resource: { buffer: accumulators.energy } },
-      { binding: 3, resource: { buffer: resident.particle } },
-      { binding: 4, resource: { buffer: resident.lists } },
-      { binding: 5, resource: { buffer: resident.pairParams } },
-    ],
+    [wrapped, forces, energy, particle, lists, pairParams, counts],
     // One invocation per (atom, neighbour cell): the y axis carries the 27
     // cells of the shell. The kernel used to loop over them, which left only
     // `particleCount` threads in flight; see the note on `shell` in
     // nonbonded-pairs.wgsl for why that was the cost of the whole step.
-    [Math.ceil(resident.particleCount / 64), NEIGHBOUR_CELLS],
+    [atoms, NEIGHBOUR_CELLS],
   );
-  if (resident.force.exceptionCount === 0) return { pairs, exceptions: null };
+
+  const listPairs =
+    verlet.capacity === 0
+      ? null
+      : await cache.pass(
+          {
+            label: "direct space pairs (list)",
+            code: NONBONDED_PAIRS,
+            entryPoint: "direct_pairs_list",
+          },
+          [wrapped, forces, energy, particle, lists, pairParams, neighbours, counts],
+          // The y axis slices one atom's list; see `direct_pairs_list`.
+          [atoms, VERLET_SLICES],
+        );
+
+  // Again only what each entry point reads: `reset_rebuild` and `mark_built`
+  // touch the flags and nothing else, and an auto layout rejects the rest.
+  const positions = { binding: 0, resource: { buffer: accumulators.positions } };
+  const referencePositions = { binding: 1, resource: { buffer: verlet.reference } };
+  const verletFlags = { binding: 2, resource: { buffer: verlet.flags } };
+  const verletParams = { binding: 3, resource: { buffer: verlet.params } };
+  const verletPass = (
+    entryPoint: string,
+    workgroups: number,
+    entries: readonly { binding: number; resource: GPUBindingResource }[],
+  ): Promise<Pass> =>
+    cache.pass(
+      { label: `verlet/${entryPoint}`, code: VERLET, entryPoint },
+      entries,
+      [workgroups],
+    );
+
+  const rebuild: readonly Pass[] =
+    verlet.capacity === 0
+      ? []
+      : [
+          await verletPass("reset_rebuild", 1, [verletFlags]),
+          await verletPass("displacement", atoms, [
+            // The *unwrapped* positions: this measures motion, not a pair
+            // vector.
+            positions,
+            referencePositions,
+            verletFlags,
+            verletParams,
+          ]),
+          await cache.pass(
+            {
+              label: "verlet/count",
+              code: NONBONDED_PAIRS,
+              entryPoint: "count_neighbours",
+            },
+            [wrapped, lists, pairParams, flags, shellCounts],
+            [atoms, NEIGHBOUR_CELLS],
+          ),
+          await cache.pass(
+            {
+              label: "verlet/offset",
+              code: NONBONDED_PAIRS,
+              entryPoint: "offset_neighbours",
+            },
+            [pairParams, counts, flags, shellCounts],
+            [atoms],
+          ),
+          await cache.pass(
+            {
+              label: "verlet/fill",
+              code: NONBONDED_PAIRS,
+              entryPoint: "fill_neighbours",
+            },
+            [wrapped, lists, pairParams, neighbours, counts, flags, shellCounts],
+            [atoms, NEIGHBOUR_CELLS],
+          ),
+          await verletPass("save_reference", atoms, [
+            positions,
+            referencePositions,
+            verletFlags,
+            verletParams,
+          ]),
+          await verletPass("mark_built", 1, [verletFlags]),
+        ];
+
+  if (resident.force.exceptionCount === 0) {
+    return { rebuild, listPairs, pairs, exceptions: null };
+  }
   const exceptions = await cache.pass(
     {
       label: "direct space exceptions",
@@ -492,7 +825,7 @@ export async function planDirect(
     ],
     [Math.ceil(resident.force.exceptionCount / 64)],
   );
-  return { pairs, exceptions };
+  return { rebuild, listPairs, pairs, exceptions };
 }
 
 /**
@@ -584,7 +917,10 @@ export async function evaluateDirectSpace(
     device.queue.writeBuffer(accumulators.energy, 0, new Uint32Array(2));
 
     const cache = pipelineCacheFor(device);
-    const resident = prepareDirect(pool, force, boxVectors, alpha);
+    // `0` builds no list: this is the single-configuration path the
+    // differential tests use, and it takes the cell-shell route so the
+    // reference is compared against `direct_pairs` directly.
+    const resident = prepareDirect(pool, force, boxVectors, alpha, 0);
     // The fold runs either way: the pair kernel differences its output whether
     // or not this device built the list.
     await submitPasses(device, "wrap", [

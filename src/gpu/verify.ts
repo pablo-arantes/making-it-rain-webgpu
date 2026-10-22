@@ -127,7 +127,6 @@ export async function verifySystem(
     friction: 0,
     constraintTolerance: 1e-6,
     integrator: "verlet",
-    cellListInterval: 1,
   });
   let deviceEnergy: number;
   let deviceForces: Float64Array;

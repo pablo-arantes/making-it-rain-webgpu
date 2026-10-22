@@ -87,7 +87,9 @@ export async function validateCellList(
     // Built through the same `prepareDirect` the forces use, so the layout under
     // test is the layout a run uses rather than a parallel one.
     const alpha = ewaldAlpha(force.cutoff, force.ewaldTolerance);
-    const resident = prepareDirect(pool, force, state.boxVectors, alpha);
+    // No list: this check is about the cell list, and the shell path is what
+    // reads it.
+    const resident = prepareDirect(pool, force, state.boxVectors, alpha, 0);
     const positions = pool.buffer({
       label: "cell/positions",
       byteLength: positionWords.byteLength,

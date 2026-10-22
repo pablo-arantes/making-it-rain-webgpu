@@ -137,7 +137,6 @@ export async function validateMinimise(
     friction: 0,
     constraintTolerance: CONSTRAINT_TOLERANCE,
     integrator: "verlet",
-    cellListInterval: 1,
   };
 
   // The energy at the fixture's own coordinates, from the device, so that

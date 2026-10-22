@@ -214,7 +214,6 @@ export async function protocolHooksFor(
         friction: 1,
         constraintTolerance: 1e-6,
         integrator: "lfmiddle",
-        cellListInterval: 1,
         seed: settings.seed,
       });
       loops.push(loop);
@@ -263,7 +262,6 @@ export async function validateProtocol(
     friction: 1,
     constraintTolerance: 1e-6,
     integrator: "lfmiddle",
-    cellListInterval: 1,
     seed: settings.seed,
     ...{ pressure },
   });

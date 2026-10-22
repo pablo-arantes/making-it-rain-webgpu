@@ -99,7 +99,6 @@ export async function validatePbc(
     friction: 0,
     constraintTolerance: 1e-6,
     integrator: "verlet",
-    cellListInterval: 1,
   };
 
   const loop = await StepLoop.fromParsed(device, system, state, options);

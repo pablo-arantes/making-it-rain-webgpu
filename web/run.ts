@@ -174,6 +174,20 @@ async function readFiles(): Promise<boolean> {
         `<p class="note">This GPU holds about ` +
         `${fitness.maxAtoms.toLocaleString("en-US")} atoms, limited by its ` +
         `${escapeText(fitness.limitedBy)}.</p>`;
+      // The neighbour list is the difference between about 26 and about 14
+      // ns/day on a solvated protein, so a run that cannot have it should say
+      // so rather than just being slow. It is not a correctness note: the
+      // fallback is the kernel the differential tests run, held to bit-for-bit
+      // agreement with the list by `validateNeighbours`.
+      if (!fitness.neighbourList.fits) {
+        summary.innerHTML +=
+          `<p class="note">Too large for a neighbour list on this GPU, which ` +
+          `needs ${(fitness.neighbourList.bytes / 1048576).toFixed(0)} MB and ` +
+          `fits about ` +
+          `${fitness.neighbourList.maxAtoms.toLocaleString("en-US")} atoms. The ` +
+          `run will use the cell-shell scan instead: the same forces, roughly ` +
+          `half the speed.</p>`;
+      }
     }
 
     setStatus(

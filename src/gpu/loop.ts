@@ -128,24 +128,28 @@ export interface RunOptions {
   readonly seed?: number;
   readonly integrator: "verlet" | "lfmiddle";
   /**
-   * How many steps between cell-list rebuilds. One by default, and one is the
-   * only value that is always safe.
+   * How far past the cutoff to build the neighbour list, nm.
    *
-   * 🔴 This list has no skin. The pair kernel scans the 27 cells around an
-   * atom's recorded home cell, which covers everything within
-   * `cellSize - displacement` of it, so a pair inside the cutoff is only
-   * guaranteed to be found while every atom has moved less than
-   * `cellSize - cutoff`. The cell size is `box / floor(box / cutoff)`, so that
-   * slack is whatever the box happens to leave: 0.087 nm for 3HTB's 6.52 nm box
-   * at a 1 nm cutoff, and it can be arbitrarily close to zero.
+   * `DEFAULT_VERLET_SKIN` by default; 0 builds no list and sends every atom
+   * through the 27-cell shell scan, which is what the differential tests use.
    *
-   * Losing a pair is not a rounding error, it is a discontinuity in the force,
-   * and it shows up as energy drift. Measured on 3HTB at an interval of 20:
-   * 13.7 kJ/mol per atom per ns, against 0.0023 when the list is rebuilt every
-   * step. A skin -- deliberately larger cells plus a displacement test -- is
-   * the fix that makes a longer interval safe, and it is not here yet.
+   * 🔴 This replaced `cellListInterval`, and the reason is worth keeping. That
+   * option rebuilt the cell list every N steps, and the pair kernel scanned the
+   * 27 cells around an atom's *recorded* home cell -- so a pair inside the
+   * cutoff was only guaranteed to be found while every atom had moved less than
+   * `cellSize - cutoff`, which is whatever the box happens to leave: 0.087 nm
+   * for 3HTB's 6.52 nm box, and arbitrarily close to zero for another box.
+   * Losing a pair is not a rounding error, it is a discontinuity in the force:
+   * measured on 3HTB at an interval of 20, 13.7 kJ/mol per atom per ns against
+   * 0.0023 at every step.
+   *
+   * A skin is the fix, and it is a different shape from an interval. The list
+   * holds everything within `cutoff + skin`, so it stays correct while no atom
+   * has moved `skin / 2` -- and *that* is tested on the device every step
+   * rather than assumed. The rebuild happens when the geometry says so, not on
+   * a schedule, so there is no value of this that silently loses a pair.
    */
-  readonly cellListInterval?: number;
+  readonly verletSkin?: number;
   /**
    * The largest number of steps encoded into one submission.
    *
@@ -240,10 +244,9 @@ export class StepLoop {
     /**
      * Folding every coordinate into the box.
      *
-     * Separate from `cellPasses` because it is encoded on *every* step while
-     * the rebuild honours `cellListInterval`. The pair kernel differences this
-     * pass's output, so skipping it would evaluate the forces at the
-     * coordinates of the last rebuild.
+     * Separate from `cellPasses` only because the one-shot paths build the
+     * cell list without it. The pair kernels difference this pass's output, so
+     * it runs every step.
      */
     private readonly wrapPass: Pass,
     /** Rebuilding the cell list. */
@@ -329,7 +332,13 @@ export class StepLoop {
     );
     device.queue.writeBuffer(buffers.residual, 0, new Float32Array(components));
 
-    const direct = prepareDirect(pool, nonbonded, state.boxVectors, alpha);
+    const direct = prepareDirect(
+      pool,
+      nonbonded,
+      state.boxVectors,
+      alpha,
+      options.verletSkin,
+    );
     const pme = preparePme(pool, nonbonded, state.boxVectors, alpha, grid);
     const bonded = system.forces.filter(
       (f): f is BondedForce =>
@@ -362,7 +371,16 @@ export class StepLoop {
       residentRestraints.push(resident);
       forcePasses.push(await planRestraint(cache, resident, accumulators));
     }
-    const { pairs, exceptions } = await planDirect(cache, direct, accumulators);
+    // Deciding whether the neighbour list is stale, rebuilding it when it is,
+    // then the forces over it. `pairs` is the cell-shell path, which with a
+    // list handles only the atoms whose list overflowed.
+    const { rebuild, listPairs, pairs, exceptions } = await planDirect(
+      cache,
+      direct,
+      accumulators,
+    );
+    forcePasses.push(...rebuild);
+    if (listPairs !== null) forcePasses.push(listPairs);
     forcePasses.push(pairs);
     if (exceptions !== null) forcePasses.push(exceptions);
     forcePasses.push(...(await planPme(pool, cache, pme, accumulators)));
@@ -698,7 +716,6 @@ export class StepLoop {
       this.options.maxBatch ?? DEFAULT_MAX_BATCH,
       this.stepCount,
     );
-    const interval = this.options.cellListInterval ?? 1;
     const device = this.device;
     device.pushErrorScope("validation");
     const encoder = device.createCommandEncoder({ label: "step batch" });
@@ -709,9 +726,14 @@ export class StepLoop {
       if (this.comFrequency > 0 && removesOnStep(this.comFrequency, step)) {
         encodePasses(encoder, this.comPasses);
       }
-      // Unconditional, unlike the rebuild: see `wrapPass`.
+      // Both unconditional. The fold is read by the pair kernels every step,
+      // and the cell list is read by `direct_pairs` every step -- it handles
+      // the atoms whose neighbour list overflowed, at the current positions, so
+      // a stale partition would lose exactly the pairs the fallback exists to
+      // keep. The *neighbour* list is what a skin makes safe to reuse, and
+      // `rebuild` decides that on the device.
       encodePasses(encoder, [this.wrapPass]);
-      if (step % interval === 0) encodePasses(encoder, this.cellPasses);
+      encodePasses(encoder, this.cellPasses);
       encodePasses(encoder, this.forcePasses);
       encodePasses(encoder, this.phaseBuilder(i * STEP_PARAMS_STRIDE));
     }
@@ -862,6 +884,12 @@ export class StepLoop {
     return { energy, forces };
   }
 
+  /** The cell grid the list was built on, for reports and checks. */
+  cellGeometry(): { readonly divisions: readonly number[]; readonly extent: readonly number[] } {
+    const { geometry } = this.direct.cellList;
+    return { divisions: geometry.divisions, extent: geometry.extent };
+  }
+
   /** The current coordinates, nm. */
   async positions(): Promise<Float64Array> {
     const components = this.system.particleCount * 3;
@@ -893,6 +921,36 @@ export class StepLoop {
       ...this.cellPasses,
       ...this.forcePasses,
     ]);
+  }
+
+  /**
+   * The neighbour list's bookkeeping, read back.
+   *
+   * For reports and measurements, not for the step path: this drains the
+   * pipeline, which is exactly what keeping the rebuild decision on the device
+   * avoids. `rebuilds` is what makes the skin judgeable -- steps per rebuild is
+   * measured rather than assumed -- and `overflowed` says whether any atom fell
+   * back to the cell-shell scan.
+   */
+  async verletFlags(): Promise<{
+    readonly rebuilds: number;
+    /** The largest displacement since a build that the run ever saw, nm. */
+    readonly worstDisplacement: number;
+    readonly overflowed: boolean;
+    readonly capacity: number;
+    readonly skin: number;
+    readonly byteLength: number;
+  }> {
+    const { verlet } = this.direct;
+    const words = new Uint32Array(await readBuffer(this.device, verlet.flags, 32));
+    return {
+      rebuilds: words[3] as number,
+      worstDisplacement: (words[4] as number) / 1000,
+      overflowed: (words[2] as number) !== 0,
+      capacity: verlet.capacity,
+      skin: verlet.skin,
+      byteLength: verlet.byteLength,
+    };
   }
 
   private async submit(label: string, passes: readonly Pass[]): Promise<void> {
@@ -957,6 +1015,7 @@ export class StepLoop {
         this.direct.cellList.geometry.divisions,
         box,
         this.alpha,
+        this.direct.verlet,
       ),
     );
     write(
@@ -972,7 +1031,9 @@ export class StepLoop {
       this.pme.interpolateParams,
       packInterpolateParams(this.system.particleCount, this.pme.grid, box),
     );
-    updateCellBox(this.pool, this.direct.cellList, box, this.nonbonded.cutoff);
+    // The radius `prepareDirect` actually sized the cells by, which is clamped
+    // for a small box and so is not always `cutoff + skin`.
+    updateCellBox(this.pool, this.direct.cellList, box, this.direct.verlet.searchRadius);
     for (const restraint of this.restraints) {
       write(restraint.params, packRestraintParams(restraint.count, box));
     }

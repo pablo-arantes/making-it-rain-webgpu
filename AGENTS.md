@@ -76,6 +76,19 @@ measurements these rest on.
   cost nothing only because the test that found it was written to check it.
 
   Across devices bitwise agreement is not promised, and the reason is recorded.
+- **The neighbour list is an optimisation and gives way rather than failing.**
+  It is about 4 kB an atom, so it stops fitting one storage binding at around
+  33,000 atoms on WebGPU's guaranteed floor. `prepareDirect` then thins the skin
+  and, failing that, drops the list and sends every atom through the 27-cell
+  shell scan. That path is not a degraded mode kept for the purpose — it is the
+  one the differential tests run, and `validateNeighbours` holds the two to
+  bit-for-bit agreement — so giving way costs speed and nothing else. A fitness
+  report must not call the list's size a problem, or it refuses a system the
+  engine can run.
+- **The cells are sized by the list's search radius, not by the cutoff.** A
+  27-cell shell reaches one cell width, so a radius larger than a cell loses
+  pairs — silently, and only on a box big enough to have cells the shell does
+  not cover, which no small fixture has.
 - **The pair kernel's positions are folded into `[0, box)` before it runs.**
   `cell/wrap` does it once per step, and that precondition is the whole reason
   the kernel's minimum image can be a single conditional shift instead of a

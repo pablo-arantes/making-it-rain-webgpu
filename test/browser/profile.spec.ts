@@ -61,7 +61,14 @@ test.describe("the step profile", () => {
     for (const expected of [
       "cell/wrap",
       "cell/assign",
-      "direct space pairs",
+      // The neighbour-list path, which is what carries the force. The
+      // cell-shell pass is encoded too but handles only overflowed atoms, so
+      // on a healthy run its span is too short to measure and the profiler
+      // drops it rather than reporting a zero -- requiring it here would be
+      // requiring an overflow.
+      "direct space pairs (list)",
+      "verlet/count",
+      "verlet/fill",
       "pme spread",
       "pme convolve",
       "pme interpolate",
@@ -96,14 +103,48 @@ test.describe("the step profile", () => {
       3,
     );
 
-    // The pair kernel is the one worth knowing about: it is the step on every
+    // The pair work is the one worth knowing about: it is the step on every
     // device measured so far, and the reason the shell is split across the
-    // dispatch and the minimum image is loop-free.
-    const pairs = profile.kernels.find((k) => k.label === "direct space pairs")!;
-    expect(pairs.share).toBeGreaterThan(0.2);
+    // dispatch, the minimum image is loop-free and there is a neighbour list
+    // at all. Counted with the list's build, which is pair work paid in
+    // advance.
+    const pairShare = profile.kernels
+      .filter((k) => k.label.startsWith("direct space pairs") || k.label.startsWith("verlet/"))
+      .reduce((total, k) => total + k.share, 0);
+    expect(pairShare).toBeGreaterThan(0.2);
+
+    // A run is faster than the path the list replaced, and ends in the same
+    // place. The factor is not asserted -- it is 1.5x to 1.8x on the GPU this
+    // was written on and will differ elsewhere -- but the direction is not a
+    // matter of hardware, and the energies agreeing is what says the two runs
+    // are the same physics rather than two different trajectories.
+    expect(profile.steadyStepsPerSecond).toBeGreaterThan(profile.shellStepsPerSecond);
+    expect(profile.listEnergyPerAtom).toBeCloseTo(profile.shellEnergyPerAtom, 6);
+    expect(profile.overflowed).toBe(false);
+    expect(profile.stepsPerRebuild).toBeGreaterThan(1);
 
     // And the page says so, so a person loading it sees the same numbers.
     await expect(page.locator("h3", { hasText: "Where a step's time goes" })).toBeVisible();
-    await expect(page.locator("td code", { hasText: "direct space pairs" })).toBeVisible();
+    await expect(
+      page.locator("td code", { hasText: "direct space pairs (list)" }),
+    ).toBeVisible();
+
+    // The list is held to bit-for-bit agreement with the shell scan, which is
+    // the check that a lost pair cannot hide behind a tolerance.
+    const neighbours = (await page.evaluate(() => window.__mirNeighbours))!;
+    expect("error" in neighbours ? neighbours.error : "").toBe("");
+    if (!("error" in neighbours)) {
+      expect(neighbours.differing).toBe(0);
+      expect(neighbours.worstForceDifference).toBe(0);
+      expect(neighbours.ok).toBe(true);
+      // One cell has to be at least as wide as the list's radius, or the
+      // 27-cell shell cannot reach the pairs the list is supposed to hold --
+      // unless there are exactly three cells an axis, where the shell is the
+      // whole box.
+      const narrowest = Math.min(...neighbours.cellExtent);
+      expect(
+        narrowest >= neighbours.searchRadius || neighbours.cells.every((n) => n === 3),
+      ).toBe(true);
+    }
   });
 });
