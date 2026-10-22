@@ -42,7 +42,6 @@ import { splitConstraints } from "../engine/constraint-clusters.js";
 import {
   dispersionCorrection,
   netChargeCorrection,
-  rectangularBox,
   selfEnergy,
 } from "../reference/forces/nonbonded.js";
 import { centreOfMassRemover, removesOnStep } from "../reference/com-motion.js";
@@ -80,6 +79,7 @@ import {
   packPairParams,
   planDirect,
   prepareDirect,
+  usableDiagonal,
   type Accumulators,
   type ResidentDirect,
 } from "./nonbonded.js";
@@ -292,7 +292,7 @@ export class StepLoop {
     if (nonbonded === undefined) {
       throw new Error("a run needs a NonbondedForce; this system has none");
     }
-    const box = rectangularBox(state.boxVectors);
+    const box = usableDiagonal(state.boxVectors, nonbonded.cutoff);
     // An uploaded system may pin alpha; otherwise it follows from the cutoff
     // and the tolerance, exactly as `NonbondedForce` does it.
     const alpha =

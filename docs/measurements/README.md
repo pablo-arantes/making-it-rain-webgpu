@@ -17,4 +17,5 @@ committed -- regenerate them with `tools/build_reference_system.py`.
 | `profile-step-m3pro.json` | `web/validate.html` in Chrome, via `src/gpu/profile.ts` | same |
 | `triclinic-dodecahedron-1L2Y.json` | `tools/build_reference_system.py --box-shape dodecahedron` | OpenMM 7.7.0.dev — **superseded**, see below |
 | `triclinic-reference-parity.json` | `tools/build_triclinic_fixture.py` | OpenMM 8.4.0.dev (`parametrizani_env`), Apple M3 Pro |
+| `triclinic-gpu-dodecahedron.json` | `npm run report:verify` and `web/validate.html` | Apple M3 Pro GPU through Chrome |
 | `bench-M3Pro-chrome.json` | `npm run bench` | same |

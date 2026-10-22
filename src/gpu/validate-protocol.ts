@@ -39,7 +39,7 @@ import { velocitiesAtTemperature } from "../reference/velocities.js";
 import { splitConstraints } from "../engine/constraint-clusters.js";
 import { DCD_HEADER_BYTES } from "../analysis/dcd.js";
 import { cellHeadroom } from "./cell-list.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { gridExtents } from "./cell-list.js";
 import { StepLoop, type RunOptions } from "./loop.js";
 import { LoopEngine } from "./engine.js";
 
@@ -183,7 +183,7 @@ export async function protocolHooksFor(
   const nonbonded = production.forces.find((f) => f.type === "NonbondedForce");
   const cutoff =
     nonbonded !== undefined && "cutoff" in nonbonded ? nonbonded.cutoff : 1;
-  const headroom = cellHeadroom(rectangularBox(state.boxVectors), cutoff);
+  const headroom = cellHeadroom(gridExtents(state.boxVectors), cutoff);
   const ensemble: "NPT" | "NVT" = headroom >= HEADROOM_FOR_NPT ? "NPT" : "NVT";
   const loops: StepLoop[] = [];
 
@@ -253,7 +253,7 @@ export async function validateProtocol(
   const nonbonded = production.forces.find((f) => f.type === "NonbondedForce");
   const cutoff =
     nonbonded !== undefined && "cutoff" in nonbonded ? nonbonded.cutoff : 1;
-  const headroom = cellHeadroom(rectangularBox(state.boxVectors), cutoff);
+  const headroom = cellHeadroom(gridExtents(state.boxVectors), cutoff);
   const ensemble: "NPT" | "NVT" = headroom >= HEADROOM_FOR_NPT ? "NPT" : "NVT";
 
   const options = (temperature: number, pressure: number): RunOptions => ({

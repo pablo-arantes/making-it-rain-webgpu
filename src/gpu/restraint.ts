@@ -27,7 +27,7 @@ import {
   writeInverseBox,
   writeOffDiagonalBox,
 } from "./nonbonded.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { usableDiagonal } from "./nonbonded.js";
 import type { Pass, PipelineCache } from "./pipeline.js";
 import type { PositionRestraintForce, Vec3 } from "../engine/system.js";
 
@@ -71,7 +71,9 @@ export function prepareRestraint(
   boxVectors: readonly [Vec3, Vec3, Vec3],
   slot = 0,
 ): ResidentRestraint {
-  const box = rectangularBox(boxVectors);
+  // A restraint has no cutoff of its own; the cell only has to be reduced,
+  // so the bound is the loosest one that still means something.
+  const box = usableDiagonal(boxVectors, 0);
   const count = Math.max(1, force.count);
 
   // Two words a term: the atom index, and `k` as raw bits.

@@ -31,7 +31,7 @@ import { parseState } from "../engine/state.js";
 import { parseSystem, type OpenMMSystem } from "../engine/system.js";
 import { findMolecules } from "../engine/molecules.js";
 import { checkMoleculesIntact } from "../engine/wrapping.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { usableDiagonal } from "./nonbonded.js";
 import { StepLoop, type RunOptions } from "./loop.js";
 
 /**
@@ -88,10 +88,10 @@ export async function validatePbc(
 ): Promise<PbcComparison> {
   const system: OpenMMSystem = parseSystem(texts.systemXml);
   const state = parseState(texts.stateXml);
-  const box = rectangularBox(state.boxVectors);
   const molecules = findMolecules(system);
   const nonbonded = system.forces.find((f) => f.type === "NonbondedForce");
   const cutoff = nonbonded !== undefined && "cutoff" in nonbonded ? nonbonded.cutoff : 1;
+  const box = usableDiagonal(state.boxVectors, cutoff);
 
   const options: RunOptions = {
     timeStep: 0.002,

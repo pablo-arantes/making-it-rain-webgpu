@@ -26,7 +26,7 @@ import { fromFixed, fromWords } from "../reference/fixed-point.js";
 import { planFft, type FftPlan } from "../reference/fft.js";
 import { bsplineModuli } from "../reference/forces/bspline.js";
 import { PME_ORDER } from "../reference/forces/pme.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { usableDiagonal } from "./nonbonded.js";
 import { writeInverseBox } from "./nonbonded.js";
 import { ONE_4PI_EPS0 } from "../engine/units.js";
 import type { NonbondedForce, Vec3 } from "../engine/system.js";
@@ -273,7 +273,7 @@ export function preparePme(
   grid: Vec3,
 ): ResidentPme {
   const device = pool.device;
-  const box = rectangularBox(boxVectors);
+  const box = usableDiagonal(boxVectors, force.cutoff);
   const [nx, ny, nz] = grid as unknown as [number, number, number];
   const total = nx * ny * nz;
   const n = force.particleCount;

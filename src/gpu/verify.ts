@@ -32,7 +32,7 @@ import {
   evaluatePotential,
   splittingParameter,
 } from "../reference/potential.js";
-import { rectangularBox } from "../reference/forces/nonbonded.js";
+import { usableDiagonal } from "./nonbonded.js";
 import { checkMoleculesIntact } from "../engine/wrapping.js";
 import { cellHeadroom } from "./cell-list.js";
 import { deviceFitness, type DeviceFitness } from "./device.js";
@@ -107,7 +107,6 @@ export async function verifySystem(
   const began = performance.now();
   const system: OpenMMSystem = parseSystem(texts.systemXml);
   const state = parseState(texts.stateXml);
-  const box = rectangularBox(state.boxVectors);
   const nonbonded = system.forces.find(
     (f): f is NonbondedForce => f.type === "NonbondedForce",
   );
@@ -118,6 +117,7 @@ export async function verifySystem(
         "run, and pretending otherwise would give a confident wrong answer.",
     );
   }
+  const box = usableDiagonal(state.boxVectors, nonbonded.cutoff);
   const alpha = splittingParameter(nonbonded);
   const mesh = defaultGrid(nonbonded, state.boxVectors, alpha);
 

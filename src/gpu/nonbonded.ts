@@ -37,7 +37,7 @@ import { unpackFixed } from "./forces.js";
 import { fixedWords, fromFixed, fromWords } from "../reference/fixed-point.js";
 import {
   dispersionCorrection,
-  rectangularBox,
+  usableBox,
 } from "../reference/forces/nonbonded.js";
 import {
   fractionalOf,
@@ -319,6 +319,33 @@ export function writeFixedBox(words: Uint32Array, offset: number, box: Vec3): vo
  * project was built on, which is what makes the conversion verifiable by
  * "rectangular unchanged".
  */
+/**
+ * The diagonal of a cell the engine can use: reduced, and wide enough.
+ *
+ * 🔴 This is what replaced `rectangularBox` across the GPU paths, and the
+ * difference is the whole conversion. `rectangularBox` *refused* a skewed cell;
+ * this reduces the vectors, checks the cutoff against half the narrowest
+ * perpendicular width, and returns the diagonal — which is what every
+ * downstream use actually wanted.
+ *
+ * The diagonal is the right thing to return even for a skewed cell: the
+ * fixed-point box uniform carries it alongside the off-diagonals from
+ * `writeOffDiagonalBox`, and the volume is `|det B|`, which for a reduced
+ * lower-triangular box *is* the product of the diagonal. The off-diagonals
+ * contribute nothing to it.
+ */
+export function usableDiagonal(
+  boxVectors: readonly [Vec3, Vec3, Vec3],
+  cutoff: number,
+): Vec3 {
+  const box = usableBox(boxVectors, cutoff);
+  return [
+    (box[0] as Vec3)[0] as number,
+    (box[1] as Vec3)[1] as number,
+    (box[2] as Vec3)[2] as number,
+  ];
+}
+
 export function writeOffDiagonalBox(
   words: Uint32Array,
   offset: number,
@@ -495,7 +522,7 @@ export function prepareDirect(
   verletSkin?: number,
 ): ResidentDirect {
   const device = pool.device;
-  const box = rectangularBox(boxVectors);
+  const box = usableDiagonal(boxVectors, force.cutoff);
   const n = force.particleCount;
   const exclusions = buildExclusionLists(force);
 

@@ -376,6 +376,16 @@ encodes a structure no force field can describe. `~/miniforge3/envs/openmm` is
 7.7 and is **not** the oracle; `docs/measurements/README.md` names the one that
 is.
 
+🔴 **A dodecahedron needs far more padding than a cube, and the refusal is
+geometric rather than a missing feature.** The 27-cell scan needs three cells an
+axis measured across the *perpendicular* widths, and a rhombic dodecahedron's
+narrowest width is 0.707 of its edge — so it needs `d >= 3*sqrt(2)*cutoff`,
+4.24 nm at a 1 nm cutoff against the cube's 3.0. 1L2Y at the notebook's 0.4 nm
+padding gives 2x2x2 cells and is refused; at 1.5 nm padding it is 4.25 nm wide,
+gives 3x3x3, and runs. Expect roughly 5,000 atoms where the cube needs 2,400 —
+the volume saving per unit padding is real, but the *minimum* padding is larger,
+so a small solute may be better off in a cube.
+
 🔴 **A triclinic cell's cutoff is bounded by its narrowest *perpendicular*
 width, not by any edge length.** For a 3 nm dodecahedron the edges are 3, 3 and
 3.67 nm while the widths are 2.12, 2.12 and 3 — so an edge-based bound passes a

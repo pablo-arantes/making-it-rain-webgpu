@@ -31,12 +31,11 @@ import {
 import {
   directSpace,
   netChargeCorrection,
-  rectangularBox,
   selfEnergy,
 } from "../reference/forces/nonbonded.js";
 import { reciprocalSpace } from "../reference/forces/pme.js";
 import { evaluateBondedForce, packPositions, unpackFixed } from "./forces.js";
-import { evaluateDirectSpace } from "./nonbonded.js";
+import { evaluateDirectSpace, usableDiagonal } from "./nonbonded.js";
 import { evaluateReciprocalSpace } from "./pme.js";
 
 export interface ForceComparison {
@@ -315,8 +314,8 @@ export async function validateBonded(
       nonbonded.alpha !== 0
         ? nonbonded.alpha
         : ewaldAlpha(nonbonded.cutoff, nonbonded.ewaldTolerance);
-    const box = rectangularBox(system.boxVectors);
-    const grid = box.map((extent) =>
+    const box = usableDiagonal(system.boxVectors, nonbonded.cutoff);
+    const grid = (box as unknown as number[]).map((extent: number) =>
       smoothFftSize(pmeMinimumGridSize(alpha, extent, nonbonded.ewaldTolerance)),
     ) as unknown as [number, number, number];
     const volume = (box[0] as number) * (box[1] as number) * (box[2] as number);

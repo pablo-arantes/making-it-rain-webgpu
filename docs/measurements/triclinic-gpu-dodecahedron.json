@@ -1,0 +1,83 @@
+{
+ "what": "A dodecahedral system running on the GPU engine: the end of the triclinic conversion, items 1 to 6.",
+ "date": "2026-10-22",
+ "produced_by": "npm run report:verify -- 1L2Y-dodeca-wide, and web/validate.html?only=verify,cells,neighbours,profile",
+ "host": "Apple M3 Pro, macOS 14, Google Chrome, apple \u00b7 metal-3",
+ "fixture": {
+  "shape": "dodecahedron",
+  "padding_nm": 1.5,
+  "atoms": 5002,
+  "waters": 1273,
+  "box_nm": [
+   [
+    4.25,
+    0,
+    0
+   ],
+   [
+    0,
+    4.25,
+    0
+   ],
+   [
+    2.125,
+    2.125,
+    3.005
+   ]
+  ],
+  "cells": [
+   3,
+   3,
+   3
+  ],
+  "mesh": [
+   35,
+   35,
+   25
+  ],
+  "note": "1.5 nm padding, not the notebook's 0.4: see the padding constraint."
+ },
+ "engine_vs_f64_reference": {
+  "energy_relative": 9.77e-07,
+  "force_relative_rms": 8.343e-07,
+  "cube_for_comparison": {
+   "energy_relative": 5.466e-07,
+   "force_relative_rms": 1.172e-06
+  }
+ },
+ "cell_list": {
+  "assignment_differences": 0,
+  "force_difference": 0,
+  "note": "The host f64 and device f32 fractional bucketing agreed on all 5,002 atoms here. They are allowed to differ by one cell -- see the shape-aware criterion -- and did not."
+ },
+ "neighbour_list_vs_cell_shell": {
+  "force_components_differing": 0,
+  "of": 15006,
+  "worst_difference": 0,
+  "rebuilds": 49,
+  "shell_rebuilds": 0,
+  "drift_list": 0.2746,
+  "drift_shell": 0.2746,
+  "note": "Bit-identical forces, and the same trajectory over 49 rebuilds."
+ },
+ "throughput": {
+  "list_steps_per_second": 657.1,
+  "shell_steps_per_second": 280.9,
+  "factor": 2.34,
+  "energy_per_atom_list": -14.5065,
+  "energy_per_atom_shell": -14.5065
+ },
+ "padding_constraint": {
+  "rule": "The 27-cell scan needs three cells an axis across the *perpendicular* widths. A rhombic dodecahedron's narrowest width is 0.707 of its edge, so it needs d >= 3*sqrt(2)*cutoff -- 4.24 nm at a 1 nm cutoff, against the cube's 3.0.",
+  "consequence": "1L2Y at the notebook's 0.4 nm padding gives 2x2x2 cells and is refused; at 1.5 nm it gives 3x3x3 and runs. 5,002 atoms against the cube's 2,373 -- the volume saving per unit padding is real, but the minimum padding is larger, so a small solute can be better off in a cube."
+ },
+ "rectangular_unchanged": {
+  "report_verify_1L2Y": {
+   "energy_relative": 5.466e-07,
+   "force_relative_rms": 1.172e-06
+  },
+  "unit_tests": 662,
+  "browser_tests": 13,
+  "note": "The only movement across all six items was PME's, at the f32 ulp, recorded in engine-force-error-equilibrated-m3pro.json."
+ }
+}
