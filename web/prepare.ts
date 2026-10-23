@@ -477,12 +477,12 @@ function showDeviations(solvated: SolvateResult, variants: readonly (string | nu
         "cell count. The water is OpenMM's exactly: every oxygen of a " +
         "dodecahedral 1L2Y matches <code>addSolvent</code> to within 1e-12 nm." +
         "</li>",
-      "<li><strong><code>system.pdb</code> says the box is rectangular</strong> " +
-        "(deviation 24). A PDB <code>CRYST1</code> here carries three lengths " +
-        "and right angles, so the shape does not survive that file. The run is " +
-        "unaffected — <code>state.xml</code> carries the real vectors, and that " +
-        "is what the engine reads — but anything opening the PDB on its own, " +
-        "including a viewer, will draw the wrong cell.</li>",
+      "<li><strong><code>system.pdb</code>'s <code>CRYST1</code> may name an " +
+        "equivalent cell</strong>. It carries the real lengths and angles, so a " +
+        "viewer draws the right box — but a cell written at 60° reads back at " +
+        "120°, which is the same lattice and the same volume in a different " +
+        "reduced form. OpenMM does this to its own files; it is listed under " +
+        "“not deviations” in <code>docs/DEVIATIONS.md</code>.</li>",
     );
   }
 

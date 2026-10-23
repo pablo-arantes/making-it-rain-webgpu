@@ -119,7 +119,7 @@ describe.skipIf(!present)("the preparation path's topology", () => {
     // This fixture is unsolvated, so it has no CRYST1 to read.
     expect(pdb!.box).toBeNull();
     const solvated = readPdb(readFileSync("fixtures/1L2Y/system.pdb", "utf8"));
-    expect(solvated.box![0]).toBeCloseTo(3.0806, 3);
+    expect(solvated.box![0]![0]).toBeCloseTo(3.0806, 3);
   });
 
   it("keeps a two-letter element distinct from a backbone atom", () => {

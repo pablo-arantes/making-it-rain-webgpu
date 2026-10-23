@@ -407,6 +407,14 @@ interface WaterTemplate {
 
 /** One water residue of the pre-equilibrated box, plus the box's own size. */
 export function readWaterBox(topology: PdbTopology): {
+  /**
+   * nm, the tile's diagonal.
+   *
+   * The diagonal rather than the cell, because the water is tiled over the
+   * rectangle the diagonal spans -- which is a fundamental domain of whatever
+   * lattice the tile has. The shipped boxes are 3 nm cubes, where the two
+   * coincide.
+   */
   readonly box: readonly [number, number, number];
   readonly molecules: readonly { template: WaterTemplate; oxygen: readonly [number, number, number] }[];
 } {
@@ -434,7 +442,14 @@ export function readWaterBox(topology: PdbTopology): {
     });
     return { template: { names, offsets, oxygenIndex }, oxygen };
   });
-  return { box: topology.box, molecules };
+  return {
+    box: [
+      (topology.box[0] as readonly number[])[0] as number,
+      (topology.box[1] as readonly number[])[1] as number,
+      (topology.box[2] as readonly number[])[2] as number,
+    ],
+    molecules,
+  };
 }
 
 export function solvate(
@@ -485,11 +500,11 @@ export function solvate(
     const width = boxWidthForPadding(topology.positions, topology.atoms.length, padding);
     vectors = boxVectorsForShape(shape, width);
   } else if (topology.box !== null) {
-    vectors = [
-      [topology.box[0] as number, 0, 0],
-      [0, topology.box[1] as number, 0],
-      [0, 0, topology.box[2] as number],
-    ];
+    // 🔴 The topology's cell as it stands. This rebuilt a rectangular box from
+    // three numbers, which was all a `PdbTopology` carried; now that one holds
+    // the real cell, a PDB whose `CRYST1` is already triclinic solvates into
+    // the cell it describes instead of a cube of its edge lengths.
+    vectors = topology.box;
   } else {
     throw new Error(
       "neither a padding nor a box size was given, and the topology has no box",
@@ -783,7 +798,9 @@ export function solvate(
       atoms: newAtoms,
       residues,
       chains,
-      box,
+      // The cell, so a non-cubic shape survives into `system.pdb`'s `CRYST1`.
+      // `box` is its diagonal and is what the tiling above worked in.
+      box: vectors,
       conect: topology.conect,
       positions: Float64Array.from(positions),
     },

@@ -38,7 +38,6 @@ place.
 | 22 | Ligand RMSD via `MDAnalysis.analysis.rms.RMSD(select="resname UNK and not (name H*)")` (cell 34), presented as "ligand RMSD" | The same number, labelled as the ligand's **conformational** RMSD, with its **centre-of-mass displacement** reported beside it | MDAnalysis superposes the *selection* on the reference before measuring, so the notebook's value is the ligand's internal shape change and says nothing about whether it moved in the pocket — a ligand that slid two nanometres while staying rigid reports ~0. Measured on 60 frames of 3HTB: the RMSD stays under 0.032 nm while the centre of mass moves further. Both are computed; neither is dropped | yes — the two are labelled separately on the panel, because "ligand RMSD" is read as displacement by almost everyone |
 | 23 | The ligand is selected as `resname UNK`, which works because the notebook's own preparation renames every ligand to `UNK` | Selected once by atom index, from a residue the user picks | A system prepared anywhere else keeps the PDB code (`JZ4`, `BNZ`), and `resname UNK` then selects **nothing** — MDAnalysis returns an empty group and reports an RMSD of zero rather than an error, so the plot looks like a perfectly rigid ligand. Tracking by index cannot fail that way | yes — the panel names the residue it selected and its atom count |
 
-| 24 | `PDBFile.writeFile` writes a `CRYST1` with the cell's real angles, so a non-cubic box survives in the PDB | The `CRYST1` is always 90/90/90, because a `PdbTopology` carries a three-number diagonal and cannot say otherwise. A dodecahedron's `system.pdb` therefore describes a rectangular cell of the right volume and the wrong shape | A run never reads it -- the box comes from `state.xml`, which carries the full vectors -- so no trajectory is affected. It matters to anything that opens the PDB alone, including `web/analyse.html` for a box-dependent measurement, and to a user loading it in PyMOL. Carrying the cell properly means a triclinic `PdbTopology` through the reader, the writer and the DCD, which is a larger change than the solvation it would serve | yes -- the preparation page lists it whenever the chosen shape is not a cube, next to the box it built |
 
 ## Not deviations, but worth stating
 
@@ -50,6 +49,19 @@ place.
   measured floor for a legitimate single-precision implementation is ~1e-5
   relative force error — OpenMM's own OpenCL platform sits at 1.05e-05 on an
   equilibrated 1L2Y.
+* **A `CRYST1` preserves the lattice, not the representation.** `system.pdb`
+  carries the real cell now — six fields, as `PDBFile.writeHeader` writes them —
+  so a dodecahedron is no longer described as a rectangle. Reading one back can
+  give an *equivalent reduced form* rather than the identical numbers: a cell
+  written `60.00 60.00 90.00` returns as 120/120/90, because
+  `computePeriodicBoxVectors` reduces at the end and `c[1] / b[1]` lands on
+  0.5000000000000001 instead of an exact tie, so the rounding takes a whole `b`.
+  Same lattice, same 45.25 nm³, and **OpenMM does this to its own files too** —
+  verified by calling `computePeriodicBoxVectors` on a file OpenMM had just
+  written. So it is not a deviation; it is listed because the obvious
+  expectation, that a file round-trips to itself, is false, and "fixing" it
+  would put us in disagreement with OpenMM. The angles are also rounded to two
+  decimals, which is the format's resolution and OpenMM's behaviour.
 * **The notebook remains the oracle.** Anything in this file that turns out to
   change a scientific result, rather than a label or a reproducibility
   property, is a bug in this file's reasoning and should be raised.

@@ -22,7 +22,46 @@
  * three coordinate fields and `CRYST1` are touched, byte range by byte range.
  */
 
-import type { Vec3 } from "../engine/system.js";
+import {
+  angleCosines,
+  type BoxVectors,
+  boxVectorsFromLengthsAndAngles,
+  edgeLengths,
+} from "../reference/triclinic.js";
+
+const RAD_TO_DEG = 180 / Math.PI;
+
+/**
+ * A `CRYST1` record's six fields, from box vectors.
+ *
+ * 🔴 Unlike the DCD's cell, this one goes through `acos` and is *allowed* to:
+ * OpenMM prints `%7.2f`, two decimal places of a degree, so the ulp that makes
+ * byte equality impossible for a DCD's cosines is far below anything this file
+ * can represent. `PDBFile.writeHeader` is the authority.
+ *
+ * 🔴 **A `CRYST1` preserves the lattice, not the representation.** A rhombic
+ * dodecahedron written as `60.00 60.00 90.00` reads back as the 120/120/90 form
+ * of the same cell: `computePeriodicBoxVectors` reduces at the end, and
+ * `c[1] / b[1]` comes out as 0.5000000000000001 rather than an exact tie, so
+ * the rounding takes a whole `b`. OpenMM does this to its own files too --
+ * verified by calling `computePeriodicBoxVectors` on the file it just wrote --
+ * and both forms have the same volume and the same lattice, so there is nothing
+ * to fix on either side. It is recorded because the obvious expectation, that a
+ * file round-trips to itself, is false here, and "fixing" it would put us in
+ * disagreement with OpenMM.
+ */
+function cryst1Fields(box: BoxVectors): readonly number[] {
+  const lengths = edgeLengths(box);
+  const cosines = angleCosines(box);
+  return [
+    (lengths[0] as number) * TO_ANGSTROM,
+    (lengths[1] as number) * TO_ANGSTROM,
+    (lengths[2] as number) * TO_ANGSTROM,
+    Math.acos(cosines[0] as number) * RAD_TO_DEG,
+    Math.acos(cosines[1] as number) * RAD_TO_DEG,
+    Math.acos(cosines[2] as number) * RAD_TO_DEG,
+  ];
+}
 
 /** Nanometres to ångström, which is what a PDB holds. */
 const TO_ANGSTROM = 10;
@@ -81,8 +120,14 @@ export function countAtoms(pdb: string): number {
 }
 
 export interface RewriteOptions {
-  /** nm. Replaces `CRYST1` when given; a run's box changes under a barostat. */
-  readonly box?: Vec3;
+  /**
+   * The cell, nm. Replaces `CRYST1` when given; a run's box changes under a
+   * barostat.
+   *
+   * 🔴 The whole cell rather than three lengths. This took a `Vec3` and wrote
+   * right angles, so a skewed run's final frame described a rectangular cell.
+   */
+  readonly box?: BoxVectors;
   /** Prepended as a REMARK, so a file says where it came from. */
   readonly remark?: string;
 }
@@ -124,20 +169,15 @@ export function rewritePdb(
       continue;
     }
     if (line.startsWith("CRYST1") && options.box !== undefined) {
-      const [a, b, c] = options.box as unknown as [number, number, number];
-      // 🔴 Right angles, because `box` is a diagonal and cannot say otherwise.
-      // The engine runs a skewed cell now, so for one of those this writes a
-      // rectangular `CRYST1` of the right volume and the wrong shape. Nothing
-      // downstream of a *run* reads it -- the box comes from `state.xml` -- but
-      // a reader of the PDB alone would be misled, which is deviation 24.
+      const [a, b, c, alpha, beta, gamma] = cryst1Fields(options.box);
       out.push(
         "CRYST1" +
-          fixed(a * TO_ANGSTROM, 9, 3) +
-          fixed(b * TO_ANGSTROM, 9, 3) +
-          fixed(c * TO_ANGSTROM, 9, 3) +
-          fixed(90, 7, 2) +
-          fixed(90, 7, 2) +
-          fixed(90, 7, 2) +
+          fixed(a as number, 9, 3) +
+          fixed(b as number, 9, 3) +
+          fixed(c as number, 9, 3) +
+          fixed(alpha as number, 7, 2) +
+          fixed(beta as number, 7, 2) +
+          fixed(gamma as number, 7, 2) +
           " P 1           1 ",
       );
       continue;
@@ -187,8 +227,16 @@ export interface PdbTopology {
   readonly residues: readonly PdbResidue[];
   /** One entry per chain, holding indices into `residues`. */
   readonly chains: readonly { readonly id: string; readonly residues: readonly number[] }[];
-  /** nm, from CRYST1, when the file has one. */
-  readonly box: readonly [number, number, number] | null;
+  /**
+   * The cell, nm, from `CRYST1`, when the file has one.
+   *
+   * 🔴 The whole cell. This was three numbers -- `CRYST1`'s lengths with its
+   * angles dropped -- which read a rhombic dodecahedron as a *cube of its edge
+   * length*: not merely the wrong shape but 41% too much volume, since the
+   * cell is 0.707 of the enclosing cube. A file OpenMM wrote was being
+   * misread and nothing downstream could tell.
+   */
+  readonly box: BoxVectors | null;
   /** Bonds the file asserted with CONECT, as atom index pairs. */
   readonly conect: readonly (readonly [number, number])[];
   /** Positions, nm, xyz interleaved, in atom order. */
@@ -228,7 +276,7 @@ export function readPdb(text: string): PdbTopology {
   const chains: { id: string; residues: number[] }[] = [];
   const conect: [number, number][] = [];
   const bySerial = new Map<number, number>();
-  let box: [number, number, number] | null = null;
+  let box: BoxVectors | null = null;
 
   let currentResidue: { key: string; index: number } | null = null;
   let currentChain: { id: string; index: number } | null = null;
@@ -237,11 +285,22 @@ export function readPdb(text: string): PdbTopology {
   for (const line of text.split("\n")) {
     lineNumber++;
     if (line.startsWith("CRYST1")) {
-      box = [
-        Number(line.slice(6, 15)) * FROM_ANGSTROM,
-        Number(line.slice(15, 24)) * FROM_ANGSTROM,
-        Number(line.slice(24, 33)) * FROM_ANGSTROM,
-      ];
+      // 🔴 All six fields. Dropping the angles is not a lossy simplification,
+      // it is a different cell: `CRYST1 40 40 40 60 60 90` is a rhombic
+      // dodecahedron of volume 45.25 nm³ and was read as a 64 nm³ cube.
+      const degrees = Math.PI / 180;
+      box = boxVectorsFromLengthsAndAngles(
+        [
+          Number(line.slice(6, 15)) * FROM_ANGSTROM,
+          Number(line.slice(15, 24)) * FROM_ANGSTROM,
+          Number(line.slice(24, 33)) * FROM_ANGSTROM,
+        ],
+        [
+          Number(line.slice(33, 40)) * degrees,
+          Number(line.slice(40, 47)) * degrees,
+          Number(line.slice(47, 54)) * degrees,
+        ],
+      );
       continue;
     }
     if (line.startsWith("CONECT")) {
@@ -360,18 +419,15 @@ export function writePdb(
     out.push(`REMARK   1 ${options.remark}`.padEnd(80, " ").slice(0, 80));
   }
   if (topology.box !== null) {
-    // 🔴 Right angles, for the reason at the other `CRYST1` above: a
-    // `PdbTopology` carries a diagonal, so a skewed cell cannot survive this
-    // file. Deviation 24.
-    const [a, b, c] = topology.box;
+    const [a, b, c, alpha, beta, gamma] = cryst1Fields(topology.box);
     out.push(
       "CRYST1" +
-        fixed(a * TO_ANGSTROM, 9, 3) +
-        fixed(b * TO_ANGSTROM, 9, 3) +
-        fixed(c * TO_ANGSTROM, 9, 3) +
-        fixed(90, 7, 2) +
-        fixed(90, 7, 2) +
-        fixed(90, 7, 2) +
+        fixed(a as number, 9, 3) +
+        fixed(b as number, 9, 3) +
+        fixed(c as number, 9, 3) +
+        fixed(alpha as number, 7, 2) +
+        fixed(beta as number, 7, 2) +
+        fixed(gamma as number, 7, 2) +
         " P 1           1",
     );
   }

@@ -264,6 +264,98 @@ export function nearestImageBySearch(
 }
 
 /** The three box shapes `Modeller.addSolvent` builds, for a given width. */
+/**
+ * The edge lengths, which are the vectors' norms and not their diagonal.
+ *
+ * 🔴 `dot` accumulates left to right and the norm is `sqrt(dot(v, v))`, which
+ * is `norm` and `dot` in OpenMM's `unit_math.py` exactly. `sqrt(x**2 + y**2 +
+ * z**2)` is a different double, because `**2` is `Math.pow` and need not return
+ * `x * x`, and that ulp is visible in a byte comparison of a DCD.
+ */
+export function edgeLengths(box: BoxVectors): Vec3 {
+  const norm = (v: Vec3): number => Math.sqrt(dotOf(v, v));
+  return [norm(box[0] as Vec3), norm(box[1] as Vec3), norm(box[2] as Vec3)];
+}
+
+function dotOf(u: Vec3, v: Vec3): number {
+  return (
+    (u[0] as number) * (v[0] as number) +
+    (u[1] as number) * (v[1] as number) +
+    (u[2] as number) * (v[2] as number)
+  );
+}
+
+/**
+ * `[cos alpha, cos beta, cos gamma]`, where alpha is between `b` and `c`.
+ *
+ * 🔴 The ratios, with no trip through `acos`. `computeLengthsAndAngles` returns
+ * angles and its callers immediately undo that -- `dcdfile.py` writes
+ * `sin(pi/2 - angle)` -- so the round trip is the identity and evaluating it
+ * costs an ulp that V8 and CPython do not round the same way. The one caller
+ * that genuinely wants an angle is the PDB writer, which prints two decimal
+ * places and cannot see the difference.
+ */
+export function angleCosines(box: BoxVectors): Vec3 {
+  const [a, b, c] = box;
+  const [la, lb, lc] = edgeLengths(box);
+  return [
+    dotOf(b as Vec3, c as Vec3) / ((lb as number) * (lc as number)),
+    dotOf(c as Vec3, a as Vec3) / ((lc as number) * (la as number)),
+    dotOf(a as Vec3, b as Vec3) / ((la as number) * (lb as number)),
+  ];
+}
+
+/**
+ * Lengths and angles back to box vectors -- what a `CRYST1` record needs.
+ *
+ * `computePeriodicBoxVectors` in `openmm/app/internal/unitcell.py`, including
+ * the two things about it that are not obvious: components under 1e-6 are
+ * snapped to exactly zero, so a 90-degree angle gives a clean zero rather than
+ * 2.4e-16, and the result is **reduced** at the end, which is what makes it
+ * lower triangular and so acceptable to the kernels.
+ *
+ * Angles are in radians, as OpenMM takes them; a PDB carries degrees.
+ */
+export function boxVectorsFromLengthsAndAngles(
+  lengths: Vec3,
+  angles: Vec3,
+): BoxVectors {
+  const [aLength, bLength, cLength] = lengths;
+  const [alpha, beta, gamma] = angles;
+  const a: number[] = [aLength as number, 0, 0];
+  const b: number[] = [
+    (bLength as number) * Math.cos(gamma as number),
+    (bLength as number) * Math.sin(gamma as number),
+    0,
+  ];
+  const cx = (cLength as number) * Math.cos(beta as number);
+  const cy =
+    ((cLength as number) *
+      (Math.cos(alpha as number) -
+        Math.cos(beta as number) * Math.cos(gamma as number))) /
+    Math.sin(gamma as number);
+  const cz = Math.sqrt(
+    (cLength as number) * (cLength as number) - cx * cx - cy * cy,
+  );
+  const c: number[] = [cx, cy, cz];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(a[i] as number) < 1e-6) a[i] = 0;
+    if (Math.abs(b[i] as number) < 1e-6) b[i] = 0;
+    if (Math.abs(c[i] as number) < 1e-6) c[i] = 0;
+  }
+  // 🔴 The reduction goes through `reduceBox`, which rounds **ties to even**.
+  // Rolling it out by hand here with `Math.round` is wrong in a way this file
+  // already documents: `c[1] / b[1]` is exactly 0.5 for a rhombic
+  // dodecahedron, Python's `round` leaves `c` alone and `Math.round` subtracts
+  // a whole `b` — which turns 60 degrees into 120 and reads a cell back as a
+  // different one. OpenMM reduces inline here; we call the tested copy.
+  return reduceBox([
+    [a[0] as number, a[1] as number, a[2] as number],
+    [b[0] as number, b[1] as number, b[2] as number],
+    [c[0] as number, c[1] as number, c[2] as number],
+  ]);
+}
+
 export function boxVectorsForShape(
   shape: "cube" | "dodecahedron" | "octahedron",
   width: number,

@@ -28,7 +28,11 @@
  */
 
 import type { Vec3 } from "../engine/system.js";
-import type { BoxVectors } from "../reference/triclinic.js";
+import {
+  angleCosines,
+  type BoxVectors,
+  edgeLengths,
+} from "../reference/triclinic.js";
 
 /**
  * A DCD unit cell: three edge lengths and three angle cosines.
@@ -65,28 +69,7 @@ export interface UnitCell {
  * file stores as f64 -- and the ratio is the more accurate of the two.
  */
 export function unitCellOf(vectors: BoxVectors): UnitCell {
-  const [a, b, c] = vectors;
-  // 🔴 `dot` accumulates left to right and `norm` is `sqrt(dot(v, v))`, which
-  // is `unit_math.py` exactly. Writing the norm as `sqrt(x**2 + y**2 + z**2)`
-  // instead costs one ulp, because `**2` is `Math.pow` and is not required to
-  // return the same double as `x * x`. The lengths go into the file directly,
-  // so that ulp is visible in a byte comparison.
-  const dot = (u: Vec3, v: Vec3): number =>
-    (u[0] as number) * (v[0] as number) +
-    (u[1] as number) * (v[1] as number) +
-    (u[2] as number) * (v[2] as number);
-  const norm = (v: Vec3): number => Math.sqrt(dot(v, v));
-  const la = norm(a as Vec3);
-  const lb = norm(b as Vec3);
-  const lc = norm(c as Vec3);
-  return {
-    lengths: [la, lb, lc],
-    cosines: [
-      dot(b as Vec3, c as Vec3) / (lb * lc),
-      dot(c as Vec3, a as Vec3) / (lc * la),
-      dot(a as Vec3, b as Vec3) / (la * lb),
-    ],
-  };
+  return { lengths: edgeLengths(vectors), cosines: angleCosines(vectors) };
 }
 
 /** One AKMA time unit, in picoseconds. The constant DCD's `dt` is scaled by. */

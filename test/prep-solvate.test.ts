@@ -183,7 +183,13 @@ describe.skipIf(!present)("solvating 1L2Y", () => {
 
   it("reads the pre-equilibrated water box", () => {
     expect(waterBox!.residues).toHaveLength(895);
-    expect(waterBox!.box).toEqual([3, 3, 3]);
+    // The whole cell now, from all six `CRYST1` fields. The shipped boxes are
+    // cubes, so the vectors are a clean diagonal.
+    expect(waterBox!.box).toEqual([
+      [3, 0, 0],
+      [0, 3, 0],
+      [0, 0, 3],
+    ]);
   });
 
   it("picks the same box width as OpenMM", () => {

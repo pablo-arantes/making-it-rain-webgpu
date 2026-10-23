@@ -63,13 +63,7 @@ export function buildSystem(
     nonbondedMethod = NonbondedMethod.NoCutoff,
     cutoff = 1,
     ewaldTolerance = 5e-4,
-    boxVectors = prepared.topology.box === null
-      ? UNIT_BOX
-      : ([
-          [prepared.topology.box[0], 0, 0],
-          [0, prepared.topology.box[1], 0],
-          [0, 0, prepared.topology.box[2]],
-        ] as [Vec3, Vec3, Vec3]),
+    boxVectors = prepared.topology.box ?? UNIT_BOX,
     constraints = "none",
     removeCMMotion = false,
     openmmVersion = "8.4",

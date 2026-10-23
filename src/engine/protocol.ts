@@ -340,7 +340,9 @@ export async function runStage(
     await outputs.write(
       names.finalFrame,
       rewritePdb(options.topologyPdb, checkpoint.positions, {
-        box: engine.boxLengths(),
+        // The cell, not its diagonal: a `CRYST1` carries edge lengths and
+        // angles, and for a dodecahedron the diagonal is neither.
+        box: engine.boxVectors(),
         remark: `FINAL FRAME OF ${base.toUpperCase()}, STEP ${engine.steps}`,
       }),
     );
