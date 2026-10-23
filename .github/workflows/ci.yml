@@ -278,8 +278,27 @@ jobs:
               (new["pme"], old["pme"])
 
           assert new["forces"][0]["numBonds"] == old["forces"][0]["numBonds"]
+
+          # 🔴 The box moves **much** more across OpenMM versions than within
+          # one. `docs/NOTEBOOK_PARITY.md` finding 2 measured 15 pm between
+          # identical preparations on one machine, and the 0.1 nm bound here was
+          # set from that. Measured on this runner: **107 pm**, box 3.219726 nm
+          # against the committed 3.112721 -- because the committed facts come
+          # from OpenMM 8.4.0.dev and conda resolves 8.6.1.dev here, and the
+          # preparation that sets the box (PDBFixer's hydrogens, hence the
+          # bounding sphere) is version-sensitive at that scale.
+          #
+          # So 0.15 nm, and the number is justified rather than chosen: it
+          # admits the 107 pm actually measured with room for the 15 pm of
+          # within-version noise on top, and still refuses a box that has moved
+          # by a water molecule. Anything needing an exact comparison has to use
+          # the environment `docs/measurements/README.md` names -- a snapshot
+          # from one OpenMM is not a specification for another.
           box_new, box_old = new["box_nm"][0][0], old["box_nm"][0][0]
-          assert abs(box_new - box_old) < 0.1, (box_new, box_old)
+          print(f"box {box_new:.6f} nm against the committed {box_old:.6f}"
+                f" ({1000 * abs(box_new - box_old):.1f} pm apart,"
+                f" openmm {new['versions']['openmm']} vs {old['versions']['openmm']})")
+          assert abs(box_new - box_old) < 0.15, (box_new, box_old)
           print(f"alpha matches the closed form; grid {new['pme']['grid_reference_platform']}"
                 f" is the rule applied to box {box_new:.6f} nm")
           print("fixture agrees with the committed facts")

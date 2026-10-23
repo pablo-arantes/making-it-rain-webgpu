@@ -201,6 +201,16 @@ the closed form, and the grid against that rule applied to the box *this run*
 produced. A real change in OpenMM's PME parameters still fails it, which is what
 the job is for; a box that wobbles does not.
 
+🔴 **And the box wobbles far more across OpenMM versions than within one.**
+Fixing the PME assertion moved the failure one line down, to the box bound,
+which is the useful kind of failure: 15 pm is the *within-environment* figure
+from `docs/NOTEBOOK_PARITY.md` finding 2, and across versions it is **107 pm** --
+3.219726 nm on a runner resolving OpenMM 8.6.1.dev against the committed
+3.112721 from 8.4.0.dev. PDBFixer's hydrogens set the bounding sphere and
+therefore the box, and they are version-sensitive at that scale. A committed
+snapshot from one OpenMM is not a specification for another, which is why
+`docs/measurements/README.md` names the environment its numbers came from.
+
 🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
 about 1% renderer CPU and accumulates a few seconds over many minutes — the work
 is on the GPU and the loop batches steps per submission. A stalled page looks
