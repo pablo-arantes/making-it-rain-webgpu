@@ -140,9 +140,6 @@ def build(args) -> dict:
     import openmm
     import openmm.app as app
     from openmm import XmlSerializer, unit
-    from openff.toolkit.topology import Molecule
-    from openff.units.openmm import to_openmm
-    from openmmforcefields.generators import GAFFTemplateGenerator, SMIRNOFFTemplateGenerator
 
     case = os.path.join(args.out, args.case or (args.pdb_id or "case"))
     os.makedirs(case, exist_ok=True)
@@ -172,6 +169,19 @@ def build(args) -> dict:
 
     molecules = []
     if n_lig:
+        # 🔴 Imported here rather than at the top of `build`, because these three
+        # are the *ligand* half of the toolchain and they drag in openff-toolkit,
+        # openmmforcefields and (through GAFF) AmberTools. A protein-only run
+        # does not need any of it, and importing it anyway forced CI's oracle
+        # environment to solve the whole stack -- which `mamba` could not do.
+        # `tools/environment-ci.yml` is the light environment this enables.
+        from openff.toolkit.topology import Molecule
+        from openff.units.openmm import to_openmm
+        from openmmforcefields.generators import (
+            GAFFTemplateGenerator,
+            SMIRNOFFTemplateGenerator,
+        )
+
         ligsdf, ligreport = ligand_from_ccd(frag, args.ligand, case)
         facts["ligand"] = ligreport
         ligand = Molecule.from_file(ligsdf)

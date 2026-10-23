@@ -55,18 +55,28 @@ async function main(): Promise<void> {
     ["trig diagnostic", checkTrigDiagnostic],
     ["mixed-radix FFT", checkFft],
   ];
+  const failures: string[] = [];
   for (const [name, run] of checks) {
     say(`--> ${name}`);
     try {
       const result = await run(device);
       say(`<-- ${name}: ok=${String(result.ok)}`);
+      if (!result.ok) failures.push(name);
     } catch (error) {
       // A *catchable* failure is a different animal from the crash, and saying
       // so keeps the two from being confused in the log.
       say(`<!! ${name} threw (not a crash): ${String(error).split("\n")[0]}`);
+      failures.push(name);
     }
   }
   say("all checks completed");
+  if (failures.length > 0) {
+    // 🔴 A gate, not a report. CI runs this *instead of* the Vitest lane, which
+    // segfaults next to llvmpipe, so a differential failure on a non-Apple
+    // implementation has to fail the build here or it is not checked anywhere.
+    say(`FAILED CHECKS: ${failures.join(", ")}`);
+    process.exitCode = 1;
+  }
 }
 
 main().then(

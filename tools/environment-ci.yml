@@ -1,0 +1,19 @@
+# The oracle environment CI needs, which is not the one a developer needs.
+#
+# 🔴 `tools/environment.yml` is the full oracle: AmberTools, openff-toolkit,
+# pytraj, ProLIF, RDKit, the plotting stack. `mamba` **could not solve it** on
+# linux-64 in CI, and the job that needs it only rebuilds the 1L2Y fixture and
+# compares PME parameters and bond counts -- a protein, no ligand, no analysis.
+#
+# So this is the subset that path actually imports, which solves in seconds.
+# It is deliberately *not* a replacement: anything touching a ligand, an
+# analysis or a trajectory wants the full file, and `docs/measurements/README.md`
+# names the environment the committed numbers came from.
+name: mir-oracle
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - openmm>=8.2          # 8.2 is where LangevinIntegrator became LFMiddle
+  - pdbfixer
+  - numpy

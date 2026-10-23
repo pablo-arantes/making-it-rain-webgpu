@@ -33,31 +33,24 @@ jobs:
       - run: npm run check
 
   gpu:
-    # Dawn's Linux binary loads on the runner, so the GPU lane that cannot run
-    # on a macOS 14 developer machine does run here.
+    # The kernels on a non-Apple WebGPU implementation — the one piece of
+    # evidence this project could not get from a developer machine, since no
+    # published Dawn binary loads on macOS 14.
     #
-    # 🔴 **Allowed to fail again, and this time for a measured reason.** It was
-    # made required on the evidence that the lane degrades by itself: on macOS,
-    # where no published Dawn binary loads, `npm run test:gpu` exits **0** with
-    # "1 passed | 8 skipped" and says why. That reasoning was sound and the
-    # platform was wrong.
+    # 🔴 **It runs `tools/dawn-probe.ts`, not `npm run test:gpu`, and that is a
+    # measured choice.** The Vitest lane **segfaults** here: bisected to the
+    # first check, with a Dawn device already created and the kernel graph
+    # already imported, in both the `forks` and `threads` pools — `exit 139`.
+    # The identical checks, on the identical adapter, **pass** standalone. So
+    # the fault is Vitest's worker next to llvmpipe, not the engine, and the
+    # lane is unusable here while the probe is not.
     #
-    # On this runner Dawn **does** load and **does** get an adapter -- the log
-    # carries lavapipe's own
-    # "maxDynamicUniformBuffersPerPipelineLayout artificially reduced" warnings,
-    # so these kernels reached a non-Apple WebGPU implementation for the first
-    # time. Then the worker died: `[vitest-pool]: Worker forks emitted error /
-    # Worker exited unexpectedly`, with 2 tests skipped and no assertion
-    # reached. A native crash is not something `skipIf` can report, so the lane
-    # cannot self-report here and the job cannot gate a merge until it can.
-    #
-    # 🔴 Do not read the yellow tick as "the GPU lane does not work on Linux".
-    # It got further than it ever has, and the crash is unexplained and worth
-    # chasing: the first question is whether it is lavapipe on a two-core
-    # runner or one of our kernels taking the process down, which needs a
-    # stack rather than a conclusion.
+    # The probe exits non-zero if any check fails, so this is a real gate:
+    # `continue-on-error` is gone, and a differential failure on a non-Apple
+    # implementation now fails the build. A runner with no adapter at all
+    # reports that and exits 0, which is the one thing the Vitest lane got
+    # right.
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,7 +59,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-      - run: npm run test:gpu
+      - run: vulkaninfo --summary || true
+      - name: Every precision check, through Dawn
+        run: |
+          MIR_GPU_TESTS=1 node \
+            --import ./tools/wgsl-loader.mjs --import tsx \
+            tools/dawn-probe.ts
 
   browser:
     # 🔴 Still allowed to fail, and unlike the Dawn lane above that is not
@@ -117,13 +115,20 @@ jobs:
     # the right fix is to separate the download from the comparison rather than
     # to keep excusing both. Until then a red tick here means "look", not
     # "broken".
+    #
+    # 🔴 It uses `tools/environment-ci.yml`, not the full oracle environment:
+    # `mamba` **could not solve** the latter on linux-64, and this path needs
+    # only openmm, pdbfixer and numpy. Making that true also meant moving
+    # `build_reference_system`'s openff and openmmforcefields imports into its
+    # ligand branch, where they belong — a protein-only run was dragging in
+    # AmberTools through GAFF for nothing.
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          environment-file: tools/environment.yml
+          environment-file: tools/environment-ci.yml
           activate-environment: mir-oracle
           miniforge-version: latest
       - name: Rebuild the Trp-cage fixture and compare with the committed facts
