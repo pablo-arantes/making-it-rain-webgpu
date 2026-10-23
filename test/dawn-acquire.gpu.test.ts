@@ -17,6 +17,12 @@
 import { writeSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { acquireDawn } from "../tools/dawn-stages.js";
+// 🔴 Static, and that is the experiment. The dynamic form of this import --
+// after a Dawn device existed -- segfaulted on the runner after 2.7 seconds,
+// before the first check started. Static means Vitest transforms the whole
+// kernel graph *before* `webgpu` is loaded, which is the order
+// `tools/dawn-probe.ts` uses and the order that survives standalone.
+import * as checks from "../src/gpu/checks.js";
 
 const say = (message: string): void => {
   writeSync(1, `STAGE ${message}\n`);
@@ -52,7 +58,7 @@ describe.skipIf(process.env["MIR_GPU_TESTS"] !== "1")("acquiring a Dawn device",
     // process down. Off by default: this is a diagnostic and the lane already
     // runs these checks properly in `precision.gpu.test.ts`.
     if (device !== null && process.env["MIR_DAWN_BISECT"] === "1") {
-      const checks = await import("../src/gpu/checks.js");
+      say("checks module already imported statically");
       const ordered = [
         ["fixed-point exactness", checks.checkFixedPointExactness],
         ["fixed-point carry", checks.checkFixedPointCarry],
