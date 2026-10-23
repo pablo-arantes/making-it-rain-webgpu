@@ -65,15 +65,26 @@ async function main(): Promise<void> {
   // is textbook correct.
   if (process.env["MIR_DAWN_MICRO"] === "1") {
     const { accumulateFixedPoint } = await import("../src/gpu/precision.js");
-    for (const count of [64, 1024, 16384, 65536]) {
-      for (const slots of [1, 16]) {
-        say(`micro --> ${count} values into ${slots} slot(s)`);
-        const values = new Float32Array(count).fill(0.25);
-        const sums = await accumulateFixedPoint(device, values, slots);
-        say(`micro <-- ${count}/${slots}: ${sums.length} slot(s) back`);
-      }
+    // 🔴 64 values into 1 slot passed and 64 into 16 crashed, so it is not
+    // scale -- but **two** things changed at once: the slot count, and it being
+    // the second call. This ordering separates them. The repeat of an identical
+    // call comes first: if that crashes, the fault is "call twice" and the slot
+    // count is a coincidence; if it survives and the 16-slot call dies, the
+    // slot count is real.
+    const cases: ReadonlyArray<readonly [number, number, string]> = [
+      [64, 1, "baseline"],
+      [64, 1, "identical repeat -- tests 'second call'"],
+      [64, 1, "third identical call"],
+      [64, 16, "16 slots -- tests the slot count"],
+      [65536, 16, "the shape the real check uses"],
+    ];
+    for (const [count, slots, why] of cases) {
+      say(`micro --> ${count}/${slots}  (${why})`);
+      const values = new Float32Array(count).fill(0.25);
+      const sums = await accumulateFixedPoint(device, values, slots);
+      say(`micro <-- ${count}/${slots}: ${sums.length} slot(s) back`);
     }
-    say("micro: every size survived");
+    say("micro: every case survived");
   }
 
   const failures: string[] = [];
