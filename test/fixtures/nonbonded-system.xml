@@ -1,0 +1,49 @@
+<?xml version="1.0" ?>
+<System openmmVersion="8.4" type="System" version="1">
+	<PeriodicBoxVectors>
+		<A x="2.4" y="0" z="0"/>
+		<B x="0" y="2.4" z="0"/>
+		<C x="0" y="0" z="2.4"/>
+	</PeriodicBoxVectors>
+	<Particles>
+		<Particle mass="15.999"/>
+		<Particle mass="1.008"/>
+		<Particle mass="1.008"/>
+		<Particle mass="15.999"/>
+		<Particle mass="1.008"/>
+		<Particle mass="1.008"/>
+		<Particle mass="22.99"/>
+		<Particle mass="35.453"/>
+		<Particle mass="12.011"/>
+		<Particle mass="14.007"/>
+	</Particles>
+	<Constraints/>
+	<Forces>
+		<Force alpha="0" cutoff=".9" dispersionCorrection="1" ewaldTolerance=".0005" exceptionsUsePeriodic="0" forceGroup="0" includeDirectSpace="1" ljAlpha="0" ljnx="0" ljny="0" ljnz="0" method="4" name="NonbondedForce" nx="0" ny="0" nz="0" recipForceGroup="1" rfDielectric="78.3" switchingDistance="-1" type="NonbondedForce" useSwitchingFunction="0" version="4">
+			<GlobalParameters/>
+			<ParticleOffsets/>
+			<ExceptionOffsets/>
+			<Particles>
+				<Particle eps=".63639" q="-.834" sig=".31507"/>
+				<Particle eps="0" q=".417" sig="0"/>
+				<Particle eps="0" q=".417" sig="0"/>
+				<Particle eps=".63639" q="-.834" sig=".31507"/>
+				<Particle eps="0" q=".417" sig="0"/>
+				<Particle eps="0" q=".417" sig="0"/>
+				<Particle eps=".36585" q="1" sig=".243"/>
+				<Particle eps=".14891" q="-1" sig=".44777"/>
+				<Particle eps=".45773" q="0" sig=".33997"/>
+				<Particle eps=".71128" q="-.416" sig=".325"/>
+			</Particles>
+			<Exceptions>
+				<Exception eps="0" p1="0" p2="1" q="0" sig="1"/>
+				<Exception eps="0" p1="0" p2="2" q="0" sig="1"/>
+				<Exception eps="0" p1="1" p2="2" q="0" sig="1"/>
+				<Exception eps="0" p1="3" p2="4" q="0" sig="1"/>
+				<Exception eps="0" p1="3" p2="5" q="0" sig="1"/>
+				<Exception eps="0" p1="4" p2="5" q="0" sig="1"/>
+				<Exception eps=".2852955460570669" p1="8" p2="9" q="-0" sig=".33248500000000003"/>
+			</Exceptions>
+		</Force>
+	</Forces>
+</System>

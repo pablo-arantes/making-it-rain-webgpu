@@ -1,6 +1,15 @@
 node_modules/
 dist/
-fixtures/
+# 🔴 Anchored. An unanchored `fixtures/` matches a directory of that name at
+# **any depth**, so it also hid `test/fixtures/` -- four small committed
+# reference files that `test/nonbonded-reference.test.ts` and
+# `test/triclinic.test.ts` require and that one of them asserts the presence of.
+# They were never added, so 10 tests failed on every clone of this repository
+# and passed here, which is the shape of every bug in this file: a working tree
+# has the file and a clone does not. Found by cloning into /tmp and running
+# `npm ci && npm run check`, which is what CI does and what no amount of local
+# testing reproduces.
+/fixtures/
 test-results/
 playwright-report/
 vendor/openmm-wasm/
@@ -8,6 +17,8 @@ vendor/openmm-wasm/
 *.rst
 *.prmtop
 *.inpcrd
+# Run outputs, which land wherever a tool is invoked. Deliberately unanchored,
+# so mind that a *committed* fixture must not be named exactly one of these.
 system.xml
 state.xml
 system.pdb
@@ -17,4 +28,6 @@ __pycache__/
 *.npy
 # Chemical Component Dictionary downloads; the ligand route fetches
 # <CODE>.cif and 24 of them were committed to the repository root once.
-*.cif
+# Anchored for the reason above: the ligand route writes <CODE>.cif into the
+# working directory, and an unanchored rule would also hide a committed one.
+/*.cif
