@@ -18,6 +18,27 @@ on:
         default: "mesa-vulkan-drivers"
 
 jobs:
+  # 🔴 The same crash happens on **real Apple Silicon**, so it is not llvmpipe's.
+  # macOS 15.7.9 and macOS 26.6.2 both load Dawn, both report an `apple`
+  # adapter, both create a device, and both die in `checkFixedPointExactness` —
+  # the identical call as on Linux. Chrome runs all seven checks on Metal
+  # without complaint, so this is Dawn-in-Node, not the kernels.
+  apple:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sw_vers
+      - name: Is it scale or pattern?
+        run: |
+          MIR_GPU_TESTS=1 MIR_DAWN_MICRO=1 node \
+            --import ./tools/wgsl-loader.mjs --import tsx \
+            tools/dawn-probe.ts || echo "MICRO_EXIT=$?"
+
   probe:
     runs-on: ubuntu-latest
     steps:

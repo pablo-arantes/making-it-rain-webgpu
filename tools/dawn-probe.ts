@@ -55,6 +55,27 @@ async function main(): Promise<void> {
     ["trig diagnostic", checkTrigDiagnostic],
     ["mixed-radix FFT", checkFft],
   ];
+  // 🔴 Is the crash scale or pattern? `checkFixedPointExactness` pushes 65,536
+  // values through 1,024 workgroups into 16 atomic slots, and it is the first
+  // check and the one that dies — on llvmpipe, on macOS 15 Metal and on macOS
+  // 26 Metal, always at the same call. If a 64-value run survives and a 65,536
+  // one does not, it is scale: a dispatch size or a readback Dawn-in-Node does
+  // not like. If even 64 dies, it is the call pattern itself, and the size is a
+  // red herring. One run answers that; reading `readBuffer` cannot, because it
+  // is textbook correct.
+  if (process.env["MIR_DAWN_MICRO"] === "1") {
+    const { accumulateFixedPoint } = await import("../src/gpu/precision.js");
+    for (const count of [64, 1024, 16384, 65536]) {
+      for (const slots of [1, 16]) {
+        say(`micro --> ${count} values into ${slots} slot(s)`);
+        const values = new Float32Array(count).fill(0.25);
+        const sums = await accumulateFixedPoint(device, values, slots);
+        say(`micro <-- ${count}/${slots}: ${sums.length} slot(s) back`);
+      }
+    }
+    say("micro: every size survived");
+  }
+
   const failures: string[] = [];
   for (const [name, run] of checks) {
     say(`--> ${name}`);
