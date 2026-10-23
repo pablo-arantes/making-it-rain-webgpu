@@ -515,6 +515,35 @@ is what made a software adapter viable, and the engine's precision no longer
 depends on the driver's `sin` and `cos`. The fixed-point design carries across
 both, as the SwiftShader probe already suggested.
 
+🔴 **The native Dawn lane does not work on a GitHub runner, on any version or
+either platform, and five theories died finding that out.** Measured: `0.5.0`,
+`0.6.0`, `0.6.1` and `0.6.2` all exit **139** on `macos-15` with a real Metal
+device, and the same crash appears on llvmpipe. Eliminated along the way, each
+by a run rather than an argument: the worker pool (both die), the dispatch
+**scale** (64 values die as readily as 65,536), the **slot count** (an identical
+repeat dies), the **second call** (a minimal three-line shader dies on its
+first), and a **package regression** (all four versions).
+
+So do not spend another afternoon shrinking a reproducer inside a native addon.
+What is left is a fault in Dawn-in-Node on virtualised GPUs that this project
+cannot see into, and the useful next step is a bug report upstream with
+`tools/dawn-probe.ts`, which is already small and self-contained.
+
+🔴 **Apple-GPU verification therefore comes from Chrome, and that works.** The
+`browser-apple` job runs `checks.spec.ts` on `macos-15` — the same Metal device
+the Dawn lane cannot use, through a different WebGPU implementation — and all
+seven precision checks pass. Three implementations now pass them: Chrome on an
+M3 Pro, Chrome on Mesa software, Chrome on a runner's Metal. Dawn passes none of
+them anywhere, which is a statement about Dawn-in-Node and not about the
+kernels.
+
+🔴 **macOS 14 cannot load any published binary**, verified through 0.6.2, so the
+developer machine is blocked by its OS rather than by the package. macOS 15.7.9
+loads it fine — so an upgrade would give that machine the native lane, and it is
+the one configuration left where Dawn might actually be stable: real hardware
+rather than a runner's paravirtualised GPU. Untested, and worth testing before
+believing.
+
 🔴 **The Dawn crash is intermittent, which is the fact that matters.** Bisected
 with `tools/dawn-probe.ts` and `test/dawn-acquire.gpu.test.ts`, it lands in
 `checkFixedPointExactness` — the first check — with the device already created

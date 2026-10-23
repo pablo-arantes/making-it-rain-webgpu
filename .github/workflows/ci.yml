@@ -182,6 +182,29 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  browser-apple:
+    # 🔴 **Apple-GPU verification that actually works.** `gpu-apple` runs Dawn
+    # natively and segfaults on every published version — 0.5.0, 0.6.0, 0.6.1
+    # and 0.6.2 all exit 139 on `macos-15` — so it reports and does not gate.
+    # Chrome on the same runner uses the same Metal device through a different
+    # WebGPU implementation, and that path passes everywhere it has been tried:
+    # the developer machine, Mesa software on Linux, and now here.
+    #
+    # Only `checks.spec.ts` runs: the other specs need generated fixtures, which
+    # are not committed. That one needs none and is the whole precision suite.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chrome
+      - run: sw_vers
+      - name: Every precision check, through Chrome on Metal
+        run: npm run build:web && npx playwright test test/browser/checks.spec.ts
+
   oracle:
     # The Python side: regenerate the committed fixtures and check that the
     # numbers docs/ quotes are still the numbers OpenMM produces.
