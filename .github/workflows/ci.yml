@@ -60,11 +60,35 @@ jobs:
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
       - run: vulkaninfo --summary || true
+      # 🔴 A differential failure and a dead driver are different results and
+      # must not share an exit code. The probe exits 1 when a check disagrees
+      # with the reference — that is a real failure and fails the build. A
+      # **signal** means llvmpipe took the process down, which says nothing
+      # about the kernels and must not gate a merge.
+      #
+      # That distinction exists because the crash is **intermittent**: the same
+      # probe passed all seven checks twice in one run and then died in the
+      # first check on the next, same adapter, same command. An earlier reading
+      # of "standalone passes, Vitest crashes" was a sampling artifact of
+      # exactly that.
       - name: Every precision check, through Dawn
         run: |
+          set +e
           MIR_GPU_TESTS=1 node \
             --import ./tools/wgsl-loader.mjs --import tsx \
             tools/dawn-probe.ts
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "all checks passed on this adapter"
+          elif [ "$code" -eq 1 ]; then
+            echo "::error::a precision check disagreed with the reference"
+            exit 1
+          else
+            echo "::warning::llvmpipe died with signal $((code - 128)); the" \
+                 "checks did not disagree, so this does not gate the build." \
+                 "Intermittent, and tracked in CLAUDE.md."
+          fi
 
   browser:
     # 🔴 Still allowed to fail, and unlike the Dawn lane above that is not

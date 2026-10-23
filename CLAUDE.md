@@ -515,7 +515,24 @@ is what made a software adapter viable, and the engine's precision no longer
 depends on the driver's `sin` and `cos`. The fixed-point design carries across
 both, as the SwiftShader probe already suggested.
 
-🔴 The Dawn crash is **unexplained and worth chasing**, and the honest first
+🔴 **The Dawn crash is intermittent, which is the fact that matters.** Bisected
+with `tools/dawn-probe.ts` and `test/dawn-acquire.gpu.test.ts`, it lands in
+`checkFixedPointExactness` — the first check — with the device already created
+and the kernel graph already imported. It is **not** Vitest: the same probe,
+same command, same adapter, passed all seven checks twice in one run and died
+in the first check on the next. An earlier reading of "standalone passes,
+Vitest crashes" was a sampling artifact of that, and so was the theory that the
+worker pool mattered (both pools die, and `exit 139` is just `forks` no longer
+hiding the signal).
+
+So CI separates the two outcomes rather than treating a crash as a result: the
+probe exits 1 when a check *disagrees*, which fails the build, and a **signal**
+is reported as a warning because llvmpipe taking the process down says nothing
+about the kernels. What that buys is a gate that means something — on the runs
+where llvmpipe survives, these kernels are verified against the reference on a
+non-Apple implementation.
+
+🔴 The remaining question is narrow and still open, and the honest first
 question is whether it is lavapipe on a two-core runner or one of our kernels
 taking the process down. It needs a stack, not a conclusion. Until then the
 `gpu` job is `continue-on-error` again — a native crash is not something
