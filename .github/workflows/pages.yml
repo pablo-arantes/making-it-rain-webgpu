@@ -27,8 +27,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      # MIR_PUBLIC drops `validate.html`, which is a development tool that
+      # fetches generated fixtures and would be a page of 404s on the site.
       - name: Build for the repository subpath Pages serves from
-        run: MIR_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build:web
+        run: MIR_BASE="/${GITHUB_REPOSITORY#*/}/" MIR_PUBLIC=1 npm run build:web
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -63,6 +63,24 @@ function serveFixtures(): Plugin {
  * WGSL is loaded with `?raw`, so a kernel is a plain file that both the browser
  * build and the Node test lanes read the same way.
  */
+/**
+ * Whether this build is the one that gets deployed.
+ *
+ * 🔴 `web/validate.html` is a development tool: it fetches fixtures over a
+ * dozen URLs, and `fixtures/` is generated rather than committed, so on a
+ * deployed site every one of those is a 404 and the page is simply broken. It
+ * is not linked from `index.html`, but the URL would be live, and a broken page
+ * on a public site is worse than an absent one.
+ *
+ * So it is dropped from the **deploy** build only, which `pages.yml` sets, and
+ * kept in a local one. Dropping it everywhere would be the obvious move and is
+ * wrong: `playwright.config.ts` serves the long gate from `vite preview`, the
+ * production build, and `bonded.spec.ts` loads `/validate.html` — so a local
+ * build missing it turns any lane run with `MIR_LONG_RUN=1` into a 404 that
+ * looks like a test failure.
+ */
+const deploying = process.env.MIR_PUBLIC === "1";
+
 export default defineConfig({
   plugins: [serveFixtures()],
   root: "web",
@@ -86,7 +104,10 @@ export default defineConfig({
         // silently absent from a production build -- which has happened twice.
         prepare: resolve(import.meta.dirname ?? ".", "web/prepare.html"),
         analyse: resolve(import.meta.dirname ?? ".", "web/analyse.html"),
-        validate: resolve(import.meta.dirname ?? ".", "web/validate.html"),
+        // Development only; see `deploying` above.
+        ...(deploying
+          ? {}
+          : { validate: resolve(import.meta.dirname ?? ".", "web/validate.html") }),
       },
     },
   },
