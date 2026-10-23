@@ -87,6 +87,52 @@ async function main(): Promise<void> {
     say("micro: every case survived");
   }
 
+  // 🔴 A minimal reproducer, deliberately using **none** of this project's
+  // kernels. The second `accumulateFixedPoint` on a device segfaults whatever
+  // its size or slot count, so the suspect is the `finally` that destroys its
+  // buffers: WebGPU allows `destroy()` at any time and pending work is meant to
+  // complete, so if destroying poisons the *next* submission that is a
+  // dawn.node bug rather than ours — but the workaround would be ours.
+  //
+  // Two sequences, identical except for the destroy. If "destroy" dies on its
+  // second pass and "keep" survives three, the cause and the fix are both
+  // settled, and the reproducer is small enough to hand to Dawn.
+  if (process.env["MIR_DAWN_MIN"] === "1") {
+    const { dispatch, readBuffer, storageBuffer } = await import("./../src/gpu/compute.js");
+    const TRIVIAL = `
+@group(0) @binding(0) var<storage, read_write> out: array<u32>;
+@compute @workgroup_size(1)
+fn main() { out[0] = out[0] + 1u; }
+`;
+    for (const destroying of [false, true]) {
+      const label = destroying ? "destroy" : "keep";
+      const held: GPUBuffer[] = [];
+      for (let pass = 1; pass <= 3; pass++) {
+        say(`min[${label}] pass ${pass}: creating`);
+        const buffer = storageBuffer(device, `min-${label}-${pass}`, 4);
+        say(`min[${label}] pass ${pass}: dispatching`);
+        await dispatch(device, {
+          label: `min-${label}-${pass}`,
+          code: TRIVIAL,
+          bindings: [{ binding: 0, resource: { buffer } }],
+          workgroups: [1],
+        });
+        say(`min[${label}] pass ${pass}: reading back`);
+        const out = new Uint32Array(await readBuffer(device, buffer, 4));
+        say(`min[${label}] pass ${pass}: got ${String(out[0])}`);
+        if (destroying) {
+          buffer.destroy();
+          say(`min[${label}] pass ${pass}: destroyed`);
+        } else {
+          held.push(buffer);
+        }
+      }
+      say(`min[${label}]: survived three passes`);
+      for (const b of held) b.destroy();
+    }
+    say("min: both sequences survived");
+  }
+
   const failures: string[] = [];
   for (const [name, run] of checks) {
     say(`--> ${name}`);
