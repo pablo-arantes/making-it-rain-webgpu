@@ -55,6 +55,21 @@ jobs:
         run: |
           MIR_GPU_TESTS=1 node node_modules/vitest/vitest.mjs run \
             test/precision.gpu.test.ts --pool=threads || echo "THREADS_EXIT=$?"
+      # 🔴 The bisect. Standalone the sequence completes; under Vitest nothing
+      # reports before the signal. This file does *only* the acquisition, with a
+      # line before each step, so the last line names the stage. Threads first,
+      # because that pool shows the signal instead of hiding it behind a dead
+      # child.
+      - name: Acquisition only, threads
+        run: |
+          MIR_GPU_TESTS=1 node node_modules/vitest/vitest.mjs run \
+            test/dawn-acquire.gpu.test.ts --pool=threads \
+            || echo "ACQUIRE_THREADS_EXIT=$?"
+      - name: Acquisition only, forks
+        run: |
+          MIR_GPU_TESTS=1 node node_modules/vitest/vitest.mjs run \
+            test/dawn-acquire.gpu.test.ts --pool=forks \
+            || echo "ACQUIRE_FORKS_EXIT=$?"
       - name: Probe, under gdb
         run: |
           MIR_GPU_TESTS=1 gdb -batch \

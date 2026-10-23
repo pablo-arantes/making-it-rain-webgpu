@@ -22,6 +22,7 @@
  */
 
 import { writeSync } from "node:fs";
+import { acquireDawn } from "./dawn-stages.js";
 import {
   checkDekkerDiagnostic,
   checkFft,
@@ -39,59 +40,11 @@ const say = (message: string): void => {
 
 async function main(): Promise<void> {
   say("start");
-
-  say("importing webgpu");
-  const webgpu = (await import("webgpu")) as unknown as {
-    create: (flags: string[]) => GPU;
-    globals: Record<string, unknown>;
-  };
-  say("webgpu imported");
-
-  Object.assign(globalThis, webgpu.globals);
-  say("globals assigned");
-
-  // The same flag `test/dawn.ts` passes, so the instance is configured the same.
-  const gpu = webgpu.create(["enable-dawn-features=allow_unsafe_apis"]);
-  say("instance created");
-
-  const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
-  say(`requestAdapter returned ${adapter === null ? "null" : "an adapter"}`);
-  if (adapter === null) {
+  const device = await acquireDawn(say);
+  if (device === null) {
     say("no adapter; nothing further to probe");
     return;
   }
-
-  const info = adapter.info as unknown as Record<string, unknown> | undefined;
-  say(
-    `adapter: vendor=${String(info?.["vendor"])} architecture=${String(
-      info?.["architecture"],
-    )} device=${String(info?.["device"])}`,
-  );
-  for (const key of [
-    "maxStorageBufferBindingSize",
-    "maxBufferSize",
-    "maxStorageBuffersPerShaderStage",
-    "maxComputeInvocationsPerWorkgroup",
-    "maxComputeWorkgroupStorageSize",
-  ]) {
-    say(`adapter.limits.${key}=${String((adapter.limits as unknown as Record<string, unknown>)[key])}`);
-  }
-
-  // 🔴 The step most likely to be it: this asks for raised limits, and a
-  // software adapter advertises implausible maxima that Dawn then clamps.
-  say("requesting the engine device (raised limits)");
-  const { requestEngineDevice } = await import("../src/gpu/device.js");
-  const device = await requestEngineDevice(adapter);
-  say("device created");
-
-  device.addEventListener?.("uncapturederror", (event) => {
-    say(`uncaptured error: ${String((event as unknown as { error?: unknown }).error)}`);
-  });
-  device.lost
-    ?.then((reason) => {
-      say(`DEVICE LOST: ${String((reason as unknown as { message?: string }).message)}`);
-    })
-    .catch(() => {});
 
   const checks: ReadonlyArray<readonly [string, (d: GPUDevice) => Promise<CheckResult>]> = [
     ["fixed-point exactness", checkFixedPointExactness],
