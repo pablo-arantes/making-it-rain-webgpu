@@ -1,0 +1,53 @@
+# A diagnostic, not a lane. Dispatch it by hand when the `gpu` job's worker
+# dies, to find out where and why.
+#
+# 🔴 The `gpu` job in ci.yml gets an adapter on this runner and then the vitest
+# worker exits with `Worker exited unexpectedly`, no assertion reached. That
+# tells you nothing: vitest forks, so the fault is reported by the parent as a
+# dead child, and `skipIf` cannot see a native crash at all. This runs the same
+# sequence in one process with no test runner, twice -- plain, to find the
+# stage, and under gdb, for the native stack.
+name: Dawn crash probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      driver:
+        description: "Vulkan driver to install"
+        required: false
+        default: "mesa-vulkan-drivers"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Vulkan and a debugger
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.driver }} vulkan-tools gdb
+      # What the driver actually offers, so the adapter is not a mystery.
+      - name: vulkaninfo
+        run: vulkaninfo --summary || true
+      # Stage 1: no debugger. The last PROBE line is the step that killed it.
+      - name: Probe, plain
+        run: MIR_GPU_TESTS=1 node --import tsx tools/dawn-probe.ts || echo "EXIT=$?"
+      # Stage 2: the same run under gdb. `-batch` so it never waits for input,
+      # and every thread's backtrace because the fault may not be on the main
+      # one.
+      - name: Probe, under gdb
+        run: |
+          MIR_GPU_TESTS=1 gdb -batch \
+            -ex 'set confirm off' \
+            -ex 'set pagination off' \
+            -ex run \
+            -ex 'echo \n=== faulting thread ===\n' \
+            -ex 'bt full' \
+            -ex 'echo \n=== all threads ===\n' \
+            -ex 'thread apply all bt' \
+            --args "$(command -v node)" --import tsx tools/dawn-probe.ts || echo "GDB_EXIT=$?"
