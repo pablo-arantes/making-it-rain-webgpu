@@ -1,18 +1,25 @@
 /**
  * The general triclinic minimum image, in f64, and the box reduction it needs.
  *
- * The engine handles rectangular boxes only (`rectangularBox` refuses the rest),
- * and the notebook offers `cube`, `dodecahedron` and `octahedron` — so two of
- * its three shapes are refused today, which is deviation 19. A dodecahedron
- * holds 70.7% of the water of the enclosing cube for the same padding, measured
- * here as a determinant ratio and not taken on trust, so this is worth about
- * 30% of a run's cost and 30% of its memory.
+ * All three of the notebook's shapes run now -- `cube`, `dodecahedron` and
+ * `octahedron` -- in the kernels as well as here, and a 5,002-atom
+ * dodecahedron passes the 1 ns gate in 15.3 minutes. A dodecahedron holds
+ * 70.7% of the water of the enclosing cube for the same padding, measured here
+ * as a determinant ratio and not taken on trust.
  *
- * 🔴 This is the reference only; nothing in `src/gpu/` calls it yet. But the
- * expensive thing it looked like it would need turns out not to be needed at
- * all -- see `MAXIMUM_CUTOFF_FRACTION`. The minimum image is three subtractions,
- * the same shape as the rectangular path, as long as the cutoff respects a
- * bound that is checked rather than assumed.
+ * 🔴 **But not for the same padding**, which is the part deviation 19 had
+ * backwards. The 27-cell scan needs three cells an axis across the
+ * *perpendicular* widths, and this shape's narrowest is 0.707 of its edge, so
+ * it needs `3*sqrt(2)*cutoff` where a cube needs `3*cutoff`. The volume saving
+ * is real; the minimum box is larger. `cellListFits` in `src/prep/solvate.ts`
+ * is what tells a user that before they run.
+ *
+ * 🔴 The expensive thing this looked like it would need turns out not to be
+ * needed at all -- see `MAXIMUM_CUTOFF_FRACTION`. The minimum image is three
+ * subtractions, the same shape as the rectangular path, as long as the cutoff
+ * respects a bound that is checked rather than assumed. `src/gpu/` calls this
+ * module's reduction through its own WGSL copy of the same arithmetic, and
+ * `nearest_image_triclinic` in `fixed64.wgsl` is held to it.
  */
 
 import type { Vec3 } from "../engine/system.js";

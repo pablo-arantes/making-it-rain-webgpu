@@ -43,15 +43,13 @@ import { erf, erfc, erfDerivative } from "../erf.js";
 export class TriclinicBoxUnsupported extends Error {
   constructor(vectors: readonly Vec3[]) {
     super(
-      "the GPU engine handles rectangular boxes only, and these vectors are " +
-        `triclinic: ${JSON.stringify(vectors)}. ` +
-        "The *reference* does handle them — src/reference/triclinic.ts, verified " +
-        "against OpenMM's CPU platform on a dodecahedral fixture — so this is a " +
-        "kernel gap and not a physics one. What is missing is listed in " +
-        "HANDOFF.md under deviation 19: the fractional cell list, PME's " +
-        "reciprocal lattice in WGSL, and the fold into a skewed cell. " +
-        "Modeller.addSolvent defaults to a cubic box, which is what the " +
-        "notebook produces unless `boxShape` is changed.",
+      `these vectors are triclinic: ${JSON.stringify(vectors)}. ` +
+        "Nothing in the engine requires them not to be — the kernels run a " +
+        "skewed cell, and a 5,002-atom dodecahedron passes the 1 ns gate — so " +
+        "reaching this means a *caller* asked for three edge lengths where the " +
+        "cell has nine components, and collapsing it to a diagonal would " +
+        "silently change the shape while keeping the volume. Use the box " +
+        "vectors, or `usableBox` if this is reference code.",
     );
     this.name = "TriclinicBoxUnsupported";
   }
@@ -60,10 +58,14 @@ export class TriclinicBoxUnsupported extends Error {
 /**
  * The box edge lengths, after checking the box really is rectangular.
  *
- * 🔴 Kept for the **GPU** paths only. The reference no longer needs it —
- * `usableBox` is what the reference force terms take — so a call to this is a
- * marker for a kernel that has not been converted yet, and the nine of them are
- * listed in HANDOFF.md. Do not use it in new reference code.
+ * 🔴 **This marker did its job and has no production callers left.** It existed
+ * so that a kernel which had not been converted to a skewed cell would refuse
+ * one rather than quietly reduce it, and the nine that needed converting have
+ * been; `grep` finds it only in tests, where it is a convenience for pulling a
+ * diagonal out of a fixture that really is rectangular. Keeping it is cheap
+ * insurance for the next path that assumes three numbers are a cell. Do not
+ * use it in new code: `usableBox` is what the reference force terms take, and
+ * the kernels take the vectors.
  */
 export function rectangularBox(vectors: readonly [Vec3, Vec3, Vec3]): Vec3 {
   const offDiagonal = [

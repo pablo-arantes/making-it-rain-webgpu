@@ -465,9 +465,14 @@ pipeline.
 
 ## Phase 2's gates
 
-The 1 ns run passes: 43.4 minutes for 1L2Y through `web/run.html`, 100 reports,
-9 artefacts, served from the production build.
-`docs/measurements/gate-1ns-m3pro.json` has the numbers.
+The 1 ns run passes: **7.6 minutes** for 1L2Y through `web/run.html`, 100
+reports, 9 artefacts, served from the production build, and **15.3 minutes** for
+a 5,002-particle rhombic dodecahedron. `gate-1ns-m3pro.json` and
+`gate-1ns-dodecahedron-m3pro.json` under `docs/measurements/` have the numbers.
+
+🔴 This section said **43.4 minutes** for six commits after the kernel work took
+it to 7.6 — the figure the `State` section above had right all along. A number
+quoted in two places is a number that will disagree with itself.
 
 The trajectory gate is met. MDTraj and pytraj agree to 2.9e-7 nm on a real
 2373-particle DCD, and pytraj's read is what covers VMD too — cpptraj goes
@@ -481,18 +486,18 @@ x86_64 build that will not load on arm64 (`incompatible architecture`);
 
 ## Next
 
-Phase 3 is nearly done. A deposited PDB becomes a runnable system entirely in
-the browser, and the chain is closed at both ends: every force in a prepared
+**Phase 3 is closed**, and Phase 2's gates are met on both a cube and a
+dodecahedron. A deposited PDB becomes a runnable system entirely in the browser,
+and the chain is closed at both ends: every force in a prepared
 `System` matches OpenMM's element for element on the parity fixtures, OpenMM
 reads the file this project writes and agrees on the energy to 9.2e-12, and the
 GPU then agrees with our own f64 reference to 1.07e-6 on that same prepared
 system (`docs/measurements/prepared-system-verify-m3pro.json`). The analyses
 agree with pytraj. `docs/PREPARATION.md` has the tables.
 
-**Phase 3 is closed.** ff99SB, DHFR (1RX2) and 1UBQ went through the parity
-gate -- eight fixtures in all -- and `prmtop`/`inpcrd` export is in
-`src/prep/prmtop.ts`. One item outlived the phase and is now also done, with a
-tail:
+ff99SB, DHFR (1RX2) and 1UBQ went through the parity gate -- eight fixtures in
+all -- and `prmtop`/`inpcrd` export is in `src/prep/prmtop.ts`. One item
+outlived the phase and is now also done, with a tail:
 
 1. **✅ A non-rectangular box** (deviation 19) — **done, and a dodecahedron
    runs on the GPU.** Kept here rather than deleted, because what it cost and
