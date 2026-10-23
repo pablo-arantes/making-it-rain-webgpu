@@ -16,6 +16,7 @@
 
 import { expect, test } from "@playwright/test";
 import { existsSync, mkdirSync } from "node:fs";
+import { watchPage } from "./watch.js";
 
 const fixture = "1L2Y";
 
@@ -201,40 +202,10 @@ test.describe("the run page", () => {
     await page.locator("#stride-ns").fill("0.9");
     await page.locator("#strides").fill("1");
 
-    // 🔴 Instrumented because this gate has failed twice with "Target page,
-    // context or browser has been closed" and left nothing to diagnose it
-    // with. The page's own state is the only progress signal -- renderer CPU is
-    // not one, see CLAUDE.md -- and it dies with the page, so it is sampled
-    // here while the wait is in flight rather than read once at the end.
-    const events: string[] = [];
-    const stamp = () => new Date().toISOString().slice(11, 19);
-    page.on("crash", () => events.push(`${stamp()} PAGE CRASHED`));
-    page.on("close", () => events.push(`${stamp()} page closed`));
-    page.on("pageerror", (e) => events.push(`${stamp()} pageerror: ${String(e)}`));
-    page.on("console", (m) => {
-      if (m.type() === "error") events.push(`${stamp()} console: ${m.text()}`);
-    });
-
+    // The same watcher `bonded.spec.ts` uses; see `watch.ts` for why it exists
+    // and for what its output does and does not establish.
+    const watch = watchPage(page, "gate");
     await page.locator("#start").click();
-
-    const ticker = setInterval(() => {
-      void page
-        .evaluate(() => ({
-          state: window.__mirRun?.state ?? null,
-          steps: document.querySelector("progress")?.getAttribute("value") ?? null,
-          heap: (
-            performance as unknown as { memory?: { usedJSHeapSize: number } }
-          ).memory?.usedJSHeapSize ?? null,
-        }))
-        .then((p) => {
-          const mb = p.heap === null ? "?" : (p.heap / 1048576).toFixed(0);
-          console.log(`  ${stamp()} state=${p.state} steps=${p.steps} heap=${mb}MB`);
-        })
-        .catch(() => {
-          /* the page is gone; `events` already says so */
-        });
-    }, 60_000);
-
     try {
       await page.waitForFunction(
         () => window.__mirRun?.state === "done" || window.__mirRun?.state === "failed",
@@ -242,8 +213,7 @@ test.describe("the run page", () => {
         { timeout: 5_400_000 },
       );
     } finally {
-      clearInterval(ticker);
-      if (events.length > 0) console.log(`\n  page events:\n  ${events.join("\n  ")}`);
+      watch.stop();
     }
     const run = await page.evaluate(() => window.__mirRun);
     expect(run?.error ?? "").toBe("");

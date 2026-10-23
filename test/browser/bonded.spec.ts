@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { checksum } from "../../src/analysis/npy.js";
+import { watchPage } from "./watch.js";
 
 /**
  * The bonded kernels against OpenMM, in a browser, on both fixtures.
@@ -20,13 +21,22 @@ for (const name of ["1L2Y", "3HTB"]) {
     });
     page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
-    await page.goto(`/validate.html?fixture=${name}`);
-    await page.waitForFunction(() => window.__mirBarostat !== undefined, null, {
-      timeout: 1_800_000,
-    });
-    await page.waitForFunction(() => window.__mirProtocol !== undefined, null, {
-      timeout: 1_800_000,
-    });
+    // 🔴 Instrumented because this is where this spec has died twice, with
+    // "Target page, context or browser has been closed" and nothing to diagnose
+    // it from. Only the waits are wrapped: every failure so far has been here,
+    // and the evaluations below are sub-second.
+    const watch = watchPage(page, name);
+    try {
+      await page.goto(`/validate.html?fixture=${name}`);
+      await page.waitForFunction(() => window.__mirBarostat !== undefined, null, {
+        timeout: 1_800_000,
+      });
+      await page.waitForFunction(() => window.__mirProtocol !== undefined, null, {
+        timeout: 1_800_000,
+      });
+    } finally {
+      watch.stop();
+    }
     const persistence = await page.evaluate(() => window.__mirPersistence);
     if (persistence !== undefined && "error" in persistence) {
       throw new Error(persistence.error);
