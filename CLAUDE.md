@@ -500,6 +500,35 @@ with itself. Those counts are asserted. Treat the slope itself as a comparison
 and never as the engine's drift figure — it is NVE from an unequilibrated
 structure, and the calibrated gate is `validate-loop.ts`.
 
+🔴 **The first non-Apple results, from CI's first run, and they are better
+than expected.** Two implementations beyond Metal have now executed this code,
+and neither is Apple hardware:
+
+| where | what happened |
+| --- | --- |
+| Chrome + Mesa software adapter, `ubuntu-latest` | **all seven precision checks passed**, `checked.ok` true, `maxAtoms` sane. The only failure was `expect(adapter.isFallback).toBe(false)` — an assertion about *hardware*, now local-only |
+| Dawn + lavapipe, `ubuntu-latest` | got an adapter (lavapipe's own "maxDynamicUniformBuffersPerPipelineLayout artificially reduced" warnings are in the log), then the **worker crashed**: `[vitest-pool]: Worker forks emitted error / Worker exited unexpectedly`, no assertion reached |
+
+The passing column is the one to notice. It includes the mixed-radix FFT, which
+**failed at 3.3e-4 on SwiftShader until the twiddle table landed** — so that fix
+is what made a software adapter viable, and the engine's precision no longer
+depends on the driver's `sin` and `cos`. The fixed-point design carries across
+both, as the SwiftShader probe already suggested.
+
+🔴 The Dawn crash is **unexplained and worth chasing**, and the honest first
+question is whether it is lavapipe on a two-core runner or one of our kernels
+taking the process down. It needs a stack, not a conclusion. Until then the
+`gpu` job is `continue-on-error` again — a native crash is not something
+`skipIf` can report, so the lane cannot self-report there, which is the flaw in
+the reasoning that made it required. That reasoning was measured on macOS, where
+Dawn cannot load at all and the failure is a catchable `dlopen` error; on Linux
+it loads and the process dies instead.
+
+Also from that run: `npm ci` works on the runner, `check` passes, and the
+`oracle` job cannot build its environment — `mamba` exits 1 resolving
+`tools/environment.yml` on linux-64, which is a packaging problem and not a
+physics one.
+
 🔴 **This machine cannot catch a binding overrun.**
 `maxStorageBuffersPerShaderStage` has a mandated floor of 8 and Apple reports
 far more, so a kernel that bound nine would compile here, pass every
