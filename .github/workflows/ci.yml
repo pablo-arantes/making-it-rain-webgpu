@@ -90,6 +90,59 @@ jobs:
                  "Intermittent, and tracked in CLAUDE.md."
           fi
 
+  gpu-apple:
+    # The kernels on **real Apple Silicon**, through Dawn and Metal.
+    #
+    # 🔴 This is the one configuration neither available machine can provide.
+    # The developer machine is macOS 14 and **cannot load the binary at all** --
+    # every published `webgpu` from 0.3.10 to 0.6.0 wants
+    # `MTLLogStateDescriptor`, which arrived in macOS 15 -- and the Linux runner
+    # is llvmpipe, a CPU rasteriser. So every Metal number in this repository
+    # comes from Chrome, and Dawn on Metal has never run.
+    #
+    # 🔴 The matrix is the experiment, not thoroughness. The load error says the
+    # binary was "built for macOS 26.0", so `macos-15` may fail the same way;
+    # `macos-latest` may be 15 or 26 depending on the image rotation. Running
+    # both, with `fail-fast` off, answers which runner can host this lane
+    # instead of guessing a label. `sw_vers` prints what each one actually is.
+    #
+    # Safe to require: the probe reports a missing adapter and exits 0, fails
+    # only when a check disagrees with the reference, and a driver signal is a
+    # warning -- the same three-way split the Linux job uses.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: What this runner is
+        run: |
+          sw_vers
+          node -e "console.log('arch', process.arch)"
+      - name: Every precision check, through Dawn on Metal
+        run: |
+          set +e
+          MIR_GPU_TESTS=1 node \
+            --import ./tools/wgsl-loader.mjs --import tsx \
+            tools/dawn-probe.ts
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "all checks passed on this adapter"
+          elif [ "$code" -eq 1 ]; then
+            echo "::error::a precision check disagreed with the reference"
+            exit 1
+          else
+            echo "::warning::Dawn died with signal $((code - 128)); the checks" \
+                 "did not disagree, so this does not gate the build."
+          fi
+
   browser:
     # 🔴 Still allowed to fail, and unlike the Dawn lane above that is not
     # laziness: these specs do **not** degrade when there is no device.
