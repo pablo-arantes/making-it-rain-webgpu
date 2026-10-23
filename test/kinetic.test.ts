@@ -6,7 +6,7 @@ import {
   shiftedKineticEnergy,
 } from "../src/reference/kinetic.js";
 import { readNpy } from "./npy.js";
-import { fixture, FIXTURE_NAMES } from "./fixtures.js";
+import { fixture, FIXTURE_NAMES, ifPresent } from "./fixtures.js";
 
 /**
  * The two kinetic-energy conventions, against what OpenMM reported along the
@@ -30,12 +30,17 @@ for (const name of FIXTURE_NAMES) {
       readonly potential: number;
       readonly kinetic: number;
     }
-    const dynamics = JSON.parse(
-      readFileSync(`fixtures/${name}/dynamics-facts.json`, "utf8"),
-    ) as {
-      trajectory_verlet: { energies_kJ_mol: Frame[] };
-      trajectory_lfmiddle: { energies_kJ_mol: Frame[] };
-    };
+    // `skipIf` does not stop this body running -- see `ifPresent`.
+    const dynamics = ifPresent(
+      f !== null && captured,
+      () =>
+        JSON.parse(
+          readFileSync(`fixtures/${name}/dynamics-facts.json`, "utf8"),
+        ) as {
+          trajectory_verlet: { energies_kJ_mol: Frame[] };
+          trajectory_lfmiddle: { energies_kJ_mol: Frame[] };
+        },
+    );
 
     it("reproduces what OpenMM reports for LFMiddle, unshifted", () => {
       const velocities = frames("lfmiddle", "velocities");

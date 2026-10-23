@@ -79,3 +79,30 @@ export function referenceEnergy(f: Fixture, forceName: string): number {
   }
   return f.referenceEnergies[key] as number;
 }
+
+/**
+ * Build something from a fixture, only when the fixture is there.
+ *
+ * 🔴 **`describe.skipIf(...)` still runs its body.** `skipIf` marks the tests
+ * inside as skipped; it does not stop Vitest calling the callback to find them.
+ * So a `readFileSync` — or anything parsing one — sitting directly in a skipped
+ * `describe` throws at *collection*, which fails the whole file instead of
+ * skipping it. And it is invisible on a machine that has the fixtures, because
+ * there the read simply works.
+ *
+ * It was invisible here for exactly that reason. Measured by moving `fixtures/`
+ * aside, which is what a fresh clone is: **seven files failed and `npm test`
+ * exited 1**, with `ENOENT` and no assertion anywhere. `fixtures/` is
+ * gitignored, so that was every clone of this repository — and CI's `check` job
+ * and the Pages deploy both run `npm run check`, so neither could ever have
+ * gone green.
+ *
+ * The value is typed as though the fixture were there. Nothing inside a skipped
+ * block touches it, so the lie is never observed; the alternative is threading
+ * `undefined` through a hundred call sites to work around a quirk of the runner.
+ * Pass the *same* condition the `describe` is skipped on — if the two disagree,
+ * a running test gets `undefined` and says so immediately.
+ */
+export function ifPresent<T>(condition: boolean, build: () => T): T {
+  return condition ? build() : (undefined as unknown as T);
+}

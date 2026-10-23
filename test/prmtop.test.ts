@@ -23,6 +23,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ifPresent } from "./fixtures.js";
 import { readPdb } from "../src/analysis/pdb.js";
 import { parseSystem } from "../src/engine/system.js";
 import {
@@ -55,10 +56,15 @@ const CASES = [
 ] as const;
 
 for (const entry of CASES) {
-  describe.skipIf(!existsSync(entry.energies))(
+  const hasEnergies = existsSync(entry.energies);
+  describe.skipIf(!hasEnergies)(
     `the prmtop for ${entry.name} (${entry.note})`,
     () => {
-      const energies = JSON.parse(readFileSync(entry.energies, "utf8")) as Energies;
+      // `skipIf` does not stop this body running -- see `ifPresent`.
+      const energies = ifPresent(
+        hasEnergies,
+        () => JSON.parse(readFileSync(entry.energies, "utf8")) as Energies,
+      );
 
       it("gives OpenMM the same energy per force group as the System it came from", () => {
         for (const name of Object.keys(energies.fromSystem)) {
@@ -130,7 +136,7 @@ describe("writing a prmtop", () => {
     expect(firstValue).toBeCloseTo((nonbonded.charge[0] as number) * AMBER_CHARGE_SCALE, 6);
   });
 
-  it("refuses a system it cannot express", () => {
+  it.skipIf(!present)("refuses a system it cannot express", () => {
     // A force with no Amber equivalent would be dropped, and a file missing a
     // term reads as valid. Refused by name instead.
     const system = parseSystem(readFileSync("fixtures/prep/1L2Y-system.xml", "utf8"));

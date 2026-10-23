@@ -15,3 +15,6 @@ __pycache__/
 .DS_Store
 .vite/
 *.npy
+# Chemical Component Dictionary downloads; the ligand route fetches
+# <CODE>.cif and 24 of them were committed to the repository root once.
+*.cif

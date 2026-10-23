@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Molecular dynamics in the browser on WebGPU, held to the Making it Rain OpenMM protocol",
   "license": "MIT",
+  "author": "Pablo Arantes",
   "engines": {
     "node": ">=22"
   },

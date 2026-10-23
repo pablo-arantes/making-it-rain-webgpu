@@ -22,6 +22,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ifPresent } from "./fixtures.js";
 import { readPdb, type PdbTopology } from "../src/analysis/pdb.js";
 import {
   parseSystem,
@@ -263,26 +264,40 @@ for (const fixture of FIXTURES) {
  * `docs/DEVIATIONS.md` entry 8 is about this field: the notebook has a pH
  * control that cannot take effect and a hardcoded 7.4 in the call that can.
  */
-describe.skipIf(!existsSync("fixtures/prep/3HTB-ph4-hydrogens.json"))(
+const hasPh4 =
+  existsSync("fixtures/prep/3HTB-ph4-hydrogens.json") &&
+  existsSync("fixtures/3HTB/receptor.pdb");
+
+describe.skipIf(!hasPh4)(
   "adding hydrogens at pH 4",
   () => {
-    const dump = JSON.parse(
-      readFileSync("fixtures/prep/3HTB-ph4-hydrogens.json", "utf8"),
-    ) as Dump;
-    const definitions = parseHydrogenDefinitions(
-      readFileSync(definitionsPath, "utf8"),
+    // `skipIf` does not stop this body running -- see `ifPresent`.
+    const dump = ifPresent(
+      hasPh4,
+      () =>
+        JSON.parse(
+          readFileSync("fixtures/prep/3HTB-ph4-hydrogens.json", "utf8"),
+        ) as Dump,
     );
-    const standardBonds = parseStandardBonds(readFileSync(residuesPath, "utf8"));
-    const stripped = stripAtoms(
-      stripAtoms(readPdb(readFileSync("fixtures/3HTB/receptor.pdb", "utf8")), isWater)
-        .topology,
-      isHydrogenAtom,
-    ).topology;
-    const result = addHydrogens(
-      stripped,
-      inferBonds(stripped, standardBonds),
-      definitions,
-      4,
+    const definitions = ifPresent(hasPh4, () =>
+      parseHydrogenDefinitions(readFileSync(definitionsPath, "utf8")),
+    );
+    const standardBonds = ifPresent(hasPh4, () =>
+      parseStandardBonds(readFileSync(residuesPath, "utf8")),
+    );
+    const stripped = ifPresent(
+      hasPh4,
+      () =>
+        stripAtoms(
+          stripAtoms(
+            readPdb(readFileSync("fixtures/3HTB/receptor.pdb", "utf8")),
+            isWater,
+          ).topology,
+          isHydrogenAtom,
+        ).topology,
+    );
+    const result = ifPresent(hasPh4, () =>
+      addHydrogens(stripped, inferBonds(stripped, standardBonds), definitions, 4),
     );
 
     it("protonates the acids and the histidine that pH 7 leaves bare", () => {

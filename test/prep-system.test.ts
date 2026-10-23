@@ -22,6 +22,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ifPresent } from "./fixtures.js";
 import { readPdb } from "../src/analysis/pdb.js";
 import {
   parseSystem,
@@ -182,11 +183,16 @@ for (const fixture of FIXTURES) {
   });
 }
 
-describe.skipIf(!existsSync(`fixtures/prep/1L2Y.pdb`))("constraining bonds", () => {
-  const prepared = prepareSystem(
-    readPdb(readFileSync("fixtures/prep/1L2Y.pdb", "utf8")),
-    parseForceField(readFileSync(fieldPath, "utf8")),
-    parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+const hasPrepPdb = existsSync("fixtures/prep/1L2Y.pdb");
+
+describe.skipIf(!hasPrepPdb)("constraining bonds", () => {
+  // `skipIf` does not stop this body running -- see `ifPresent`.
+  const prepared = ifPresent(hasPrepPdb, () =>
+    prepareSystem(
+      readPdb(readFileSync("fixtures/prep/1L2Y.pdb", "utf8")),
+      parseForceField(readFileSync(fieldPath, "utf8")),
+      parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+    ),
   );
 
   it("moves hydrogen bonds out of the force and into the constraint list", () => {

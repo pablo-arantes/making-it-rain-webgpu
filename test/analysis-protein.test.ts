@@ -29,6 +29,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ifPresent } from "./fixtures.js";
 import { readDcd } from "../src/analysis/dcd.js";
 import { readPdb } from "../src/analysis/pdb.js";
 import {
@@ -186,10 +187,21 @@ describe.skipIf(!present)("the protein analyses", () => {
   });
 });
 
-describe.skipIf(!existsSync(refPath))("the distribution and CSV exports", () => {
-  const reference = JSON.parse(readFileSync(refPath, "utf8")) as Reference & {
-    readonly kde?: { readonly bandwidth: number; readonly x: readonly number[]; readonly y: readonly number[] };
-  };
+const hasReference = existsSync(refPath);
+
+describe.skipIf(!hasReference)("the distribution and CSV exports", () => {
+  // `skipIf` does not stop this body running -- see `ifPresent`.
+  const reference = ifPresent(
+    hasReference,
+    () =>
+      JSON.parse(readFileSync(refPath, "utf8")) as Reference & {
+        readonly kde?: {
+          readonly bandwidth: number;
+          readonly x: readonly number[];
+          readonly y: readonly number[];
+        };
+      },
+  );
 
   it("matches scipy's Gaussian KDE at Scott's bandwidth", () => {
     // The notebook draws seaborn KDEs beside the traces, and seaborn's default
@@ -263,7 +275,9 @@ const pytrajPath = "fixtures/analysis/pytraj.json";
  *
  * Everything from cpptraj arrives in ångström and is converted in the tool.
  */
-describe.skipIf(!existsSync(pytrajPath) || !present)("against pytraj", () => {
+const hasPytraj = existsSync(pytrajPath) && present;
+
+describe.skipIf(!hasPytraj)("against pytraj", () => {
   interface Pytraj {
     readonly caIndices: readonly number[];
     readonly rmsd: readonly number[];
@@ -275,9 +289,16 @@ describe.skipIf(!existsSync(pytrajPath) || !present)("against pytraj", () => {
     readonly pcaProjections: readonly number[];
     readonly crossCorrelation: readonly number[];
   }
-  const theirs = JSON.parse(readFileSync(pytrajPath, "utf8")) as Pytraj;
-  const trajectory = readDcd(new Uint8Array(readFileSync(dcdPath)));
-  const ca = caIndices(readPdb(readFileSync(pdbPath, "utf8")));
+  // `skipIf` does not stop this body running, and these three *parse* a
+  // fixture rather than only reading one -- see `ifPresent`.
+  const theirs = ifPresent(
+    hasPytraj,
+    () => JSON.parse(readFileSync(pytrajPath, "utf8")) as Pytraj,
+  );
+  const trajectory = ifPresent(hasPytraj, () =>
+    readDcd(new Uint8Array(readFileSync(dcdPath))),
+  );
+  const ca = ifPresent(hasPytraj, () => caIndices(readPdb(readFileSync(pdbPath, "utf8"))));
 
   it("selects the same atoms cpptraj's '@CA' mask selects", () => {
     expect([...ca]).toEqual([...theirs.caIndices]);

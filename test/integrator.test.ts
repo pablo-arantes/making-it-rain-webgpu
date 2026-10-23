@@ -12,7 +12,7 @@ import {
 } from "../src/reference/com-motion.js";
 import { splitConstraints } from "../src/engine/constraint-clusters.js";
 import { readNpy } from "./npy.js";
-import { fixture, FIXTURE_NAMES } from "./fixtures.js";
+import { fixture, FIXTURE_NAMES, ifPresent } from "./fixtures.js";
 
 /**
  * Both integrators against OpenMM's own trajectories, step by step.
@@ -44,14 +44,21 @@ for (const name of FIXTURE_NAMES) {
       readNpy(`fixtures/${name}/trajectory-${label}-${kind}.npy`).data;
     const frame = (array: Float64Array, index: number): Float64Array =>
       array.subarray(index * stride, (index + 1) * stride);
-    const steps = (
-      JSON.parse(
-        readFileSync(`fixtures/${name}/dynamics-facts.json`, "utf8"),
-      ) as { trajectory_verlet: { steps: number } }
-    ).trajectory_verlet.steps;
+    // `skipIf` does not stop this body running -- see `ifPresent`.
+    const steps = ifPresent(
+      f !== null && captured,
+      () =>
+        (
+          JSON.parse(
+            readFileSync(`fixtures/${name}/dynamics-facts.json`, "utf8"),
+          ) as { trajectory_verlet: { steps: number } }
+        ).trajectory_verlet.steps,
+    );
     // Classified once: the split depends on the system, never on coordinates.
-    const split = splitConstraints(f!.system);
-    const remover = centreOfMassRemover(f!.system);
+    // `f` is null without the fixture and this body runs anyway, so the `!` is
+    // only safe inside `ifPresent` -- see its note.
+    const split = ifPresent(f !== null, () => splitConstraints(f!.system));
+    const remover = ifPresent(f !== null, () => centreOfMassRemover(f!.system));
 
     /** The worst per-component difference between two arrays. */
     const worst = (a: Float64Array, b: Float64Array): number => {

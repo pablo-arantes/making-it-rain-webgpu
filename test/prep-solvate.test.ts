@@ -17,6 +17,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ifPresent } from "./fixtures.js";
 import { readPdb, type PdbTopology } from "../src/analysis/pdb.js";
 import { assignAtoms } from "../src/prep/assign.js";
 import { inferBonds, parseStandardBonds } from "../src/prep/bonds.js";
@@ -81,24 +82,37 @@ const present =
  * radius or the wrong box file would still pass every TIP3P test. It fits 716
  * waters where TIP3P fits 699 in the same cell.
  */
-describe.skipIf(
-  !existsSync("fixtures/prep/1L2Y-spce-solvent.json") ||
-    !existsSync("vendor/water/spce.pdb"),
-)("solvating 1L2Y with SPC/E", () => {
-  const dump = JSON.parse(
-    readFileSync("fixtures/prep/1L2Y-spce-solvent.json", "utf8"),
-  ) as Dump;
-  const field = mergeForceFields([
-    parseForceField(readFileSync("vendor/ffxml/protein.ff14SB.xml", "utf8")),
-    parseForceField(readFileSync("vendor/ffxml/amber14-spce.xml", "utf8")),
-  ]);
-  const topology = readPdb(readFileSync(pdbPath, "utf8"));
-  const bonds = inferBonds(
-    topology,
-    parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+const hasSpce =
+  existsSync("fixtures/prep/1L2Y-spce-solvent.json") &&
+  existsSync("vendor/water/spce.pdb") &&
+  existsSync(pdbPath);
+
+describe.skipIf(!hasSpce)("solvating 1L2Y with SPC/E", () => {
+  // `skipIf` does not stop this body running -- see `ifPresent`.
+  const dump = ifPresent(
+    hasSpce,
+    () =>
+      JSON.parse(
+        readFileSync("fixtures/prep/1L2Y-spce-solvent.json", "utf8"),
+      ) as Dump,
   );
-  const atoms = assignAtoms(topology, bonds, field).atoms;
-  const waterBox = readPdb(readFileSync("vendor/water/spce.pdb", "utf8"));
+  const field = ifPresent(hasSpce, () =>
+    mergeForceFields([
+      parseForceField(readFileSync("vendor/ffxml/protein.ff14SB.xml", "utf8")),
+      parseForceField(readFileSync("vendor/ffxml/amber14-spce.xml", "utf8")),
+    ]),
+  );
+  const topology = ifPresent(hasSpce, () => readPdb(readFileSync(pdbPath, "utf8")));
+  const bonds = ifPresent(hasSpce, () =>
+    inferBonds(
+      topology,
+      parseStandardBonds(readFileSync("vendor/ffxml/residues.xml", "utf8")),
+    ),
+  );
+  const atoms = ifPresent(hasSpce, () => assignAtoms(topology, bonds, field).atoms);
+  const waterBox = ifPresent(hasSpce, () =>
+    readPdb(readFileSync("vendor/water/spce.pdb", "utf8")),
+  );
 
   it("keeps exactly the waters OpenMM kept, in the same places", () => {
     const result = solvate(topology, bonds, atoms, waterBox, {
