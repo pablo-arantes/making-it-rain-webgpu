@@ -50,7 +50,7 @@ lane that is explicitly separate.
 ## Reaching a GPU
 
 🔴 **No published Dawn binary loads on macOS 14.** Every `webgpu` version from
-0.3.10 to 0.6.0 fails with
+0.3.10 to **0.6.2** fails with
 
 ```
 Symbol not found: _OBJC_CLASS_$_MTLLogStateDescriptor
