@@ -180,6 +180,27 @@ limits record for exactly this reason, so the caller has to be explicit about
 which it passes, and `DEVICE_PROFILES` lets the arithmetic be tested against
 other classes of hardware from one machine.
 
+🔴 **Never assert an exact value derived through `ceil` from an input you let
+move.** CI's oracle job compared the rebuilt 1L2Y fixture's PME block to the
+committed one for equality, while explicitly allowing the box to differ by
+0.1 nm -- and the grid is `ceil(8.012780 * box)`. It failed on grid 26 against
+the committed 25, which read like an OpenMM regression and was not: `alpha` came
+back **identical to all 16 digits**, because it depends on the cutoff and the
+tolerance and nothing else.
+
+The numbers, because the margin is the finding. OpenMM's rule is
+`alpha = (1/cutoff)*sqrt(-ln(2*tol))` and
+`grid = ceil(2*alpha*box/(3*tol^0.2))`. The committed box is 3.112721 nm; the
+25-to-26 boundary is at **3.120016 nm**, which is **7.3 pm away**; and
+`docs/NOTEBOOK_PARITY.md` finding 2 measured preparation moving the box **15 pm**
+between identical runs. So the assertion had roughly even odds every time it
+ran, and the fixture it was built from happens to sit just under a cliff.
+
+The repair is to assert the **rule** rather than the snapshot: `alpha` against
+the closed form, and the grid against that rule applied to the box *this run*
+produced. A real change in OpenMM's PME parameters still fails it, which is what
+the job is for; a box that wobbles does not.
+
 🔴 **Do not read renderer CPU as a progress signal.** A healthy 1 ns run sits at
 about 1% renderer CPU and accumulates a few seconds over many minutes — the work
 is on the GPU and the loop batches steps per submission. A stalled page looks

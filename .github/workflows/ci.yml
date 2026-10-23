@@ -236,15 +236,51 @@ jobs:
         run: |
           python tools/build_reference_system.py --pdb-id 1L2Y --out /tmp/fixtures
           python - <<'PY'
-          import json
+          import json, math
           new = json.load(open("/tmp/fixtures/1L2Y/facts.json"))
           old = json.load(open("docs/measurements/1L2Y-facts.json"))
-          # Atom counts and PME parameters are deterministic; hydrogen
-          # positions are not (see docs/NOTEBOOK_PARITY.md finding 2), so the
-          # box and water count are allowed to move a little.
-          assert new["pme"] == old["pme"], (new["pme"], old["pme"])
+
+          # 🔴 This used to assert `new["pme"] == old["pme"]` while allowing the
+          # box to move 0.1 nm, and those two cannot both be right: the grid is
+          # a `ceil` of a quantity proportional to the box, so the input was
+          # free to cross a rounding boundary that the output was forbidden to
+          # cross. It failed exactly that way -- grid 26 against the committed
+          # 25 -- and OpenMM was innocent, because `alpha` came back identical
+          # to all 16 digits.
+          #
+          # The arithmetic, since it is the whole point. OpenMM's rule is
+          # alpha = (1/cutoff) * sqrt(-ln(2*tol)) and
+          # grid = ceil(2*alpha*box / (3*tol**0.2)) = ceil(8.012780 * box).
+          # The committed box is 3.112721 nm and the 25->26 boundary is at
+          # 3.120016 -- **7.3 pm away**, while preparation is irreproducible at
+          # the 15 pm level (docs/NOTEBOOK_PARITY.md finding 2). So the old
+          # assertion was a coin flip on every run.
+          #
+          # What is actually deterministic is the **rule**, so that is what is
+          # checked: alpha against the closed form, and the grid against the
+          # rule applied to the box this run produced. A genuine change in
+          # OpenMM's PME parameters still fails this -- which is the thing worth
+          # catching -- while the box wobbling does not.
+          TOLERANCE, CUTOFF = 5e-4, 1.0
+          alpha = (1.0 / CUTOFF) * math.sqrt(-math.log(2 * TOLERANCE))
+          assert abs(new["pme"]["alpha_per_nm"] - alpha) < 1e-12, \
+              (new["pme"]["alpha_per_nm"], alpha)
+          per_nm = 2 * alpha / (3 * TOLERANCE ** 0.2)
+          for axis in range(3):
+              want = math.ceil(per_nm * new["box_nm"][axis][axis])
+              got = new["pme"]["grid_reference_platform"][axis]
+              assert got == want, (axis, got, want, new["box_nm"][axis][axis])
+          # And still within one of the committed snapshot, which the box
+          # tolerance below implies: a grid two away would mean a box that moved
+          # far more than preparation can explain.
+          assert abs(new["pme"]["grid_reference_platform"][0]
+                     - old["pme"]["grid_reference_platform"][0]) <= 1, \
+              (new["pme"], old["pme"])
+
           assert new["forces"][0]["numBonds"] == old["forces"][0]["numBonds"]
           box_new, box_old = new["box_nm"][0][0], old["box_nm"][0][0]
           assert abs(box_new - box_old) < 0.1, (box_new, box_old)
+          print(f"alpha matches the closed form; grid {new['pme']['grid_reference_platform']}"
+                f" is the rule applied to box {box_new:.6f} nm")
           print("fixture agrees with the committed facts")
           PY
