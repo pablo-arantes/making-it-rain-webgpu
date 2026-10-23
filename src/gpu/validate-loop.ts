@@ -67,6 +67,21 @@ const TOLERANCE = 1e-6;
  * the two fixtures closed when the minimum image moved into fixed point, which
  * took 3HTB's direct force error from 1.13e-5 to 5.37e-7 (docs/NONBONDED.md).
  *
+ * 🔴 **These are single draws of a stochastic quantity, and the committed
+ * OpenMM files do not match the numbers above.**
+ * `docs/measurements/drift-openmm-cpu-1L2Y.json` reads **0.4005** against the
+ * 0.374 here, and `-3HTB.json` reads **0.3612** against 0.385 — later runs of
+ * the same script, with the same platform and timestep. Our own side moves as
+ * much: the browser lane's conservation check read 0.35 and 0.46 for 3HTB on
+ * two runs an hour apart, and 0.58 and 0.65 for 1L2Y. The runs assign
+ * velocities, so a tens-of-percent spread is the quantity and not a
+ * regression.
+ *
+ * So do not "fix" either figure to match the other, and do not tighten the
+ * gate towards them. The threshold is 1.5 because it has to survive the spread;
+ * a bound set from one draw of a number that moves by 30% would fail on a
+ * Tuesday for no reason.
+ *
  * So the gate is 1.5, a little under three times the worse measurement: a
  * regression test rather than a claim that either fixture is at its floor. The
  * real target is OpenMM's *mixed-precision GPU* platform, which has to be
