@@ -6,6 +6,14 @@
   "description": "Molecular dynamics in the browser on WebGPU, held to the Making it Rain OpenMM protocol",
   "license": "MIT",
   "author": "Pablo Arantes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablo-arantes/making-it-rain-webgpu.git"
+  },
+  "homepage": "https://pablo-arantes.github.io/making-it-rain-webgpu/",
+  "bugs": {
+    "url": "https://github.com/pablo-arantes/making-it-rain-webgpu/issues"
+  },
   "engines": {
     "node": ">=22"
   },
