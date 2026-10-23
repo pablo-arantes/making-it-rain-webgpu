@@ -6,7 +6,7 @@
  "_question": "The FFT read 1.41e-6 relative RMS on Chrome/Metal and 3.27e-4 on SwiftShader, 232x worse. Two causes were possible and the obvious test -- change the twiddles and see if it improves -- would only have shown *that* something helped, not which fault it fixed. So both were measured directly: the f32 rounding of the twiddle angle, and the accuracy of `sin`/`cos` given the angle the device itself computed.",
  "_answer": "🔴 **It is the backend's `sin` and `cos`, and nothing else.** On SwiftShader they are wrong by 1.89e-4 absolute -- **1,587 ulps** of f32 -- where Metal's are within **0.77 of one ulp**, essentially correctly rounded. The argument is *not* the cause and is almost identical on the two adapters: 5.95e-7 radians against 7.21e-7. The worst case is plain to read: SwiftShader computes cos(1.3962634801864624) as 0.17362739145755768 where the true value is 0.17364810026990493 -- wrong in the fifth significant figure. The FFT's 3.27e-4 is about 1.7x that single-twiddle error, which is what accumulating it over a few butterfly stages looks like, so the twiddles account for the whole discrepancy and no other suspect is needed.",
  "_is_the_kernel_wrong": "In the sense that matters, yes. 🔴 **WGSL places no accuracy bound on `sin` or `cos`**, so a backend computing them to 1,587 ulps is conforming, and `fft.wgsl` calling them per butterfly is assuming an accuracy the language does not promise. It is not a numerical mistake -- the arithmetic and the index algebra are right, and the same kernel is accurate to 1.4e-6 where the transcendentals are good -- but it does make the engine's precision hostage to the driver, which is exactly the class of thing this project refuses to leave resting on one device.",
- "_the_fix": "Compute the twiddle factors on the host, in f64, round them to f32 and upload them as a table the kernel indexes -- the standard approach in mature FFTs, and one that removes two transcendentals from the innermost block as well, so it is a throughput change too (CLAUDE.md: treat anything in that block as expensive until measured). The table is `exp(2*pi*i*j/N)` for the axis length N, indexed by `twiddle_index * r * (N / (ns * radix)) % N` for the gather and `k * m * (N / radix) % N` for the butterfly. Predicted result: SwiftShader's FFT error falls from 3.27e-4 to Metal's ~1e-6, since the remaining error would be the f32 rounding of the table entries, which the argument measurement above puts at 6e-7. **Not yet implemented, and that prediction is the test of this whole diagnosis.**",
+ "_the_fix": "Compute the twiddle factors on the host, in f64, round them to f32 and upload them as a table the kernel indexes -- the standard approach in mature FFTs, and one that removes two transcendentals from the innermost block as well, so it is a throughput change too (CLAUDE.md: treat anything in that block as expensive until measured). The table is `exp(2*pi*i*j/N)` for the axis length N, indexed by `twiddle_index * r * (N / (ns * radix)) % N` for the gather and `k * m * (N / radix) % N` for the butterfly. Predicted result: SwiftShader's FFT error falls from 3.27e-4 to Metal's ~1e-6, since the remaining error would be the f32 rounding of the table entries, which the argument measurement above puts at 6e-7. **Implemented, and the prediction held -- see `_outcome`.**",
  "_why_this_is_not_a_threshold_problem": "The 1e-5 threshold is not the thing to move. It is met with room to spare wherever the transcendentals are sane, and the engine's PME accuracy depends on the mesh transform being right. Raising it to accommodate a 1,587-ulp `cos` would be fitting the threshold to the weakest backend, which AGENTS.md forbids in as many words.",
  "adapters": {
   "chrome_metal": {
@@ -157,6 +157,116 @@
        "7"
       ],
       "relativeRms": 0.00013888775631649337
+     }
+    ]
+   }
+  }
+ },
+ "_outcome": {
+  "verdict": "🔴 **Confirmed, and by a wider margin than predicted.** SwiftShader's worst relative RMS went from 3.27e-4 to **1.567e-7**, a factor of 2,090, and the check passes. The prediction was 'about 1e-6'; the result is six times better than that.",
+  "the_part_the_diagnosis_understated": "🔴 **Metal improved too, 9x: 1.41e-6 to 1.561e-7.** The diagnosis exonerated the angle's f32 rounding, and that was right about the *discrepancy between adapters* -- 5.95e-7 against 7.21e-7 radians, near enough identical -- but wrong as a statement about the good adapter, where that rounding was the **dominant** term: Metal's `cos` was already within 0.77 ulp, so once the transcendental is removed what is left to remove is the argument, and the host-computed table removes both at once because the host forms the angle in f64. A reader of the diagnosis alone would have expected Metal not to move.",
+  "the_result_that_matters": "The two adapters now agree to 0.4% -- 1.5607e-7 against 1.5669e-7 -- and shape by shape to within 2%. The transform's accuracy no longer depends on the driver at all, which is the point: the residual is the f32 rounding of the table entries accumulated over the stages, and that is the same arithmetic everywhere.",
+  "engine_force_error": "Moved from 1.0958857596079082e-06 to 1.0923781872272260e-06 relative RMS against the f64 reference -- a 0.32% improvement, re-measured because CLAUDE.md requires it after a kernel change. 🔴 **Deliberately small, and worth saying so:** a 9x better mesh transform buys 0.3% end to end, because the engine's force error is dominated by the f32 spread and interpolation either side of the transform rather than by the transform. So this change is about portability and about not depending on an unbounded intrinsic; it is not an accuracy win for the engine, and quoting it as one would be wrong.",
+  "after": {
+   "chrome_metal": {
+    "ok": true,
+    "worstRelativeRms": 1.5607046346161168e-07,
+    "shapes": [
+     {
+      "shape": "8x8x8",
+      "radices": [
+       "2x2x2",
+       "2x2x2",
+       "2x2x2"
+      ],
+      "relativeRms": 9.047390790613889e-08
+     },
+     {
+      "shape": "9x9x9",
+      "radices": [
+       "3x3",
+       "3x3",
+       "3x3"
+      ],
+      "relativeRms": 1.2158827373639438e-07
+     },
+     {
+      "shape": "25x25x25",
+      "radices": [
+       "5x5",
+       "5x5",
+       "5x5"
+      ],
+      "relativeRms": 1.5607046346161168e-07
+     },
+     {
+      "shape": "54x4x6",
+      "radices": [
+       "3x2",
+       "2x2",
+       "3x3x3x2"
+      ],
+      "relativeRms": 1.1526813439660221e-07
+     },
+     {
+      "shape": "7x5x3",
+      "radices": [
+       "3",
+       "5",
+       "7"
+      ],
+      "relativeRms": 9.945205992050048e-08
+     }
+    ]
+   },
+   "swiftshader": {
+    "ok": true,
+    "worstRelativeRms": 1.5669295865618157e-07,
+    "shapes": [
+     {
+      "shape": "8x8x8",
+      "radices": [
+       "2x2x2",
+       "2x2x2",
+       "2x2x2"
+      ],
+      "relativeRms": 8.958612721899489e-08
+     },
+     {
+      "shape": "9x9x9",
+      "radices": [
+       "3x3",
+       "3x3",
+       "3x3"
+      ],
+      "relativeRms": 1.2735178421912507e-07
+     },
+     {
+      "shape": "25x25x25",
+      "radices": [
+       "5x5",
+       "5x5",
+       "5x5"
+      ],
+      "relativeRms": 1.5669295865618157e-07
+     },
+     {
+      "shape": "54x4x6",
+      "radices": [
+       "3x2",
+       "2x2",
+       "3x3x3x2"
+      ],
+      "relativeRms": 1.2109135879832327e-07
+     },
+     {
+      "shape": "7x5x3",
+      "radices": [
+       "3",
+       "5",
+       "7"
+      ],
+      "relativeRms": 9.919359976926353e-08
      }
     ]
    }

@@ -23,7 +23,7 @@ import {
 } from "./kernels.js";
 import { unpackFixed } from "./forces.js";
 import { fromFixed, fromWords } from "../reference/fixed-point.js";
-import { planFft, type FftPlan } from "../reference/fft.js";
+import { planFft, twiddleTable, type FftPlan } from "../reference/fft.js";
 import { bsplineModuli } from "../reference/forces/bspline.js";
 import { PME_ORDER } from "../reference/forces/pme.js";
 import { usableDiagonal } from "./nonbonded.js";
@@ -84,8 +84,20 @@ export async function planTransform3d(
   let fromIsA = true;
   for (const [axis, [length, stride, lineCount]] of axes(grid).entries()) {
     const plan = plans[axis] as FftPlan;
+    // 🔴 One twiddle table per axis, shared by that axis's stages, because the
+    // kernel no longer computes `cos` and `sin` at all: WGSL bounds neither,
+    // and on SwiftShader they are 1,587 ulps out. See `twiddleTable`.
+    const table = twiddleTable(length, sign);
+    const tableBuffer = pool.buffer({
+      label: `fft/${label}/${axis}/twiddles`,
+      byteLength: table.byteLength,
+      usage: storageUsage(),
+    });
+    pool.device.queue.writeBuffer(tableBuffer, 0, table as unknown as BufferSource);
     for (const [index, stage] of plan.stages.entries()) {
-      const uniform = new ArrayBuffer(24);
+      // 32 bytes: six words, then the two appended strides. Appended rather
+      // than inserted -- see the note in the kernel's `Stage`.
+      const uniform = new ArrayBuffer(32);
       const u32 = new Uint32Array(uniform);
       const f32 = new Float32Array(uniform);
       u32[0] = length;
@@ -94,9 +106,11 @@ export async function planTransform3d(
       u32[3] = stage.radix;
       u32[4] = stage.ns;
       f32[5] = sign;
+      u32[6] = length / (stage.ns * stage.radix);
+      u32[7] = length / stage.radix;
       const stageBuffer = pool.buffer({
         label: `fft/${label}/${axis}/${index}`,
-        byteLength: 24,
+        byteLength: 32,
         usage: uniformUsage(),
       });
       pool.device.queue.writeBuffer(stageBuffer, 0, new Uint8Array(uniform));
@@ -111,6 +125,7 @@ export async function planTransform3d(
             { binding: 0, resource: { buffer: fromIsA ? a : b } },
             { binding: 1, resource: { buffer: fromIsA ? b : a } },
             { binding: 2, resource: { buffer: stageBuffer } },
+            { binding: 3, resource: { buffer: tableBuffer } },
           ],
           [Math.ceil(((length / stage.radix) * lineCount) / 64)],
         ),

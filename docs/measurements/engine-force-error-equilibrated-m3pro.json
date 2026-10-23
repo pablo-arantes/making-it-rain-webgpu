@@ -1,36 +1,26 @@
 {
- "what": "The engine's force error at the configuration the acceptance thresholds are defined at, so it is comparable with them for the first time.",
- "date": "2026-10-22",
- "host": "Apple M3 Pro, macOS 14, Google Chrome 155, apple \u00b7 metal-3",
- "fixture": "fixtures/1L2Y/system.xml, 2373 particles",
- "protocol": "tools/calibrate_thresholds.py's own equilibration, saved with --save-equilibrated so every engine sees the same coordinates: minimise to 10 kJ/mol/nm over at most 10000 iterations, setVelocitiesToTemperature(298 K, seed 1234), then 5000 steps of LangevinIntegrator(298 K, 1/ps, 2 fs) with a 1e-6 constraint tolerance and seed 1234. Equilibration is stochastic, which is why the state is saved rather than re-run.",
- "equilibrated_state": "fixtures/equilibrated/1L2Y-state.xml",
+ "what": "The engine's force error at the configuration the acceptance thresholds are defined at, so it is comparable with them.",
+ "date": "2026-10-23",
+ "produced_by": "npm run report:engine-error, which drives web/validate.html in Chrome",
+ "host": "Apple M3 Pro, macOS 14, Google Chrome, apple · metal-3",
+ "state": "/fixtures/equilibrated/1L2Y-state.xml",
+ "particleCount": 2373,
  "force_relative_rms": {
-  "_definition": "sqrt(sum((a-b)^2) / sum(b^2)) over all 3N components; identical formula in src/gpu/verify.ts and tools/calibrate_thresholds.py, which is what makes these comparable",
-  "webgpu_engine_vs_our_f64_reference": 1.0958857596079082e-06,
-  "openmm_opencl_single_vs_openmm_reference": 1.429296137442784e-05,
-  "openmm_cpu_double_vs_openmm_reference": 1.0345659102701044e-06,
-  "engine_better_than_openmm_single_by": 13.04,
+  "_definition": "sqrt(sum((a-b)^2) / sum(b^2)) over all 3N components; the identical formula in src/gpu/verify.ts and tools/calibrate_thresholds.py, which is what makes these comparable",
+  "webgpu_engine_vs_our_f64_reference": 0.000001092378187227226,
+  "openmm_opencl_single_vs_openmm_reference": 0.00001429296137442784,
+  "openmm_cpu_double_vs_openmm_reference": 0.0000010345659102701044,
+  "engine_better_than_openmm_single_by": 13.08,
   "engine_worse_than_openmm_double_by": 1.06,
   "basis_from": "docs/measurements/calibration-L4-opencl-mixed.json"
  },
  "total_energy": {
-  "webgpu_engine_relative": 2.712994090970507e-07,
-  "webgpu_engine_absolute_kJ_mol": 0.008201526306947926,
-  "openmm_opencl_single_absolute_kJ_mol": 0.004391132464661496,
-  "openmm_cpu_double_absolute_kJ_mol": 0.002325666770047974,
-  "note": "The asymmetry between forces and total energy is real and is not a defect: forces accumulate exactly in 64-bit fixed point, whereas the total is a difference of two large cancelling PME terms, so its relative error is amplified by the cancellation.",
-  "device_kJ_mol": -30230.526889738976,
-  "our_f64_reference_kJ_mol": -30230.535091265283
- },
- "reference_cross_check": {
+  "webgpu_engine_relative": 2.7208963294284284e-7,
+  "webgpu_engine_absolute_kJ_mol": 0.0082254151966481,
+  "device_kJ_mol": -30230.526865850086,
   "our_f64_reference_kJ_mol": -30230.535091265283,
-  "openmm_f64_reference_kJ_mol": -30230.53509110767,
-  "relative_difference": 5.213662059352795e-12,
-  "note": "Independent confirmation that the two double-precision references are interchangeable, which is what makes the force comparison legitimate at all: each engine is measured against its own f64 reference. The cross-feed in test/crossfeed.test.ts gave 9.2e-12 on a different system; this is the same claim at the configuration actually used here."
+  "note": "The asymmetry between forces and total energy is real and is not a defect: forces accumulate exactly in 64-bit fixed point, whereas the total is a difference of two large cancelling PME terms, so its relative error is amplified by the cancellation."
  },
- "verdict": "The engine is inside the basis by a wide margin on forces -- 1.10e-06 against the 1.43e-05 threshold -- and sits nearer OpenMM's double-precision CPU platform (8.67e-07) than its single-precision GPU one. That is the designed consequence of 64-bit fixed-point positions and exact force accumulation; the only single-precision step is the per-pair evaluation itself.",
- "produced_by": "npm run report:engine-error, which drives web/validate.html in Chrome",
  "mesh": [
   25,
   25,
@@ -38,19 +28,6 @@
  ],
  "alpha": 2.628260884878466,
  "cutoff": 1,
- "unchanged_across": {
-  "note": "\ud83d\udd34 Was bit-identical to all 17 digits across four kernel changes -- the shell split, the loop-free minimum image, the position fold and the neighbour list -- which was the point of this entry. PME's triclinic conversion broke that, at the f32 ulp and for a reason worth keeping: the kernels now compute a fractional coordinate as `r \u00b7 B\u207b\u00b9` where they divided by an edge length, and `r * (1/L)` is not `r / L` in f32. The force error moved from 1.104563e-06 to 1.095886e-06, which is 0.8% *better* and still 13x inside the single-precision basis. Accepted rather than branched around: the reference computes `r \u00b7 B\u207b\u00b9` too, so the kernel and the thing it is differentially tested against now do the same arithmetic, which matters more for parity than preserving a digit.",
-  "changes": [
-   "the pair kernel's 27-cell neighbour shell split across the dispatch",
-   "a loop-free minimum image",
-   "positions folded into the box so the wrap is one conditional shift",
-   "a Verlet neighbour list with a device-side rebuild",
-   "PME's triclinic conversion -- moved the figure at the ulp, see the note"
-  ],
-  "speedup_over_the_same_period": "1L2Y 208 -> 1,213 steps/s; 3HTB 82 -> 151",
-  "before": {
-   "webgpu_engine_vs_our_f64_reference": 1.1045629923585429e-06,
-   "webgpu_engine_absolute_kJ_mol": 0.008369844003027538
-  }
- }
+ "ok": true,
+ "consoleErrors": []
 }

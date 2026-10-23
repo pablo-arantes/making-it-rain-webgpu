@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { complexGrid, forward3d, inverse3d } from "../src/reference/dft.js";
-import { fft3d, NotSmooth, planFft, RADICES } from "../src/reference/fft.js";
+import {
+  fft3d,
+  NotSmooth,
+  planFft,
+  RADICES,
+  twiddleTable,
+} from "../src/reference/fft.js";
 import { smoothFftSize } from "../src/engine/units.js";
 
 const random = (seed: number) => {
@@ -147,6 +153,108 @@ describe("transform properties", () => {
       expect(Math.abs((sum[i] as number) - ((a[i] as number) + (b[i] as number)))).toBeLessThan(
         1e-12,
       );
+    }
+  });
+});
+
+/**
+ * The twiddle table, and the integer indices the kernel reaches it with.
+ *
+ * 🔴 The kernel stopped calling `cos` and `sin` because WGSL bounds the
+ * accuracy of neither -- SwiftShader computes them to 1,587 ulps, which took
+ * the transform from 1.4e-6 to 3.3e-4 relative RMS. What replaced them is
+ * integer index arithmetic into a host-computed table, and *that* is the part
+ * which can be silently wrong: a stride off by a factor reads a real twiddle
+ * from the wrong place, so the transform stays plausible and stops being a
+ * transform. None of it needs a GPU, so it is checked here rather than only
+ * through the device check that motivated it.
+ */
+describe("the twiddle table the kernel reads", () => {
+  const lengths = [2, 3, 4, 5, 7, 8, 9, 25, 27, 32, 49, 54, 64];
+
+  it("holds exp(sign * 2 pi i j / length), to f32", () => {
+    for (const length of lengths) {
+      for (const sign of [-1, 1]) {
+        const table = twiddleTable(length, sign);
+        expect(table.length).toBe(length * 2);
+        for (let j = 0; j < length; j++) {
+          const angle = (sign * 2 * Math.PI * j) / length;
+          // The only error allowed is the single rounding into f32, so this is
+          // tighter than the transform's own threshold by two orders.
+          expect(table[2 * j]).toBeCloseTo(Math.cos(angle), 7);
+          expect(table[2 * j + 1]).toBeCloseTo(Math.sin(angle), 7);
+        }
+      }
+    }
+  });
+
+  it("is a conjugate pair between the two directions", () => {
+    for (const length of lengths) {
+      const forward = twiddleTable(length, -1);
+      const inverse = twiddleTable(length, 1);
+      for (let j = 0; j < length; j++) {
+        expect(forward[2 * j]).toBe(inverse[2 * j]);
+        expect(forward[2 * j + 1]).toBe(-(inverse[2 * j + 1] as number));
+      }
+    }
+  });
+
+  it("is reached by exact integer strides at every stage", () => {
+    // 🔴 The divisibility the kernel's `twiddle_stride` depends on: `ns * radix`
+    // is a prefix product of the same radices `length` was factored into, so it
+    // divides `length`. If that failed the stride would truncate and the table
+    // would be read at the wrong angle.
+    for (const length of lengths) {
+      for (const stage of planFft(length).stages) {
+        expect(length % (stage.ns * stage.radix)).toBe(0);
+        expect(length % stage.radix).toBe(0);
+      }
+    }
+  });
+
+  it("reproduces the gather angle fftStage uses", () => {
+    for (const length of lengths) {
+      for (const sign of [-1, 1]) {
+        const table = twiddleTable(length, sign);
+        for (const stage of planFft(length).stages) {
+          const twiddleStride = length / (stage.ns * stage.radix);
+          for (let twiddleIndex = 0; twiddleIndex < stage.ns; twiddleIndex++) {
+            for (let r = 0; r < stage.radix; r++) {
+              // Exactly the kernel's expression.
+              const at = twiddleIndex * r * twiddleStride;
+              expect(at).toBeGreaterThanOrEqual(0);
+              expect(at).toBeLessThan(length);
+              // And exactly `fftStage`'s angle for the same (twiddleIndex, r).
+              const angle =
+                (sign * 2 * Math.PI * (twiddleIndex * r)) / (stage.ns * stage.radix);
+              expect(table[2 * at]).toBeCloseTo(Math.cos(angle), 7);
+              expect(table[2 * at + 1]).toBeCloseTo(Math.sin(angle), 7);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("reproduces the butterfly angle, including k*m beyond the radix", () => {
+    for (const length of lengths) {
+      for (const sign of [-1, 1]) {
+        const table = twiddleTable(length, sign);
+        for (const stage of planFft(length).stages) {
+          const radixStride = length / stage.radix;
+          for (let k = 0; k < stage.radix; k++) {
+            for (let m = 0; m < stage.radix; m++) {
+              // `k * m` reaches 36 at radix 7, so the reduction is required;
+              // the angle form did it implicitly through the periodicity.
+              const at = ((k * m) % stage.radix) * radixStride;
+              expect(at).toBeLessThan(length);
+              const angle = (sign * 2 * Math.PI * (k * m)) / stage.radix;
+              expect(table[2 * at]).toBeCloseTo(Math.cos(angle), 7);
+              expect(table[2 * at + 1]).toBeCloseTo(Math.sin(angle), 7);
+            }
+          }
+        }
+      }
     }
   });
 });

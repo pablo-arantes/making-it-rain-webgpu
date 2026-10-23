@@ -82,6 +82,49 @@ export function planFft(length: number): FftPlan {
  * The one `base` formula serves all three axes of a 3D transform: with stride 1
  * it walks z, with stride nz it walks y, with stride ny*nz it walks x.
  */
+/**
+ * `exp(sign * 2 pi i * j / length)` for every `j`, rounded once to f32.
+ *
+ * 🔴 **The kernel reads its twiddle factors from this rather than calling
+ * `cos` and `sin`, and that is a correctness decision, not an optimisation.**
+ * WGSL places no accuracy bound on either function, so a conforming backend may
+ * be arbitrarily bad: SwiftShader computes them to **1,587 ulps**, which took
+ * the mixed-radix transform from 1.4e-6 to 3.3e-4 relative RMS while Metal,
+ * whose `cos` is within 0.77 of an ulp, stayed accurate. The angle was measured
+ * at the same time and exonerated -- 5.95e-7 radians against Metal's 7.21e-7 --
+ * so the transcendental was the whole of it.
+ * `docs/measurements/fft-twiddle-precision.json`.
+ *
+ * Computed here in f64, where `Math.cos` is accurate to well under an ulp of
+ * f64, and rounded once on the store into `Float32Array`. The error that
+ * survives is that single rounding, about 6e-8, which is the floor for an f32
+ * table and two orders below the 1e-5 the transform is held to.
+ *
+ * It also takes two transcendentals out of the kernel's innermost block, which
+ * `CLAUDE.md` warns is the most expensive place in the engine to put anything.
+ *
+ * The kernel indexes this by integer arithmetic alone:
+ *
+ *   gather      `(j % ns) * r * (length / (ns * radix))`
+ *   butterfly   `((k * m) % radix) * (length / radix)`
+ *
+ * Both are exact because `ns * radix` and `radix` divide `length` at every
+ * stage, being prefix products of the same radices; `test/fft.test.ts` asserts
+ * that those indices reproduce the angles `fftStage` uses.
+ */
+export function twiddleTable(length: number, sign: number): Float32Array {
+  if (!Number.isInteger(length) || length < 1) {
+    throw new RangeError(`table length must be a positive integer, got ${length}`);
+  }
+  const table = new Float32Array(length * 2);
+  for (let j = 0; j < length; j++) {
+    const angle = (sign * 2 * Math.PI * j) / length;
+    table[2 * j] = Math.cos(angle);
+    table[2 * j + 1] = Math.sin(angle);
+  }
+  return table;
+}
+
 export function fftStage(
   input: Float64Array,
   output: Float64Array,

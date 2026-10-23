@@ -87,20 +87,29 @@ fixed-point checks **pass**, so the integer-position design is not an Apple
 workaround that happens to work. Dekker error-free arithmetic **works** on this
 adapter, where Chrome/Metal folds it to zero — the counterexample that makes
 that a device property rather than a WebGPU one, and the reason fixed point was
-the right call either way. And the mixed-radix FFT **fails its 1e-5 threshold at
-3.27e-4**, 232× worse than Metal's 1.41e-6, on all five shapes and worst on the
-radix-5 ones.
+the right call either way. And the mixed-radix FFT **used to fail its 1e-5
+threshold there at 3.27e-4**, 232× worse than Metal's 1.41e-6 — which is what
+found the twiddle bug below. Both adapters now read about 1.56e-7.
 
-🔴 **That is the backend's `sin` and `cos`, and it is now measured rather than
-suspected.** A seventh device check probes them at the FFT's own twiddle
+🔴 **That was the backend's `sin` and `cos`, measured rather than suspected,
+and the kernel no longer calls them.** A seventh device check probes them at the FFT's own twiddle
 arguments and separates the two candidates: SwiftShader's are wrong by 1.89e-4,
 **1,587 ulps** of f32, where Metal's sit within **0.77 of one ulp** — and the
 f32 rounding of the angle, the other suspect, is the same on both (5.95e-7
 against 7.21e-7 radians). WGSL bounds neither function, so that backend is
 conforming and the kernel is the thing assuming too much.
-`docs/measurements/fft-twiddle-precision.json` has the worst case in full and
-the fix: host-computed twiddle tables, which also take two transcendentals out
-of the innermost block.
+`docs/measurements/fft-twiddle-precision.json` has the worst case in full.
+
+The fix was a host-computed twiddle table, f64 rounded once to f32, indexed by
+integer arithmetic — and it took SwiftShader from 3.27e-4 to **1.567e-7** and
+Metal from 1.41e-6 to **1.561e-7**, so the two adapters now agree to 0.4%. 🔴
+Metal improving by 9× was not predicted: the angle's own f32 rounding, which the
+diagnosis had exonerated for the *discrepancy*, was the dominant term on the
+adapter whose `cos` was already good. 🔴 And it is **not** an engine accuracy
+win — the force error moved only 0.32%, because the f32 spread and interpolation
+either side of the transform dominate it. The lesson to keep: an intrinsic WGSL
+does not bound has no place in a numerical kernel, whatever one device does
+with it.
 
 ## The pages
 

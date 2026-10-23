@@ -249,17 +249,36 @@ FFT's 3.27e-4 is about 1.7× that accumulated over the butterfly stages.
 `docs/measurements/fft-twiddle-precision.json` and
 `adapter-swiftshader-m3pro.json`.
 
-🔴 **So this is a portability bug and it comes before the tuning.** WGSL bounds
-neither `sin` nor `cos`, so a 1,587-ulp `cos` is *conforming* and `fft.wgsl`
-calling them per butterfly is assuming an accuracy the language does not
-promise. The fix is the one mature FFTs use anyway: compute the twiddles on the
-host in f64, round to f32, upload them as a table indexed by
-`twiddle_index * r * (N / (ns * radix)) % N`, and the butterfly's by
-`k * m * (N / radix) % N`. That also takes two transcendentals out of the
-innermost block, so it is a throughput change as well — and CLAUDE.md's standing
-warning is to treat anything in that block as expensive until measured.
-**Predicted:** SwiftShader's error falls to about 1e-6, the f32 rounding of the
-table. That prediction is the test of the diagnosis, and it is not yet run.
+🔴 **It was a portability bug, and it is fixed.** WGSL bounds neither `sin` nor
+`cos`, so a 1,587-ulp `cos` is *conforming*, and `fft.wgsl` calling them per
+butterfly assumed an accuracy the language does not promise. The twiddles now
+come from a host-computed f64 table rounded once to f32, indexed by integer
+arithmetic alone — `twiddle_index * r * (length / (ns * radix))` for the gather
+and `((k * m) % radix) * (length / radix)` for the butterfly, both exact because
+those divide `length` at every stage. **The kernel contains no `cos` or `sin`
+at all now.**
+
+| | before | after |
+| --- | --- | --- |
+| SwiftShader | 3.27e-4, failing | **1.567e-7**, passing |
+| Chrome / Metal | 1.41e-6 | **1.561e-7** |
+
+A factor of 2,090 on the bad adapter and **9 on the good one**, and the two now
+agree to 0.4%. 🔴 Metal moving was not predicted: the diagnosis exonerated the
+angle's f32 rounding, which was right about the *difference between* adapters
+and wrong about the good one, where — with `cos` already within 0.77 ulp — that
+rounding was the dominant term. The table removes both faults because the host
+forms the angle in f64.
+
+🔴 **Do not quote this as an accuracy win for the engine.** The force error
+against the f64 reference moved 1.0959e-6 → 1.0924e-6, which is 0.32%: the
+engine is dominated by the f32 spread and interpolation either side of the
+transform, not by the transform. This change is about not depending on an
+unbounded intrinsic.
+
+Specialised butterflies are still available and now sit on top of a table
+lookup rather than two transcendentals, so the throughput argument for them is
+weaker than it was. Measure before writing them.
 
 🔴 Do **not** raise the 1e-5 threshold to accommodate this. It is met with room
 to spare wherever the transcendentals are sane, and fitting a threshold to the
