@@ -36,7 +36,10 @@ jobs:
         run: vulkaninfo --summary || true
       # Stage 1: no debugger. The last PROBE line is the step that killed it.
       - name: Probe, plain
-        run: MIR_GPU_TESTS=1 node --import tsx tools/dawn-probe.ts || echo "EXIT=$?"
+        run: |
+          MIR_GPU_TESTS=1 node \
+            --import ./tools/wgsl-loader.mjs --import tsx \
+            tools/dawn-probe.ts || echo "EXIT=$?"
       # Stage 2: the same run under gdb. `-batch` so it never waits for input,
       # and every thread's backtrace because the fault may not be on the main
       # one.
@@ -50,4 +53,6 @@ jobs:
             -ex 'bt full' \
             -ex 'echo \n=== all threads ===\n' \
             -ex 'thread apply all bt' \
-            --args "$(command -v node)" --import tsx tools/dawn-probe.ts || echo "GDB_EXIT=$?"
+            --args "$(command -v node)" \
+              --import ./tools/wgsl-loader.mjs --import tsx \
+              tools/dawn-probe.ts || echo "GDB_EXIT=$?"
