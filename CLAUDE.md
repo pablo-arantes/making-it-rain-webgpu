@@ -196,19 +196,31 @@ so 1 ns at a 2 fs timestep is **under 8 minutes** — against the test's
 90-minute budget. Minimisation comes first and shows `progress=0` for its
 duration. 3HTB, at 26,749 atoms, runs at about **150 steps/s** (26 ns/day).
 
-🔴 **Run the 1 ns gate instrumented, and read the ticker rather than theorising
-from Chrome's stderr.** The gate samples `window.__mirRun`, the progress element
-and the JS heap every 60 s and captures `crash`, `pageerror` and console errors
-in a `finally`. That is there because the gate failed twice with
+🔴 **Read `test/browser/watch.ts`'s ticker rather than theorising from Chrome's
+stderr.** Both long specs install it — the 1 ns gate and `bonded.spec.ts` — and
+it samples the page once a minute, printing from a `finally` so the output
+survives the failure. One probe serves both pages: `validate.html` sets a
+`__mir*` global per check as it finishes, so the count and names *are* its
+progress, while `run.html` has a step count and `__mirRun.state`.
+
+```
+15:34:31 3HTB heap=91MB done=12[__mirCellList __mirConstraints __mirEngineError …]
+20:15:53 gate heap=12MB state=running steps=325000 done=1[__mirRun]
+```
+
+It also catches `crash` and `close`, the two events that say the page went away
+rather than merely erred and the two a spec's own console handlers never see.
+That is all there because four runs have failed with
 
 ```
 Error: page.waitForFunction: Target page, context or browser has been closed
 ```
 
 which names the wait, so it reads as a condition that never came true — a
-stalled kernel — when the page had simply gone away. **Three explanations were
-offered and all three were wrong**, each eliminated only once there was a
-measurement:
+stalled kernel — when the page had simply gone away. Twice on the gate and twice
+on `bonded.spec.ts`'s 3HTB case, which now stands at three passes to two
+failures. **Three explanations were offered and all three were wrong**, each
+eliminated only once there was a measurement:
 
 | theory | what killed it |
 | --- | --- |
@@ -216,13 +228,18 @@ measurement:
 | display sleep | `caffeinate -dimsu` made it fail *twelve times sooner* (5.4 min against 66), and `CVDisplayLink ... CVReturn: -6670` appears in runs that **pass** |
 | renderer OOM | the heap is flat at 11–18 MB across 15 minutes with no trend |
 
-The instrumented run passed in 15.3 minutes, stepping monotonically to 490,000
-at a steady 554 steps/s. The one thing that changed is the 60-second
-`page.evaluate`, which also touches an otherwise un-interacted tab — a
-**hypothesis**, not a finding, and the two failures stay unexplained. The
-practical rule is the instrumentation: a run that dies having printed a rising
-step count is an environment problem, and one that dies with a flat count is
-yours.
+The instrumented gate passed in 15.3 minutes, stepping monotonically to 490,000
+at a steady 554 steps/s, and 3HTB has passed instrumented too, its check list
+growing 6, 8, 12, 12, 14 with the heap between 52 and 91 MB. The one thing that
+changed is the 60-second `page.evaluate`, which also touches an otherwise
+un-interacted tab — a **hypothesis**, not a finding, and exactly the kind of
+coincidence that produced the three rows above. The failures stay unexplained.
+
+🔴 The practical rule is the instrumentation rather than any theory: a page that
+dies with a rising step count or a growing check list is an environment problem,
+and one that dies with either flat is yours. And verify a watcher fires before
+trusting it — 1L2Y finishes both its waits inside the interval and prints
+nothing, which is indistinguishable from a watcher that never works.
 
 🔴 **Those numbers moved by 6x in one day, so do not trust a remembered one.**
 `docs/measurements/profile-step-m3pro.json` and `gate-1ns-m3pro.json` carry the
