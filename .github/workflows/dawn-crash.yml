@@ -43,6 +43,18 @@ jobs:
       # Stage 2: the same run under gdb. `-batch` so it never waits for input,
       # and every thread's backtrace because the fault may not be on the main
       # one.
+      # 🔴 The probe passes everything, so the fault is not the engine, the
+      # device path or the driver -- it is something about the runner. vitest
+      # runs each test file in a **forked child**, and Dawn's native module
+      # spawns threads; these two steps ask which half matters. If `threads`
+      # survives where the default `forks` dies, the pool is the answer and the
+      # lane can be configured rather than debugged.
+      - name: The lane as CI runs it (forks, expected to die)
+        run: npm run test:gpu || echo "FORKS_EXIT=$?"
+      - name: The same lane in threads (same process, no fork)
+        run: |
+          MIR_GPU_TESTS=1 node node_modules/vitest/vitest.mjs run \
+            test/precision.gpu.test.ts --pool=threads || echo "THREADS_EXIT=$?"
       - name: Probe, under gdb
         run: |
           MIR_GPU_TESTS=1 gdb -batch \
