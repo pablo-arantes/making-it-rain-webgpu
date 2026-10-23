@@ -234,6 +234,19 @@ the declared bind group layouts are already in place for it.
 ## Open, in the order they are worth doing
 
 ### The FFT is correct but not yet tuned — and now there is a number
+🔴 **And on a second adapter it is not correct enough.** On SwiftShader —
+Playwright's bundled Chromium, reachable with
+`MIR_CHROME_CHANNEL=chromium npm run report:adapter` — the mixed-radix check
+**fails its 1e-5 threshold at 3.27e-4**, where Chrome/Metal reads 1.41e-6. All
+five shapes miss, worst on the radix-5 ones, which points first at the precision
+of WGSL `sin`/`cos` for the twiddle factors: their ULP bounds are
+implementation-defined. Settle it by computing the twiddles differently and
+re-measuring there — if the error collapses, the kernel was assuming accuracy
+WGSL does not promise, which is a portability bug rather than a tuning one, and
+specialised butterflies should wait behind it. Everything else on that adapter
+passes, including all four fixed-point checks.
+`docs/measurements/adapter-swiftshader-m3pro.json`.
+
 Radices 2, 3, 5 and 7, with a generic R² inner product per butterfly rather
 than specialised butterflies — at most 49 terms, since the radix is at most 7.
 Specialised radix-2/3/4/5 butterflies and a radix-4 or radix-8 path for

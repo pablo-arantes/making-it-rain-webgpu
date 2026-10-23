@@ -16,17 +16,36 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # 🔴 That the install fetched its *platform binaries*, which is a separate
+      # question from whether it succeeded. npm 11 blocks install scripts unless
+      # `allowScripts` in package.json names them, and that block lists exact
+      # versions (`esbuild@0.28.2`, `webgpu@0.6.0`) -- so a lockfile bump makes
+      # the entries stale, the binaries are silently not fetched, and Vite and
+      # Vitest do not run at all. This runner pins Node 22, whose npm 10 has no
+      # `allowScripts` and runs the scripts regardless, so CI currently passes
+      # for a different reason than a developer machine does. One day it will
+      # not, and this turns that into a named failure rather than a confusing
+      # one.
+      - name: The install fetched its platform binaries
+        run: npx vite --version && npx vitest --version
       # Typecheck, the unit and reference lanes, and the web build. No GPU
       # needed, which is the point: this must stay runnable anywhere.
       - run: npm run check
 
   gpu:
     # Dawn's Linux binary loads on the runner, so the GPU lane that cannot run
-    # on a macOS 14 developer machine does run here. It is allowed to fail
-    # because a hosted runner's software adapter is not a supported target --
-    # the signal is the differential result, not the hardware.
+    # on a macOS 14 developer machine does run here.
+    #
+    # 🔴 **This job is required, and `continue-on-error` was removed from it.**
+    # The lane degrades by itself: `describe.skipIf(status.kind !== "ready")`
+    # means no device is a loud skip, not a failure -- measured on the macOS
+    # machine where Dawn cannot load at all, `npm run test:gpu` exits **0** with
+    # "1 passed | 8 skipped" and prints why on stderr. So allowing this job to
+    # fail bought nothing against a missing device, and cost the only thing it
+    # was for: a genuine differential failure on a non-Apple adapter -- the one
+    # piece of evidence this project does not otherwise have -- was being
+    # discarded as a yellow tick.
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,6 +57,15 @@ jobs:
       - run: npm run test:gpu
 
   browser:
+    # 🔴 Still allowed to fail, and unlike the Dawn lane above that is not
+    # laziness: these specs do **not** degrade when there is no device.
+    # `checks.spec.ts` skips loudly when the browser exposes no `navigator.gpu`
+    # at all, but the other five -- bonded, run, prepare, analyse, profile --
+    # assert against OpenMM and will fail hard. Removing the guard needs the
+    # same skip in all of them, and more importantly needs somebody to look at
+    # what a *software* adapter actually reports: nobody has, so failing the
+    # build on lavapipe would be a guess. Retire this by running the job once
+    # and reading it.
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -48,8 +76,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chrome
-      - run: sudo apt-get install -y mesa-vulkan-drivers
+      - run: sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      # 🔴 Untested from here. A hosted runner has no GPU, so WebGPU has to come
+      # from Mesa's lavapipe through Vulkan, and Chrome needs to be told to
+      # allow a software adapter. These flags are the documented way to ask;
+      # whether Dawn then grants a device, and what `isFallback` and the
+      # precision checks say if it does, is unknown and is the whole point of
+      # running this once. `vulkaninfo` first, so the log says whether Vulkan
+      # was there at all before Chrome is blamed.
+      - run: vulkaninfo --summary || true
       - run: npm run test:browser
+        env:
+          MIR_CHROME_SOFTWARE: "1"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -60,6 +98,13 @@ jobs:
   oracle:
     # The Python side: regenerate the committed fixtures and check that the
     # numbers docs/ quotes are still the numbers OpenMM produces.
+    #
+    # 🔴 Allowed to fail because it reaches the network: `build_reference_system`
+    # fetches 1L2Y from RCSB, and an outage there is not a regression here. The
+    # assertions themselves are deterministic and would be worth failing on, so
+    # the right fix is to separate the download from the comparison rather than
+    # to keep excusing both. Until then a red tick here means "look", not
+    # "broken".
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

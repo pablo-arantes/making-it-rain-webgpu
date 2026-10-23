@@ -36,8 +36,17 @@ export async function inChrome<T>(
     await server.listen();
     const port = server.config.server.port ?? 4173;
 
+    // 🔴 `MIR_CHROME_CHANNEL=chromium` runs Playwright's **bundled** build
+    // instead of the installed Google Chrome, which is the only second adapter
+    // a one-GPU machine has. It is worth having because every number this
+    // project reports comes from one adapter, and the bundled build turns out
+    // to expose WebGPU and to answer differently -- the mixed-radix FFT check
+    // reads 3.3e-4 relative RMS there against 1.4e-6 on Chrome's Metal path.
+    // See docs/measurements/adapter-chromium-bundled-m3pro.json.
+    const channel = process.env["MIR_CHROME_CHANNEL"] ?? "chrome";
     browser = await chromium.launch({
-      channel: "chrome",
+      // The bundled build is selected by passing no channel at all.
+      ...(channel === "chromium" ? {} : { channel }),
       headless: true,
       args: ["--enable-unsafe-webgpu"],
     });

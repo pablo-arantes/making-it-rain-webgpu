@@ -23,7 +23,33 @@ test("the page reports an adapter and passes every precision check", async ({
   const report = await page.evaluate(() => window.__mirReport);
 
   if (report !== undefined && "error" in report) {
-    throw new Error(`the page could not get a device: ${report.error}`);
+    // 🔴 Two different things, and conflating them is what kept this lane
+    // behind `continue-on-error` in CI. A browser with no `navigator.gpu` at
+    // all is a statement about the environment -- a headless runner without a
+    // GPU, or Playwright's bundled Chromium, which exposes none -- and failing
+    // on it says nothing about the kernels. A browser that *has* WebGPU and
+    // still cannot give us a device is a real result: the limits we ask for
+    // were not grantable, or the adapter refused, and that is worth a red tick.
+    //
+    // The skip is loud on purpose. `test/precision.gpu.test.ts` makes the same
+    // point for the Dawn lane: a test that skips silently is indistinguishable
+    // from one that passes, which is the failure mode this project cares about
+    // most.
+    const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+    if (!hasWebGpu) {
+      console.log(
+        "\n  Browser lane UNAVAILABLE: this browser exposes no navigator.gpu." +
+          `\n  The page said: ${report.error}` +
+          "\n  WebGPU needs a secure context, so check the page was served over" +
+          "\n  http://localhost and that this is Google Chrome rather than" +
+          "\n  Playwright's bundled Chromium, which has no WebGPU at all.\n",
+      );
+      test.skip(true, "this browser exposes no navigator.gpu");
+      return;
+    }
+    throw new Error(
+      `WebGPU is present but the page could not get a device: ${report.error}`,
+    );
   }
   expect(report).toBeDefined();
   const checked = report!;

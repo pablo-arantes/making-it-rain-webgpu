@@ -67,10 +67,31 @@ can pass something the other would fail.
 🔴 **Two things about getting WebGPU in a browser from a script.**
 `navigator.gpu` exists only in a **secure context**, so a page must be served
 over `http://localhost` — `about:blank` and `file://` both report WebGPU as
-missing, which looks exactly like an unsupported browser. And **Playwright's
-bundled Chromium does not expose WebGPU at all**; the config uses
-`channel: "chrome"`, the installed Google Chrome. `tools/chrome.ts` wraps both
-facts up for the tools.
+missing, which looks exactly like an unsupported browser. And Playwright's
+bundled Chromium gives you a **different adapter**: the config uses
+`channel: "chrome"`, the installed Google Chrome, because that is where the
+Metal path is. `tools/chrome.ts` wraps both facts up for the tools.
+
+🔴 **An earlier version of this said the bundled Chromium "does not expose
+WebGPU at all". It does** — as SwiftShader, `vendor: "google"`,
+`architecture: "swiftshader"`, `isFallback: true` — and that wrong claim is why
+nobody had looked at it for two phases. It is the only second WebGPU
+implementation available on a one-GPU machine, so it is worth a great deal:
+
+```sh
+MIR_CHROME_CHANNEL=chromium npm run report:adapter
+```
+
+Measured there, in `docs/measurements/adapter-swiftshader-m3pro.json`: all four
+fixed-point checks **pass**, so the integer-position design is not an Apple
+workaround that happens to work. Dekker error-free arithmetic **works** on this
+adapter, where Chrome/Metal folds it to zero — the counterexample that makes
+that a device property rather than a WebGPU one, and the reason fixed point was
+the right call either way. And the mixed-radix FFT **fails its 1e-5 threshold at
+3.27e-4**, 232× worse than Metal's 1.41e-6, on all five shapes and worst on the
+radix-5 ones. Whether that is SwiftShader's `sin`/`cos` — whose ULP bounds WGSL
+leaves implementation-defined — or a kernel assuming accuracy it should not, is
+**unmeasured**; the file says how to settle it.
 
 ## The pages
 
@@ -235,7 +256,9 @@ anything about the kernel you just changed. Measured alternatives:
 
 `--ui` is what keeps a browser and a dev server up across edits. It needs
 `channel: "chrome"`, which `playwright.config.ts` already sets: Playwright's
-bundled Chromium exposes no WebGPU at all.
+bundled Chromium is SwiftShader rather than Metal (see above), so a check that
+passes there is not evidence about this GPU and one that fails there may be
+about the adapter.
 
 🔴 **`web/validate.html` runs every check in sequence, and the late ones are the
 slow ones** — so waiting on a late global pays for all the earlier ones, which

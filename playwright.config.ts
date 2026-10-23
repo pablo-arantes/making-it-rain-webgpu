@@ -23,7 +23,25 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:4173",
     channel: "chrome",
-    launchOptions: { args: ["--enable-unsafe-webgpu"] },
+    launchOptions: {
+      args: [
+        "--enable-unsafe-webgpu",
+        // 🔴 CI only, and **untested from here**. A hosted runner has no GPU,
+        // so WebGPU would have to come from Mesa's lavapipe through Vulkan, and
+        // Chrome refuses a software adapter unless told not to. These are the
+        // documented flags for asking; whether Dawn then grants a device, and
+        // what `isFallback` and the precision checks say if it does, is exactly
+        // what nobody has looked at yet. Gated on the variable so a developer
+        // machine, which has a real adapter, is untouched by a guess.
+        ...(process.env["MIR_CHROME_SOFTWARE"] === "1"
+          ? [
+              "--enable-unsafe-swiftshader",
+              "--enable-features=Vulkan",
+              "--use-angle=vulkan",
+            ]
+          : []),
+      ],
+    },
   },
   // The long gate runs against the **built** page rather than the dev server.
   //
