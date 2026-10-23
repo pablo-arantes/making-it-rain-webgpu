@@ -70,6 +70,13 @@ jobs:
           MIR_GPU_TESTS=1 node node_modules/vitest/vitest.mjs run \
             test/dawn-acquire.gpu.test.ts --pool=forks \
             || echo "ACQUIRE_FORKS_EXIT=$?"
+      # Acquisition passed in both pools, so the checks are next: the same ones
+      # that pass standalone on this runner. Threads, so a signal is a signal.
+      - name: Each check, under vitest, threads
+        run: |
+          MIR_GPU_TESTS=1 MIR_DAWN_BISECT=1 node node_modules/vitest/vitest.mjs run \
+            test/dawn-acquire.gpu.test.ts --pool=threads \
+            || echo "BISECT_THREADS_EXIT=$?"
       - name: Probe, under gdb
         run: |
           MIR_GPU_TESTS=1 gdb -batch \

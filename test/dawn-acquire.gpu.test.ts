@@ -44,6 +44,31 @@ describe.skipIf(process.env["MIR_GPU_TESTS"] !== "1")("acquiring a Dawn device",
     // Deliberately weak: this file exists to survive, not to assert. If the
     // sequence completes at all, the fault is later than this.
     expect(device === null || typeof device === "object").toBe(true);
+
+    // 🔴 Acquisition passed in both pools, so the fault is in the checks as
+    // *Vitest* runs them -- the same checks pass standalone on the same
+    // runner. `MIR_DAWN_BISECT=1` runs them here, one at a time, naming each
+    // before it starts, so the last line printed is the one that took the
+    // process down. Off by default: this is a diagnostic and the lane already
+    // runs these checks properly in `precision.gpu.test.ts`.
+    if (device !== null && process.env["MIR_DAWN_BISECT"] === "1") {
+      const checks = await import("../src/gpu/checks.js");
+      const ordered = [
+        ["fixed-point exactness", checks.checkFixedPointExactness],
+        ["fixed-point carry", checks.checkFixedPointCarry],
+        ["position stagnation", checks.checkPositionStagnation],
+        ["position random walk", checks.checkPositionRandomWalk],
+        ["Dekker diagnostic", checks.checkDekkerDiagnostic],
+        ["trig diagnostic", checks.checkTrigDiagnostic],
+        ["mixed-radix FFT", checks.checkFft],
+      ] as const;
+      for (const [name, run] of ordered) {
+        say(`--> ${name}`);
+        const result = await run(device);
+        say(`<-- ${name}: ok=${String(result.ok)}`);
+      }
+      say("every check survived under vitest");
+    }
     say("test finished");
   });
 });
