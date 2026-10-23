@@ -1,0 +1,165 @@
+{
+ "_what": "Why the mixed-radix FFT check fails on one adapter and passes on another, settled by measuring the two candidate causes separately.",
+ "date": "2026-10-23",
+ "host": "Apple M3 Pro, macOS 14",
+ "command": "MIR_CHROME_CHANNEL={chrome,chromium} npm run report:adapter",
+ "_question": "The FFT read 1.41e-6 relative RMS on Chrome/Metal and 3.27e-4 on SwiftShader, 232x worse. Two causes were possible and the obvious test -- change the twiddles and see if it improves -- would only have shown *that* something helped, not which fault it fixed. So both were measured directly: the f32 rounding of the twiddle angle, and the accuracy of `sin`/`cos` given the angle the device itself computed.",
+ "_answer": "🔴 **It is the backend's `sin` and `cos`, and nothing else.** On SwiftShader they are wrong by 1.89e-4 absolute -- **1,587 ulps** of f32 -- where Metal's are within **0.77 of one ulp**, essentially correctly rounded. The argument is *not* the cause and is almost identical on the two adapters: 5.95e-7 radians against 7.21e-7. The worst case is plain to read: SwiftShader computes cos(1.3962634801864624) as 0.17362739145755768 where the true value is 0.17364810026990493 -- wrong in the fifth significant figure. The FFT's 3.27e-4 is about 1.7x that single-twiddle error, which is what accumulating it over a few butterfly stages looks like, so the twiddles account for the whole discrepancy and no other suspect is needed.",
+ "_is_the_kernel_wrong": "In the sense that matters, yes. 🔴 **WGSL places no accuracy bound on `sin` or `cos`**, so a backend computing them to 1,587 ulps is conforming, and `fft.wgsl` calling them per butterfly is assuming an accuracy the language does not promise. It is not a numerical mistake -- the arithmetic and the index algebra are right, and the same kernel is accurate to 1.4e-6 where the transcendentals are good -- but it does make the engine's precision hostage to the driver, which is exactly the class of thing this project refuses to leave resting on one device.",
+ "_the_fix": "Compute the twiddle factors on the host, in f64, round them to f32 and upload them as a table the kernel indexes -- the standard approach in mature FFTs, and one that removes two transcendentals from the innermost block as well, so it is a throughput change too (CLAUDE.md: treat anything in that block as expensive until measured). The table is `exp(2*pi*i*j/N)` for the axis length N, indexed by `twiddle_index * r * (N / (ns * radix)) % N` for the gather and `k * m * (N / radix) % N` for the butterfly. Predicted result: SwiftShader's FFT error falls from 3.27e-4 to Metal's ~1e-6, since the remaining error would be the f32 rounding of the table entries, which the argument measurement above puts at 6e-7. **Not yet implemented, and that prediction is the test of this whole diagnosis.**",
+ "_why_this_is_not_a_threshold_problem": "The 1e-5 threshold is not the thing to move. It is met with room to spare wherever the transcendentals are sane, and the engine's PME accuracy depends on the mesh transform being right. Raising it to accommodate a 1,587-ulp `cos` would be fitting the threshold to the weakest backend, which AGENTS.md forbids in as many words.",
+ "adapters": {
+  "chrome_metal": {
+   "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "isFallback": false
+   },
+   "trig": {
+    "name": "this device's sin/cos are accurate to a few ulps",
+    "arguments": 386,
+    "worstArgumentRadians": 7.214419364132141e-07,
+    "worstTranscendentalAbsolute": 9.153841851183842e-08,
+    "worstTranscendentalUlps": 0.7678799098357558,
+    "worstTotalAbsolute": 6.74779755738264e-07,
+    "f32UlpAtOne": 1.1920928955078125e-07,
+    "worstCase": {
+     "numerator": -1,
+     "denominator": 54,
+     "deviceAngle": -0.1163552850484848,
+     "deviceCos": 0.9932384490966797,
+     "exactCosOfDeviceAngle": 0.9932383575582612,
+     "deviceSin": -0.11609291285276413,
+     "exactSinOfDeviceAngle": -0.11609291569672815
+    }
+   },
+   "fft": {
+    "ok": true,
+    "worstRelativeRms": 1.4092494607630075e-06,
+    "shapes": [
+     {
+      "shape": "8x8x8",
+      "radices": [
+       "2x2x2",
+       "2x2x2",
+       "2x2x2"
+      ],
+      "relativeRms": 2.9579059796751785e-07
+     },
+     {
+      "shape": "9x9x9",
+      "radices": [
+       "3x3",
+       "3x3",
+       "3x3"
+      ],
+      "relativeRms": 5.766059058435188e-07
+     },
+     {
+      "shape": "25x25x25",
+      "radices": [
+       "5x5",
+       "5x5",
+       "5x5"
+      ],
+      "relativeRms": 1.4092494607630075e-06
+     },
+     {
+      "shape": "54x4x6",
+      "radices": [
+       "3x2",
+       "2x2",
+       "3x3x3x2"
+      ],
+      "relativeRms": 4.774838360188681e-07
+     },
+     {
+      "shape": "7x5x3",
+      "radices": [
+       "3",
+       "5",
+       "7"
+      ],
+      "relativeRms": 9.228041028438485e-07
+     }
+    ]
+   }
+  },
+  "swiftshader": {
+   "adapter": {
+    "vendor": "google",
+    "architecture": "swiftshader",
+    "isFallback": true
+   },
+   "trig": {
+    "name": "this device's sin/cos are inaccurate (1586.8 ulps)",
+    "arguments": 386,
+    "worstArgumentRadians": 5.949158534690469e-07,
+    "worstTranscendentalAbsolute": 0.00018916247619171767,
+    "worstTranscendentalUlps": 1586.8098610816523,
+    "worstTotalAbsolute": 0.00018914882901099883,
+    "f32UlpAtOne": 1.1920928955078125e-07,
+    "worstCase": {
+     "numerator": 2,
+     "denominator": 9,
+     "deviceAngle": 1.3962634801864624,
+     "deviceCos": 0.17362739145755768,
+     "exactCosOfDeviceAngle": 0.17364810026990493,
+     "deviceSin": 0.984618604183197,
+     "exactSinOfDeviceAngle": 0.9848077666593887
+    }
+   },
+   "fft": {
+    "ok": false,
+    "worstRelativeRms": 0.00032749051040479444,
+    "shapes": [
+     {
+      "shape": "8x8x8",
+      "radices": [
+       "2x2x2",
+       "2x2x2",
+       "2x2x2"
+      ],
+      "relativeRms": 6.701408504388587e-05
+     },
+     {
+      "shape": "9x9x9",
+      "radices": [
+       "3x3",
+       "3x3",
+       "3x3"
+      ],
+      "relativeRms": 0.00020556819693381896
+     },
+     {
+      "shape": "25x25x25",
+      "radices": [
+       "5x5",
+       "5x5",
+       "5x5"
+      ],
+      "relativeRms": 0.00032749051040479444
+     },
+     {
+      "shape": "54x4x6",
+      "radices": [
+       "3x2",
+       "2x2",
+       "3x3x3x2"
+      ],
+      "relativeRms": 0.00018028546727271417
+     },
+     {
+      "shape": "7x5x3",
+      "radices": [
+       "3",
+       "5",
+       "7"
+      ],
+      "relativeRms": 0.00013888775631649337
+     }
+    ]
+   }
+  }
+ }
+}

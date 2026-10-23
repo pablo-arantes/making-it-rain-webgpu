@@ -89,9 +89,18 @@ adapter, where Chrome/Metal folds it to zero — the counterexample that makes
 that a device property rather than a WebGPU one, and the reason fixed point was
 the right call either way. And the mixed-radix FFT **fails its 1e-5 threshold at
 3.27e-4**, 232× worse than Metal's 1.41e-6, on all five shapes and worst on the
-radix-5 ones. Whether that is SwiftShader's `sin`/`cos` — whose ULP bounds WGSL
-leaves implementation-defined — or a kernel assuming accuracy it should not, is
-**unmeasured**; the file says how to settle it.
+radix-5 ones.
+
+🔴 **That is the backend's `sin` and `cos`, and it is now measured rather than
+suspected.** A seventh device check probes them at the FFT's own twiddle
+arguments and separates the two candidates: SwiftShader's are wrong by 1.89e-4,
+**1,587 ulps** of f32, where Metal's sit within **0.77 of one ulp** — and the
+f32 rounding of the angle, the other suspect, is the same on both (5.95e-7
+against 7.21e-7 radians). WGSL bounds neither function, so that backend is
+conforming and the kernel is the thing assuming too much.
+`docs/measurements/fft-twiddle-precision.json` has the worst case in full and
+the fix: host-computed twiddle tables, which also take two transcendentals out
+of the innermost block.
 
 ## The pages
 

@@ -238,14 +238,34 @@ the declared bind group layouts are already in place for it.
 Playwright's bundled Chromium, reachable with
 `MIR_CHROME_CHANNEL=chromium npm run report:adapter` — the mixed-radix check
 **fails its 1e-5 threshold at 3.27e-4**, where Chrome/Metal reads 1.41e-6. All
-five shapes miss, worst on the radix-5 ones, which points first at the precision
-of WGSL `sin`/`cos` for the twiddle factors: their ULP bounds are
-implementation-defined. Settle it by computing the twiddles differently and
-re-measuring there — if the error collapses, the kernel was assuming accuracy
-WGSL does not promise, which is a portability bug rather than a tuning one, and
-specialised butterflies should wait behind it. Everything else on that adapter
-passes, including all four fixed-point checks.
-`docs/measurements/adapter-swiftshader-m3pro.json`.
+five shapes miss, worst on the radix-5 ones, which **and that question is now settled.** It is the
+backend's `sin` and `cos`, measured directly rather than inferred: on
+SwiftShader they are wrong by 1.89e-4 — **1,587 ulps** of f32 — where Metal's
+are within **0.77 of one ulp**. The angle's own f32 rounding is *not* the cause
+and is the same on both adapters, 5.95e-7 against 7.21e-7 radians. The clearest
+single number: SwiftShader computes `cos(1.3962634801864624)` as `0.17362739`
+where the truth is `0.17364810`, wrong in the fifth significant figure, and the
+FFT's 3.27e-4 is about 1.7× that accumulated over the butterfly stages.
+`docs/measurements/fft-twiddle-precision.json` and
+`adapter-swiftshader-m3pro.json`.
+
+🔴 **So this is a portability bug and it comes before the tuning.** WGSL bounds
+neither `sin` nor `cos`, so a 1,587-ulp `cos` is *conforming* and `fft.wgsl`
+calling them per butterfly is assuming an accuracy the language does not
+promise. The fix is the one mature FFTs use anyway: compute the twiddles on the
+host in f64, round to f32, upload them as a table indexed by
+`twiddle_index * r * (N / (ns * radix)) % N`, and the butterfly's by
+`k * m * (N / radix) % N`. That also takes two transcendentals out of the
+innermost block, so it is a throughput change as well — and CLAUDE.md's standing
+warning is to treat anything in that block as expensive until measured.
+**Predicted:** SwiftShader's error falls to about 1e-6, the f32 rounding of the
+table. That prediction is the test of the diagnosis, and it is not yet run.
+
+🔴 Do **not** raise the 1e-5 threshold to accommodate this. It is met with room
+to spare wherever the transcendentals are sane, and fitting a threshold to the
+weakest backend is what `AGENTS.md` forbids in as many words.
+
+Everything else on that adapter passes, including all four fixed-point checks.
 
 Radices 2, 3, 5 and 7, with a generic R² inner product per butterfly rather
 than specialised butterflies — at most 49 terms, since the radix is at most 7.

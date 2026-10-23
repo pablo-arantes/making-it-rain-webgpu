@@ -20,6 +20,7 @@ import {
 } from "../reference/double-single.js";
 import { exactFixedSum, fromFixed } from "../reference/fixed-point.js";
 import { fft3d, planFft } from "../reference/fft.js";
+import { fftTwiddleArguments, probeTrig } from "./trig.js";
 import { storageBuffer, readBuffer, uploadBuffer } from "./compute.js";
 import { transform3d } from "./pme.js";
 import { integrate, integrateCompensated } from "../reference/position.js";
@@ -387,6 +388,91 @@ export async function checkFft(device: GPUDevice): Promise<CheckResult> {
   };
 }
 
+/**
+ * How accurate this device's `sin` and `cos` are, at the FFT's own arguments.
+ *
+ * A diagnostic, not a gate. 🔴 WGSL puts **no bound** on the accuracy of `sin`
+ * or `cos`, so a conforming backend may reduce a large argument badly and still
+ * be conforming — and the FFT's twiddle angles span a whole turn, which is
+ * exactly where that shows. When the mixed-radix check reads 1.4e-6 on one
+ * adapter and 3.3e-4 on another, the question is which of two things differs,
+ * and this separates them:
+ *
+ *   * `worstArgumentRadians` — the f32 rounding of `TWO_PI * num / den`, which
+ *     no transcendental can undo. `cos` and `sin` have derivative at most 1, so
+ *     this is also the error it contributes.
+ *   * `worstTranscendentalAbsolute` — the device's `cos` against an f64 cosine
+ *     of **the angle the device itself computed**. The argument's own error
+ *     cannot enter here, so this is the implementation's quality alone.
+ *
+ * Reported in ulps of 1.0 as well, because that is the scale an f32 result can
+ * even represent: a correctly rounded `cos` near 1 is within half an ulp,
+ * 5.96e-8, and anything far above that is the backend's own polynomial.
+ */
+export async function checkTrigDiagnostic(device: GPUDevice): Promise<CheckResult> {
+  const { numerator, denominator } = fftTwiddleArguments();
+  const probe = await probeTrig(device, numerator, denominator);
+  const F32_ULP_AT_ONE = 1.1920928955078125e-7;
+
+  let worstArgument = 0;
+  let worstTranscendental = 0;
+  let worstTotal = 0;
+  let worstCase: Record<string, unknown> | null = null;
+
+  for (let i = 0; i < numerator.length; i++) {
+    const num = numerator[i] as number;
+    const den = denominator[i] as number;
+    const deviceAngle = probe.angle[i] as number;
+    const exactAngle = (2 * Math.PI * num) / den;
+    worstArgument = Math.max(worstArgument, Math.abs(deviceAngle - exactAngle));
+
+    // The transcendental alone, at the device's own argument.
+    const transcendental = Math.max(
+      Math.abs((probe.cosine[i] as number) - Math.cos(deviceAngle)),
+      Math.abs((probe.sine[i] as number) - Math.sin(deviceAngle)),
+    );
+    if (transcendental > worstTranscendental) {
+      worstTranscendental = transcendental;
+      worstCase = {
+        numerator: num,
+        denominator: den,
+        deviceAngle,
+        deviceCos: probe.cosine[i],
+        exactCosOfDeviceAngle: Math.cos(deviceAngle),
+        deviceSin: probe.sine[i],
+        exactSinOfDeviceAngle: Math.sin(deviceAngle),
+      };
+    }
+    worstTotal = Math.max(
+      worstTotal,
+      Math.abs((probe.cosine[i] as number) - Math.cos(exactAngle)),
+      Math.abs((probe.sine[i] as number) - Math.sin(exactAngle)),
+    );
+  }
+
+  const transcendentalUlps = worstTranscendental / F32_ULP_AT_ONE;
+  return {
+    name:
+      transcendentalUlps > 4
+        ? `this device's sin/cos are inaccurate (${transcendentalUlps.toFixed(1)} ulps)`
+        : "this device's sin/cos are accurate to a few ulps",
+    ok: true, // diagnostic
+    claim:
+      "a report, not a requirement: WGSL bounds neither sin nor cos, so this " +
+      "measures them at the FFT's twiddle arguments and separates the f32 " +
+      "rounding of the angle from the transcendental's own error",
+    detail: {
+      arguments: numerator.length,
+      worstArgumentRadians: worstArgument,
+      worstTranscendentalAbsolute: worstTranscendental,
+      worstTranscendentalUlps: transcendentalUlps,
+      worstTotalAbsolute: worstTotal,
+      f32UlpAtOne: F32_ULP_AT_ONE,
+      worstCase,
+    },
+  };
+}
+
 export interface DeviceCheckReport {
   readonly adapter: AdapterReport;
   readonly sizeEstimate: ReturnType<typeof estimateMaxAtoms>;
@@ -406,6 +492,7 @@ export async function runDeviceChecks(
     checkPositionStagnation,
     checkPositionRandomWalk,
     checkDekkerDiagnostic,
+    checkTrigDiagnostic,
     checkFft,
   ]) {
     try {
