@@ -34,6 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         webgpu: ["0.6.0", "0.6.1", "0.6.2", "0.5.0"]
+    timeout-minutes: 15
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +57,7 @@ jobs:
           if [ "$code" -eq 0 ]; then echo "::notice::webgpu@${{ matrix.webgpu }} passes every check on Metal"; fi
 
   apple:
+    timeout-minutes: 15
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -66,19 +68,32 @@ jobs:
       - run: npm ci
       - run: sw_vers
       # The report-ready reproducer: zero project code, pure WebGPU API.
-      # 🔴 Which of the three differences from vanilla usage is it? The bare
-      # script passes on this hardware; our path does not.
-      - name: Isolate — baseline / flag / features / limits / all
+      # 🔴 **A rate, for the upstream issue.** All five configurations —
+      # including vanilla, with no flag, no features and no raised limits —
+      # print "completed all three passes" and *then* segfault, so the fault is
+      # at teardown rather than in any operation, and it is nondeterministic:
+      # the same script exited 0 twice an hour earlier and hung on Linux once.
+      # A maintainer needs "N of 20 runs", not an anecdote, so this counts.
+      #
+      # `timeout 30` turns a hang into a countable outcome instead of a job that
+      # burns the runner for six hours.
+      - name: Reproduction rate over 20 runs
         run: |
-          for cfg in "" "REPRO_FLAG=1" "REPRO_FEATURES=1" "REPRO_LIMITS=1" \
-                     "REPRO_FLAG=1 REPRO_FEATURES=1 REPRO_LIMITS=1"; do
+          clean=0; segv=0; hang=0; other=0
+          for i in $(seq 1 20); do
             set +e
-            env $cfg node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1
+            timeout 30 node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1
             code=$?
             set -e
-            echo "---- [${cfg:-baseline}] exit=$code"
-            tail -3 /tmp/out.txt
+            finished=$(grep -c "completed all three passes" /tmp/out.txt || true)
+            case $code in
+              0)   clean=$((clean+1)) ;;
+              139) segv=$((segv+1)); echo "run $i: SIGSEGV (work finished: $finished)" ;;
+              124) hang=$((hang+1)); echo "run $i: TIMED OUT (work finished: $finished)" ;;
+              *)   other=$((other+1)); echo "run $i: exit $code" ;;
+            esac
           done
+          echo "RATE clean=$clean segv=$segv hang=$hang other=$other of 20"
       - name: Minimal reproducer, destroy vs keep
         run: |
           MIR_GPU_TESTS=1 MIR_DAWN_MIN=1 node \
@@ -91,6 +106,7 @@ jobs:
             tools/dawn-probe.ts || echo "MICRO_EXIT=$?"
 
   probe:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
