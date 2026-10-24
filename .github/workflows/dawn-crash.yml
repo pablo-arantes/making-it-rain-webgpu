@@ -73,27 +73,36 @@ jobs:
       # print "completed all three passes" and *then* segfault, so the fault is
       # at teardown rather than in any operation, and it is nondeterministic:
       # the same script exited 0 twice an hour earlier and hung on Linux once.
-      # A maintainer needs "N of 20 runs", not an anecdote, so this counts.
+      # A maintainer needs "N of 20 runs", not an anecdote.
       #
-      # `timeout 30` turns a hang into a countable outcome instead of a job that
-      # burns the runner for six hours.
+      # 🔴 The watchdog is a backgrounded `kill`, not `timeout(1)`: **macOS has
+      # no `timeout`**, and the first version of this step measured exit 127
+      # twenty times — the absence of a utility, not the crash. A SIGKILL shows
+      # up as 137, which is how a hang is counted here.
       - name: Reproduction rate over 20 runs
         run: |
           clean=0; segv=0; hang=0; other=0
           for i in $(seq 1 20); do
+            node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1 &
+            pid=$!
+            ( sleep 30; kill -9 $pid 2>/dev/null ) >/dev/null 2>&1 &
+            killer=$!
             set +e
-            timeout 30 node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1
+            wait $pid
             code=$?
             set -e
+            kill $killer 2>/dev/null || true
             finished=$(grep -c "completed all three passes" /tmp/out.txt || true)
             case $code in
               0)   clean=$((clean+1)) ;;
-              139) segv=$((segv+1)); echo "run $i: SIGSEGV (work finished: $finished)" ;;
-              124) hang=$((hang+1)); echo "run $i: TIMED OUT (work finished: $finished)" ;;
-              *)   other=$((other+1)); echo "run $i: exit $code" ;;
+              139) segv=$((segv+1)); echo "run $i: SIGSEGV (finished the work: $finished)" ;;
+              137) hang=$((hang+1)); echo "run $i: KILLED after 30s (finished the work: $finished)" ;;
+              *)   other=$((other+1)); echo "run $i: exit $code"; tail -2 /tmp/out.txt ;;
             esac
           done
           echo "RATE clean=$clean segv=$segv hang=$hang other=$other of 20"
+          node -e "console.log('node', process.version, 'webgpu', require('webgpu/package.json').version)"
+          
       - name: Minimal reproducer, destroy vs keep
         run: |
           MIR_GPU_TESTS=1 MIR_DAWN_MIN=1 node \
@@ -122,11 +131,28 @@ jobs:
       # What the driver actually offers, so the adapter is not a mystery.
       - name: vulkaninfo
         run: vulkaninfo --summary || true
-      - name: Standalone reproducer (for the upstream issue)
+      - name: Reproduction rate over 20 runs
         run: |
-          set +e
-          node tools/dawn-standalone-repro.mjs
-          echo "STANDALONE_EXIT=$?"
+          clean=0; segv=0; hang=0; other=0
+          for i in $(seq 1 20); do
+            node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1 &
+            pid=$!
+            ( sleep 30; kill -9 $pid 2>/dev/null ) >/dev/null 2>&1 &
+            killer=$!
+            set +e
+            wait $pid
+            code=$?
+            set -e
+            kill $killer 2>/dev/null || true
+            finished=$(grep -c "completed all three passes" /tmp/out.txt || true)
+            case $code in
+              0)   clean=$((clean+1)) ;;
+              139) segv=$((segv+1)); echo "run $i: SIGSEGV (finished the work: $finished)" ;;
+              137) hang=$((hang+1)); echo "run $i: KILLED after 30s (finished the work: $finished)" ;;
+              *)   other=$((other+1)); echo "run $i: exit $code"; tail -2 /tmp/out.txt ;;
+            esac
+          done
+          echo "RATE clean=$clean segv=$segv hang=$hang other=$other of 20"
       # Stage 1: no debugger. The last PROBE line is the step that killed it.
       - name: Probe, plain
         run: |
