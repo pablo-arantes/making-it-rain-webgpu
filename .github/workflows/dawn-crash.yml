@@ -66,11 +66,19 @@ jobs:
       - run: npm ci
       - run: sw_vers
       # The report-ready reproducer: zero project code, pure WebGPU API.
-      - name: Standalone reproducer (for the upstream issue)
+      # 🔴 Which of the three differences from vanilla usage is it? The bare
+      # script passes on this hardware; our path does not.
+      - name: Isolate — baseline / flag / features / limits / all
         run: |
-          set +e
-          node tools/dawn-standalone-repro.mjs
-          echo "STANDALONE_EXIT=$?"
+          for cfg in "" "REPRO_FLAG=1" "REPRO_FEATURES=1" "REPRO_LIMITS=1" \
+                     "REPRO_FLAG=1 REPRO_FEATURES=1 REPRO_LIMITS=1"; do
+            set +e
+            env $cfg node tools/dawn-standalone-repro.mjs > /tmp/out.txt 2>&1
+            code=$?
+            set -e
+            echo "---- [${cfg:-baseline}] exit=$code"
+            tail -3 /tmp/out.txt
+          done
       - name: Minimal reproducer, destroy vs keep
         run: |
           MIR_GPU_TESTS=1 MIR_DAWN_MIN=1 node \

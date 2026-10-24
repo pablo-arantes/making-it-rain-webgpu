@@ -16,15 +16,43 @@ const say = (message) => writeSync(1, `${message}\n`);
 const { create, globals } = await import("webgpu");
 Object.assign(globalThis, globals);
 
-const gpu = create([]);
-const adapter = await gpu.requestAdapter();
+// 🔴 Toggles, because the bare version of this script **passes** on both Apple
+// Metal and llvmpipe while this project's own path segfaults. Three things
+// differ, and one run each says which: the instance flag, the optional
+// features, and the raised limits.
+const FLAG = process.env.REPRO_FLAG === "1";
+const FEATURES = process.env.REPRO_FEATURES === "1";
+const LIMITS = process.env.REPRO_LIMITS === "1";
+say(`config: flag=${FLAG} features=${FEATURES} limits=${LIMITS}`);
+
+const gpu = create(FLAG ? ["enable-dawn-features=allow_unsafe_apis"] : []);
+const adapter = await gpu.requestAdapter(
+  FLAG ? { powerPreference: "high-performance" } : {},
+);
 if (adapter === null) {
   say("no adapter; nothing to reproduce");
   process.exit(0);
 }
 say(`adapter: ${JSON.stringify(adapter.info ?? null)}`);
 
-const device = await adapter.requestDevice();
+const wanted = ["timestamp-query", "subgroups", "subgroup-size-control", "shader-f16"];
+const requiredFeatures = FEATURES ? wanted.filter((f) => adapter.features.has(f)) : [];
+const requiredLimits = {};
+if (LIMITS) {
+  // The shape `requestEngineDevice` uses: ask high, clamp to the adapter.
+  for (const [key, ask] of [
+    ["maxStorageBufferBindingSize", 2 ** 31],
+    ["maxBufferSize", 2 ** 31],
+    ["maxComputeInvocationsPerWorkgroup", 1024],
+    ["maxComputeWorkgroupStorageSize", 32768],
+  ]) {
+    const available = adapter.limits[key];
+    if (typeof available === "number") requiredLimits[key] = Math.min(ask, available);
+  }
+}
+say(`features: [${requiredFeatures.join(", ")}]`);
+say(`limits: ${JSON.stringify(requiredLimits)}`);
+const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
 say("device created");
 device.lost?.then((r) => say(`device lost: ${r?.message ?? "?"}`)).catch(() => {});
 
