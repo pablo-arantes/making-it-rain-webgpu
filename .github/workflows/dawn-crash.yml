@@ -65,6 +65,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: sw_vers
+      # The report-ready reproducer: zero project code, pure WebGPU API.
+      - name: Standalone reproducer (for the upstream issue)
+        run: |
+          set +e
+          node tools/dawn-standalone-repro.mjs
+          echo "STANDALONE_EXIT=$?"
       - name: Minimal reproducer, destroy vs keep
         run: |
           MIR_GPU_TESTS=1 MIR_DAWN_MIN=1 node \
@@ -92,6 +98,11 @@ jobs:
       # What the driver actually offers, so the adapter is not a mystery.
       - name: vulkaninfo
         run: vulkaninfo --summary || true
+      - name: Standalone reproducer (for the upstream issue)
+        run: |
+          set +e
+          node tools/dawn-standalone-repro.mjs
+          echo "STANDALONE_EXIT=$?"
       # Stage 1: no debugger. The last PROBE line is the step that killed it.
       - name: Probe, plain
         run: |
